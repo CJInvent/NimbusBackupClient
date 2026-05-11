@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.76] - 2026-05-11
+
+### Added
+- **Restauration sélective via la GUI** — onglet Restauration repensé
+  - Sélecteur de serveur PBS (multi-PBS) au lieu de toujours utiliser le défaut
+  - Navigation arborescente dans le contenu d'un snapshot (cases à cocher fichier/dossier)
+  - Dossier de destination via dialog natif Wails (`OpenDirectoryDialog`)
+  - Options : écraser les fichiers existants, restaurer les dates de modification
+  - Options ACLs / ADS présentes mais désactivées (bloquées sur sprint NTFS sidecar)
+  - Barre de progression en direct via événements `restore:progress` / `restore:complete`
+- **Backend** :
+  - `App.ListSnapshots(pbsID, backupID)` — multi-PBS, partial match conservé
+  - `App.ListSnapshotContents(pbsID, backupID, snapshotUnix)` — retourne l'arborescence
+  - `App.RestoreSnapshot(pbsID, backupID, snapshotID, dest, includes, acls, ads, ts, overwrite)` — restauration filtrée
+  - `App.OpenRestoreDestDialog()` — picker natif
+  - `RestoreOptions.IncludePaths` + `Overwrite` + flags ACL/ADS/Timestamps
+  - `pbscommon.PXARReader.ListEntries()` et `ExtractFiltered()` (extraction sélective)
+
+### Fixed
+- **PXAR reader: descente correcte dans les sous-dossiers** — l'ancien walker ne descendait pas dans les sous-répertoires (fichiers nichés extraits à plat à la racine de destination, dossiers vides perdus). Le nouveau walker maintient une pile de dossiers et utilise `PXAR_GOODBYE` comme marqueur de remontée.
+- **PXAR reader: dates de modification correctement restaurées** — `binary.Read` sur `*MTime` (struct à champs non-exportés) était silencieusement no-op via reflection, laissant `mtime = 0`. Lecture passée en `binary.LittleEndian.Uint64` direct par offset.
+- **Restauration: connexion PBS fermée** — `defer client.Close()` ajouté pour libérer immédiatement le verrou de snapshot sans attendre la fin du keepalive TCP.
+
+### Removed
+- `gui/restore.go` (`RestoreManager` mock — snapshots en dur, `restorePXAR` qui retournait "not yet implemented"). La GUI était câblée sur ce stub au lieu de l'implémentation réelle dans `restore_inline.go`.
+
 ## [0.2.12] - 2026-03-23
 
 ### Fixed

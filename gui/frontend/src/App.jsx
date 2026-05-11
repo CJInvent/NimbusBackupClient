@@ -3,7 +3,7 @@ import { useTranslation } from './i18n/i18nContext'
 import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -15,7 +15,9 @@ if (window.go) {
   TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
   ListSnapshots = window.go.main.App.ListSnapshots
+  ListSnapshotContents = window.go.main.App.ListSnapshotContents
   RestoreSnapshot = window.go.main.App.RestoreSnapshot
+  OpenRestoreDestDialog = window.go.main.App.OpenRestoreDestDialog
   ListPhysicalDisks = window.go.main.App.ListPhysicalDisks
   GetVersion = window.go.main.App.GetVersion
   SaveScheduledJob = window.go.main.App.SaveScheduledJob
@@ -103,6 +105,20 @@ function App() {
   const [snapshots, setSnapshots] = useState([])
   const [restoreBackupId, setRestoreBackupId] = useState('')
   const [showSnapshots, setShowSnapshots] = useState(false)
+  const [restorePBSID, setRestorePBSID] = useState('')
+  const [selectedSnapshot, setSelectedSnapshot] = useState(null) // { id, unix, time }
+  const [snapshotEntries, setSnapshotEntries] = useState([])     // flat list from backend
+  const [expandedDirs, setExpandedDirs] = useState(new Set())     // expanded paths in tree
+  const [selectedPaths, setSelectedPaths] = useState(new Set())   // selected entry paths
+  const [restoreDestPath, setRestoreDestPath] = useState('')
+  const [restoreOptions, setRestoreOptions] = useState({
+    overwrite: false,
+    timestamps: true,
+    acls: false, // disabled in UI until NTFS sidecar lands
+    ads: false   // disabled in UI until NTFS sidecar lands
+  })
+  const [restoreLoading, setRestoreLoading] = useState(false)
+  const [restoreProgress, setRestoreProgress] = useState(0)
 
   // Update restoreBackupId when config or hostname changes
   useEffect(() => {
@@ -110,6 +126,13 @@ function App() {
       setRestoreBackupId(config['backup-id'] || hostname)
     }
   }, [config['backup-id'], hostname])
+
+  // Sync restore PBS dropdown with default once it's loaded
+  useEffect(() => {
+    if (!restorePBSID && defaultPBSID) {
+      setRestorePBSID(defaultPBSID)
+    }
+  }, [defaultPBSID])
 
   // Load physical disks when switching to machine mode (DISABLED FOR NOW)
   /*
@@ -190,6 +213,24 @@ function App() {
     return () => {
       if (unsubProgress) unsubProgress()
       if (unsubComplete) unsubComplete()
+    }
+  }, [])
+
+  // Listen to restore events
+  useEffect(() => {
+    if (!EventsOn) return
+    const unsubP = EventsOn('restore:progress', (data) => {
+      setRestoreProgress(Math.round((data.percent || 0) * 100))
+      showStatus(`🔄 ${data.message || ''}`, 'info')
+    })
+    const unsubC = EventsOn('restore:complete', (data) => {
+      setRestoreLoading(false)
+      setRestoreProgress(data.success ? 100 : 0)
+      showStatus(data.success ? `✅ ${data.message}` : `❌ ${data.message}`, data.success ? 'success' : 'error')
+    })
+    return () => {
+      if (unsubP) unsubP()
+      if (unsubC) unsubC()
     }
   }, [])
 
@@ -726,16 +767,19 @@ function App() {
       showStatus('❌ Wails runtime non disponible', 'error')
       return
     }
-
     if (!restoreBackupId) {
       showStatus('❌ Backup ID requis', 'error')
       return
     }
 
     showStatus('🔍 Recherche des snapshots...', 'info')
+    setSelectedSnapshot(null)
+    setSnapshotEntries([])
+    setSelectedPaths(new Set())
+    setExpandedDirs(new Set())
 
     try {
-      const snaps = await ListSnapshots(restoreBackupId)
+      const snaps = await ListSnapshots(restorePBSID || '', restoreBackupId)
       setSnapshots(snaps || [])
       setShowSnapshots(true)
       showStatus(`✅ ${snaps.length} snapshot(s) trouvé(s)`, 'success')
@@ -744,23 +788,176 @@ function App() {
     }
   }
 
-  const handleRestoreSnapshot = async (snapshotId, time) => {
+  const handleSelectSnapshot = async (snap) => {
+    if (!ListSnapshotContents) {
+      showStatus('❌ Wails runtime non disponible', 'error')
+      return
+    }
+    setSelectedSnapshot(snap)
+    setSnapshotEntries([])
+    setSelectedPaths(new Set())
+    setExpandedDirs(new Set())
+    showStatus(`📥 ${t('loadingSnapshotContents')}`, 'info')
+    try {
+      // Backend uses the snapshot's actual backup_id (snap.backup_id) so split
+      // backups list their real contents, not the partial search term.
+      const entries = await ListSnapshotContents(restorePBSID || '', snap.backup_id || restoreBackupId, snap.unix)
+      setSnapshotEntries(entries || [])
+      showStatus(`✅ ${(entries || []).length} ${t('entriesLoaded')}`, 'success')
+    } catch (err) {
+      showStatus(`❌ ${err}`, 'error')
+    }
+  }
+
+  const handleBrowseRestoreDest = async () => {
+    if (!OpenRestoreDestDialog) {
+      showStatus('❌ Wails runtime non disponible', 'error')
+      return
+    }
+    try {
+      const dir = await OpenRestoreDestDialog()
+      if (dir) setRestoreDestPath(dir)
+    } catch (err) {
+      showStatus(`❌ ${err}`, 'error')
+    }
+  }
+
+  const handleRestoreSnapshot = async () => {
     if (!RestoreSnapshot) {
       showStatus('❌ Wails runtime non disponible', 'error')
       return
     }
+    if (!selectedSnapshot) {
+      showStatus('❌ ' + t('selectSnapshotFirst'), 'error')
+      return
+    }
+    if (!restoreDestPath) {
+      showStatus('❌ ' + t('destinationRequired'), 'error')
+      return
+    }
 
-    const destPath = prompt(t('restoreDestPrompt'), 'C:\\Restore')
-    if (!destPath) return
+    // Empty selection = restore everything in the snapshot
+    const includes = Array.from(selectedPaths)
 
-    showStatus(`🔄 ${t('statusRestoring').replace('{time}', time)}`, 'info')
+    setRestoreLoading(true)
+    setRestoreProgress(0)
+    showStatus(`🔄 ${t('statusRestoring').replace('{time}', selectedSnapshot.time)}`, 'info')
 
     try {
-      await RestoreSnapshot(snapshotId, destPath)
-      showStatus(`✅ ${t('statusRestoreComplete')}`, 'success')
+      await RestoreSnapshot(
+        restorePBSID || '',
+        selectedSnapshot.backup_id || restoreBackupId,
+        selectedSnapshot.id,
+        restoreDestPath,
+        includes,
+        restoreOptions.acls,
+        restoreOptions.ads,
+        restoreOptions.timestamps,
+        restoreOptions.overwrite
+      )
+      // Completion arrives via the restore:complete event.
     } catch (err) {
+      setRestoreLoading(false)
       showStatus(`❌ ${err}`, 'error')
     }
+  }
+
+  // ===== tree helpers (snapshot navigation) =====
+
+  // Build a map childrenByDir: dir -> [entry...] from the flat list, plus a
+  // set of all dir paths. Re-derived on every render — entries are tiny.
+  const buildTree = (entries) => {
+    const childrenByDir = new Map()
+    const dirSet = new Set([''])
+    childrenByDir.set('', [])
+    for (const e of entries) {
+      if (e.is_dir) dirSet.add(e.path)
+    }
+    for (const e of entries) {
+      const slash = e.path.lastIndexOf('/')
+      const parent = slash < 0 ? '' : e.path.substring(0, slash)
+      // Some archives may emit a child without ever emitting the parent dir
+      // entry. Make sure such parents still exist as buckets.
+      if (!childrenByDir.has(parent)) childrenByDir.set(parent, [])
+      childrenByDir.get(parent).push(e)
+      if (e.is_dir && !childrenByDir.has(e.path)) childrenByDir.set(e.path, [])
+    }
+    // Sort each bucket: dirs first, then alphabetical
+    for (const list of childrenByDir.values()) {
+      list.sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+        return a.path.localeCompare(b.path)
+      })
+    }
+    return childrenByDir
+  }
+
+  const toggleDir = (path) => {
+    setExpandedDirs(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const togglePathSelection = (path) => {
+    setSelectedPaths(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const formatBytes = (bytes) => {
+    if (!bytes || bytes < 1024) return `${bytes || 0} B`
+    const units = ['KB', 'MB', 'GB', 'TB']
+    let n = bytes / 1024
+    let i = 0
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+    return `${n.toFixed(1)} ${units[i]}`
+  }
+
+  // Recursive renderer driven by the children map. Depth is only used for the
+  // visual indent.
+  const renderTreeNode = (entry, childrenByDir, depth) => {
+    const isExpanded = expandedDirs.has(entry.path)
+    const isSelected = selectedPaths.has(entry.path)
+    const indent = { paddingLeft: `${depth * 16}px` }
+    return (
+      <div key={entry.path}>
+        <div style={{ ...indent, display: 'flex', alignItems: 'center', padding: '4px 8px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => togglePathSelection(entry.path)}
+            style={{ marginRight: '8px' }}
+          />
+          {entry.is_dir ? (
+            <span onClick={() => toggleDir(entry.path)} style={{ cursor: 'pointer', userSelect: 'none', marginRight: '4px' }}>
+              {isExpanded ? '📂' : '📁'}
+            </span>
+          ) : (
+            <span style={{ marginRight: '4px' }}>📄</span>
+          )}
+          <span
+            onClick={() => entry.is_dir && toggleDir(entry.path)}
+            style={{ flex: 1, cursor: entry.is_dir ? 'pointer' : 'default', fontSize: '14px' }}
+          >
+            {entry.path.split('/').pop() || entry.path}
+          </span>
+          {!entry.is_dir && (
+            <span style={{ color: '#64748b', fontSize: '12px', marginLeft: '8px' }}>
+              {formatBytes(entry.size)}
+            </span>
+          )}
+        </div>
+        {entry.is_dir && isExpanded && (childrenByDir.get(entry.path) || []).map(child =>
+          renderTreeNode(child, childrenByDir, depth + 1)
+        )}
+      </div>
+    )
   }
 
   return (
@@ -1561,23 +1758,46 @@ function App() {
             marginBottom: '20px',
             color: '#92400E'
           }}>
-            <strong>⚠️ BETA FEATURE</strong>
+            <strong>⚠️ {t('restoreBetaTitle')}</strong>
             <p style={{margin: '8px 0 0 0', fontSize: '14px'}}>
-              La restauration est en phase BETA. Supporte actuellement :
-              <br/>✅ Fichiers et dossiers simples
-              <br/>✅ Permissions basiques
-              <br/>❌ Symlinks, ACLs, attributs étendus (prochainement)
+              {t('restoreBetaIntro')}
+              <br/>✅ {t('restoreBetaFilesDirs')}
+              <br/>✅ {t('restoreBetaSelective')}
+              <br/>✅ {t('restoreBetaTimestamps')}
+              <br/>❌ {t('restoreBetaACLs')}
             </p>
           </div>
 
-          <div className="form-group">
-            <label>{t('backupIDToRestore')}</label>
-            <input
-              type="text"
-              value={restoreBackupId || hostname}
-              onChange={(e) => setRestoreBackupId(e.target.value)}
-              placeholder={hostname || "hostname ou ID personnalisé"}
-            />
+          {/* PBS server selector + Backup ID */}
+          <div style={{display: 'flex', gap: '15px', flexWrap: 'wrap'}}>
+            <div className="form-group" style={{flex: '1 1 240px'}}>
+              <label>{t('restorePBSServer')}</label>
+              <select
+                value={restorePBSID}
+                onChange={(e) => {
+                  setRestorePBSID(e.target.value)
+                  setShowSnapshots(false)
+                  setSelectedSnapshot(null)
+                  setSnapshotEntries([])
+                }}
+              >
+                {pbsServers.length === 0 && <option value="">{t('noPBSServer')}</option>}
+                {pbsServers.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} {s.id === defaultPBSID ? '⭐' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{flex: '2 1 320px'}}>
+              <label>{t('backupIDToRestore')}</label>
+              <input
+                type="text"
+                value={restoreBackupId || hostname}
+                onChange={(e) => setRestoreBackupId(e.target.value)}
+                placeholder={hostname || "hostname ou ID personnalisé"}
+              />
+            </div>
           </div>
 
           <button className="btn" onClick={handleListSnapshots}>📋 {t('listSnapshots')}</button>
@@ -1589,24 +1809,136 @@ function App() {
                 {snapshots.length === 0 ? (
                   <p style={{color: '#718096'}}>{t('noSnapshotFound')}</p>
                 ) : (
-                  snapshots.map((snap, idx) => (
-                    <div key={idx} className="card" style={{cursor: 'pointer'}}>
-                      <h3>📸 {snap.time}</h3>
-                      <p style={{color: '#718096', fontSize: '14px', marginTop: '5px'}}>
-                        ID: {snap.id}<br/>
-                        Type: {snap.type || 'N/A'}
-                      </p>
-                      <button
-                        className="btn"
-                        style={{marginTop: '10px', width: '100%'}}
-                        onClick={() => handleRestoreSnapshot(snap.id, snap.time)}
+                  snapshots.map((snap, idx) => {
+                    const isActive = selectedSnapshot && selectedSnapshot.id === snap.id && selectedSnapshot.backup_id === snap.backup_id
+                    return (
+                      <div
+                        key={idx}
+                        className="card"
+                        style={{
+                          cursor: 'pointer',
+                          border: isActive ? '2px solid #2563eb' : undefined,
+                          backgroundColor: isActive ? '#eff6ff' : undefined
+                        }}
+                        onClick={() => handleSelectSnapshot(snap)}
                       >
-                        {t('restore')}
-                      </button>
-                    </div>
-                  ))
+                        <h3>📸 {snap.time}</h3>
+                        <p style={{color: '#718096', fontSize: '14px', marginTop: '5px'}}>
+                          {snap.backup_id}<br/>
+                          {t('typeLabel')}: {snap.backup_type || 'N/A'}
+                        </p>
+                        <button className="btn" style={{marginTop: '10px', width: '100%'}}>
+                          {isActive ? `✓ ${t('snapshotSelected')}` : t('selectSnapshot')}
+                        </button>
+                      </div>
+                    )
+                  })
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Snapshot navigation tree */}
+          {selectedSnapshot && (
+            <div style={{marginTop: '24px'}}>
+              <h3>📂 {t('snapshotContents')} — {selectedSnapshot.time}</h3>
+              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '8px'}}>
+                {t('treeHint')}
+              </p>
+              <div style={{
+                border: '1px solid #cbd5e1',
+                borderRadius: '8px',
+                maxHeight: '360px',
+                overflowY: 'auto',
+                backgroundColor: '#fff'
+              }}>
+                {snapshotEntries.length === 0 ? (
+                  <p style={{padding: '12px', color: '#718096'}}>{t('loadingOrEmpty')}</p>
+                ) : (
+                  (() => {
+                    const tree = buildTree(snapshotEntries)
+                    const roots = tree.get('') || []
+                    return roots.map(e => renderTreeNode(e, tree, 0))
+                  })()
+                )}
+              </div>
+              <p style={{marginTop: '6px', fontSize: '12px', color: '#64748b'}}>
+                {selectedPaths.size === 0
+                  ? t('selectionEmptyAll')
+                  : t('selectionCount').replace('{n}', selectedPaths.size)}
+              </p>
+            </div>
+          )}
+
+          {/* Destination + options + restore button */}
+          {selectedSnapshot && (
+            <div style={{marginTop: '20px'}}>
+              <div className="form-group">
+                <label>{t('destinationPath')}</label>
+                <div style={{display: 'flex', gap: '8px'}}>
+                  <input
+                    type="text"
+                    value={restoreDestPath}
+                    onChange={(e) => setRestoreDestPath(e.target.value)}
+                    placeholder="C:\\Restore"
+                    style={{flex: 1}}
+                  />
+                  <button className="btn" onClick={handleBrowseRestoreDest} type="button">
+                    📁 {t('browse')}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '12px'}}>
+                <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                  <input
+                    type="checkbox"
+                    checked={restoreOptions.overwrite}
+                    onChange={(e) => setRestoreOptions(o => ({...o, overwrite: e.target.checked}))}
+                  />
+                  {t('optionOverwrite')}
+                </label>
+                <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                  <input
+                    type="checkbox"
+                    checked={restoreOptions.timestamps}
+                    onChange={(e) => setRestoreOptions(o => ({...o, timestamps: e.target.checked}))}
+                  />
+                  {t('optionTimestamps')}
+                </label>
+                <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
+                  <input type="checkbox" disabled checked={false} />
+                  {t('optionACLs')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
+                </label>
+                <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
+                  <input type="checkbox" disabled checked={false} />
+                  {t('optionADS')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
+                </label>
+              </div>
+
+              <button
+                className="btn btn-primary"
+                onClick={handleRestoreSnapshot}
+                disabled={restoreLoading}
+              >
+                {restoreLoading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
+              </button>
+
+              {restoreLoading && (
+                <div style={{marginTop: '12px'}}>
+                  <div style={{height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden'}}>
+                    <div style={{
+                      height: '100%',
+                      width: `${restoreProgress}%`,
+                      backgroundColor: '#2563eb',
+                      transition: 'width 0.3s ease'
+                    }}/>
+                  </div>
+                  <p style={{textAlign: 'center', fontSize: '13px', color: '#64748b', marginTop: '4px'}}>
+                    {restoreProgress}%
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

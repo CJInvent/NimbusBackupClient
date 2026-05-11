@@ -782,94 +782,182 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 	return nil
 }
 
-// ListSnapshots lists available snapshots
-func (a *App) ListSnapshots(backupID string) ([]map[string]string, error) {
-	writeDebugLog(fmt.Sprintf("ListSnapshots() called: backupID=%s", backupID))
+// ==================== RESTORE ====================
 
-	// Resolve PBS fields from multi-PBS default when legacy fields are empty
-	pbsCfg := a.config.EffectivePBS()
+// resolveRestorePBS picks the PBS server to restore from. When pbsID is empty
+// the default PBS server is used. Falls back to legacy single-server fields
+// when no multi-PBS entry is configured.
+func (a *App) resolveRestorePBS(pbsID string) (*Config, error) {
+	if pbsID != "" {
+		pbs, err := a.config.GetPBSServer(pbsID)
+		if err != nil {
+			return nil, err
+		}
+		return pbs.ToConfig(), nil
+	}
+	cfg := a.config.EffectivePBS()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
 
-	// Validate config
-	if err := pbsCfg.Validate(); err != nil {
+// ListSnapshots lists available snapshots on a PBS server, optionally filtered
+// by backup ID (partial match supports split backups).
+//
+// pbsID selects the PBS server. Empty means "use the default server" — kept
+// for backward compatibility with the legacy single-PBS UI.
+func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, error) {
+	writeDebugLog(fmt.Sprintf("ListSnapshots(pbs=%s, backupID=%s)", pbsID, backupID))
+
+	cfg, err := a.resolveRestorePBS(pbsID)
+	if err != nil {
 		return nil, err
 	}
 
-	// Create restore manager
-	rm := NewRestoreManager(pbsCfg)
-
-	// List snapshots
-	snapshots, err := rm.ListSnapshots()
+	snaps, err := ListSnapshotsInline(cfg.BaseURL, cfg.AuthID, cfg.Secret,
+		cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, backupID)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Failed to list snapshots: %v", err))
+		writeDebugLog(fmt.Sprintf("ListSnapshotsInline failed: %v", err))
 		return nil, fmt.Errorf("échec de la liste des snapshots: %v", err)
 	}
 
-	// Convert to map format for frontend
-	result := make([]map[string]string, 0, len(snapshots))
-	for _, snap := range snapshots {
-		// Filter by backup ID if specified
-		if backupID != "" && snap.ID != backupID {
-			continue
-		}
-
-		result = append(result, map[string]string{
-			"id":   snap.Timestamp.Format("2006-01-02T15:04:05Z"),
-			"time": snap.Timestamp.Format("2006-01-02 15:04:05"),
-			"type": snap.Type,
+	result := make([]map[string]interface{}, 0, len(snaps))
+	for _, s := range snaps {
+		result = append(result, map[string]interface{}{
+			"id":          s.BackupTime.UTC().Format("2006-01-02T15:04:05Z"),
+			"backup_id":   s.BackupID,
+			"backup_type": s.BackupType,
+			"time":        s.BackupTime.Format("2006-01-02 15:04:05"),
+			"unix":        s.BackupTime.Unix(),
+			"files":       s.Files,
 		})
 	}
-
-	writeDebugLog(fmt.Sprintf("Found %d snapshots", len(result)))
+	writeDebugLog(fmt.Sprintf("Returning %d snapshots", len(result)))
 	return result, nil
 }
 
-// RestoreSnapshot restores a snapshot
-func (a *App) RestoreSnapshot(snapshotID, destPath string) error {
-	writeDebugLog(fmt.Sprintf("RestoreSnapshot() called: snapshot=%s, dest=%s", snapshotID, destPath))
+// ListSnapshotContents downloads a snapshot's PXAR archive and returns its
+// flat tree of entries. The frontend turns this into a navigable view so the
+// user can pick individual files or directories before restoring.
+//
+// snapshotUnix is the snapshot's backup-time as Unix seconds (the `unix` field
+// returned by ListSnapshots).
+func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64) ([]SnapshotEntry, error) {
+	writeDebugLog(fmt.Sprintf("ListSnapshotContents(pbs=%s, backupID=%s, unix=%d)", pbsID, backupID, snapshotUnix))
 
-	// Resolve PBS fields from multi-PBS default when legacy fields are empty
-	pbsCfg := a.config.EffectivePBS()
-
-	// Validate config
-	if err := pbsCfg.Validate(); err != nil {
-		return err
+	cfg, err := a.resolveRestorePBS(pbsID)
+	if err != nil {
+		return nil, err
+	}
+	if backupID == "" {
+		return nil, fmt.Errorf("backup ID requis")
 	}
 
+	opts := RestoreOptions{
+		BaseURL:         cfg.BaseURL,
+		AuthID:          cfg.AuthID,
+		Secret:          cfg.Secret,
+		Datastore:       cfg.Datastore,
+		Namespace:       cfg.Namespace,
+		CertFingerprint: cfg.CertFingerprint,
+		BackupID:        backupID,
+		SnapshotTime:    time.Unix(snapshotUnix, 0),
+	}
+	return ListSnapshotContentsInline(opts, "")
+}
+
+// RestoreSnapshot extracts a snapshot (or selected files) to destPath.
+//
+// includePaths uses archive-style paths (forward slash). When empty the entire
+// snapshot is restored. The ACL/ADS/timestamps flags are accepted today but
+// only timestamps is effective — the per-file NTFS sidecar required for the
+// other two is still on the roadmap.
+//
+// Progress is streamed to the frontend via the "restore:progress" event;
+// completion via "restore:complete".
+func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath string,
+	includePaths []string, restoreACLs, restoreADS, restoreTimestamps, overwrite bool) error {
+	writeDebugLog(fmt.Sprintf("RestoreSnapshot(pbs=%s, backupID=%s, snap=%s, dest=%s, includes=%d, acl=%v, ads=%v, ts=%v, overwrite=%v)",
+		pbsID, backupID, snapshotID, destPath, len(includePaths), restoreACLs, restoreADS, restoreTimestamps, overwrite))
+
+	cfg, err := a.resolveRestorePBS(pbsID)
+	if err != nil {
+		return err
+	}
+	if backupID == "" {
+		return fmt.Errorf("backup ID requis")
+	}
 	if snapshotID == "" {
 		return fmt.Errorf("ID du snapshot requis")
 	}
-
 	if destPath == "" {
 		return fmt.Errorf("chemin de destination requis")
 	}
 
-	// Create restore manager
-	rm := NewRestoreManager(pbsCfg)
+	// Validate destination is a real path the user wanted (basic check).
+	if err := security.ValidatePath(destPath); err != nil {
+		return fmt.Errorf("chemin de destination invalide: %w", err)
+	}
 
-	// Parse timestamp from snapshotID
 	timestamp, err := time.Parse("2006-01-02T15:04:05Z", snapshotID)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Failed to parse snapshot ID: %v", err))
 		return fmt.Errorf("ID de snapshot invalide: %v", err)
 	}
 
-	// Create snapshot object
-	snapshot := BackupSnapshot{
-		Type:      "host",
-		ID:        a.config.BackupID,
-		Timestamp: timestamp,
-		Files: []BackupFile{
-			{Name: "root.pxar.didx", Type: "pxar"},
-		},
+	emit := func(percent float64, message string) {
+		if a.ctx == nil {
+			return
+		}
+		runtime.EventsEmit(a.ctx, "restore:progress", map[string]interface{}{
+			"percent": percent,
+			"message": message,
+		})
 	}
 
-	// Restore the snapshot
-	err = rm.RestoreFile(snapshot, snapshot.Files[0], destPath)
-	if err != nil {
-		writeDebugLog(fmt.Sprintf("Failed to restore: %v", err))
-		return fmt.Errorf("échec de la restauration: %v", err)
+	opts := RestoreOptions{
+		BaseURL:           cfg.BaseURL,
+		AuthID:            cfg.AuthID,
+		Secret:            cfg.Secret,
+		Datastore:         cfg.Datastore,
+		Namespace:         cfg.Namespace,
+		CertFingerprint:   cfg.CertFingerprint,
+		BackupID:          backupID,
+		SnapshotTime:      timestamp,
+		DestPath:          destPath,
+		IncludePaths:      includePaths,
+		Overwrite:         overwrite,
+		RestoreACLs:       restoreACLs,
+		RestoreADS:        restoreADS,
+		RestoreTimestamps: restoreTimestamps,
+		OnProgress:        emit,
 	}
 
-	writeDebugLog("Restore completed successfully")
+	go func() {
+		err := RestoreSnapshotInline(opts)
+		success := err == nil
+		msg := "Restauration terminée"
+		if err != nil {
+			msg = err.Error()
+			writeDebugLog(fmt.Sprintf("Restore failed: %v", err))
+		}
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "restore:complete", map[string]interface{}{
+				"success": success,
+				"message": msg,
+			})
+		}
+	}()
 	return nil
+}
+
+// OpenRestoreDestDialog opens a native folder picker so the user can choose
+// where to restore files. Returns "" if the dialog was cancelled.
+func (a *App) OpenRestoreDestDialog() (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("runtime non disponible")
+	}
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Choisir le dossier de destination",
+	})
 }
