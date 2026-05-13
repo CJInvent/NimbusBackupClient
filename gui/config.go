@@ -41,9 +41,11 @@ type Config struct {
 	EmailTo      string `json:"email_to,omitempty"`
 }
 
-func getConfigPath() (string, error) {
-	// Use ProgramData on Windows (shared between GUI and Service)
-	// Fall back to user home on other platforms
+// getConfigDir returns the application's data directory, creating it if needed.
+// On Windows it lives under ProgramData (shared GUI/Service); on Unix it's
+// ~/.proxmox-backup-guardian. Used as the parent for config.json, the restore
+// cache, and any other persistent state.
+func getConfigDir() (string, error) {
 	var configDir string
 
 	if programData := os.Getenv("ProgramData"); programData != "" {
@@ -54,7 +56,6 @@ func getConfigPath() (string, error) {
 		// This ensures service config is accessible even if env var is missing
 		configDir = filepath.Join(systemDrive, "ProgramData", "NimbusBackup")
 	} else {
-		// Unix-like: use ~/.proxmox-backup-guardian
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
@@ -67,7 +68,15 @@ func getConfigPath() (string, error) {
 		return "", err
 	}
 
-	return filepath.Join(configDir, "config.json"), nil
+	return configDir, nil
+}
+
+func getConfigPath() (string, error) {
+	dir, err := getConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
 }
 
 func LoadConfig() *Config {

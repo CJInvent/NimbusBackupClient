@@ -112,13 +112,17 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 // its tree of entries (files + directories) without extracting anything to disk.
 // Used by the GUI to power the restore navigation tree.
 //
+// Results are cached locally per snapshot — a snapshot's contents are immutable
+// once written, so the cache never goes stale, only ages out. Set forceRefresh
+// to bypass the cache (e.g. for a manual "Reload" button).
+//
 // archiveName defaults to "backup.pxar.didx" when empty.
-func ListSnapshotContentsInline(opts RestoreOptions, archiveName string) ([]SnapshotEntry, error) {
+func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRefresh bool) ([]SnapshotEntry, error) {
 	if archiveName == "" {
 		archiveName = "backup.pxar.didx"
 	}
-	writeBackupLog(fmt.Sprintf("Listing contents: backupID=%s snapshot=%s archive=%s",
-		opts.BackupID, opts.SnapshotTime.Format(time.RFC3339), archiveName))
+	writeBackupLog(fmt.Sprintf("Listing contents: backupID=%s snapshot=%s archive=%s force=%v",
+		opts.BackupID, opts.SnapshotTime.Format(time.RFC3339), archiveName, forceRefresh))
 
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
 		return nil, fmt.Errorf("PBS connection parameters required")
@@ -128,6 +132,21 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string) ([]Snap
 	}
 	if opts.Datastore == "" {
 		return nil, fmt.Errorf("datastore required")
+	}
+
+	cacheKey := snapshotCacheKey{
+		PBSID:      opts.BaseURL,
+		Datastore:  opts.Datastore,
+		Namespace:  opts.Namespace,
+		BackupType: "host", // this client only ever creates host-type snapshots
+		BackupID:   opts.BackupID,
+		SnapshotAt: opts.SnapshotTime.Unix(),
+	}
+	if !forceRefresh {
+		if entries, ok := loadSnapshotTreeCache(cacheKey); ok {
+			writeBackupLog(fmt.Sprintf("Restore cache hit: %d entries (skipping download)", len(entries)))
+			return entries, nil
+		}
 	}
 
 	client := &pbscommon.PBSClient{
@@ -174,6 +193,13 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string) ([]Snap
 		})
 	}
 	writeBackupLog(fmt.Sprintf("Listed %d entries in snapshot", len(result)))
+
+	// Best-effort cache write — a failure here just means the next listing
+	// pays the assembly cost again.
+	if err := saveSnapshotTreeCache(cacheKey, result); err != nil {
+		writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", err))
+	}
+
 	return result, nil
 }
 

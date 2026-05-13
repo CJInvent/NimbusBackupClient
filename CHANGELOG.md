@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.82] - 2026-05-13
+
+### Added
+- **Cache local de l'arborescence des snapshots** — la première ouverture d'un snapshot télécharge le PXAR comme avant ; les ouvertures suivantes lisent directement le listing depuis `<configDir>/restore_cache/`. Le contenu d'un snapshot étant immuable, le cache ne périme jamais — il vieillit seulement. La purge automatique au démarrage supprime les entrées de plus de 30 jours.
+- **Bouton « Recharger » dans l'arborescence de restauration** — force un retéléchargement et l'écrasement de la ligne de cache. Utile en cas de corruption locale ou pour invalider manuellement.
+- `gui/restore_cache.go` : envelope versionnée (`schema: 1`), clé `sha256(pbsID|datastore|namespace|backupType|backupID|unix)`, écriture atomique via `*.tmp` + rename, vérification de clé à la lecture (collisions / cache copié entre profils).
+- `App.ListSnapshotContents` accepte un paramètre `forceRefresh bool` (binding Wails ajouté en signature, non rétro-compatible côté JS — `App.jsx` mis à jour).
+
+### Changed
+- `getConfigDir()` extrait de `getConfigPath()` pour servir de racine commune (config.json + restore_cache/ + futurs caches).
+
 ## [0.2.81] - 2026-05-13
 
 ### Fixed

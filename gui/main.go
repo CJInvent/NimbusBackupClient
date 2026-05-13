@@ -238,6 +238,11 @@ func (a *App) startup(ctx context.Context) {
 	// Note: In service mode, these will be sent via API
 	go a.HandleStartupRun()
 
+	// Trim stale restore listing caches in the background (best-effort).
+	go func() {
+		trimSnapshotTreeCache(30 * 24 * time.Hour)
+	}()
+
 	// Setup system tray for background operation
 	go a.SetupSystemTray()
 }
@@ -842,9 +847,11 @@ func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, e
 // user can pick individual files or directories before restoring.
 //
 // snapshotUnix is the snapshot's backup-time as Unix seconds (the `unix` field
-// returned by ListSnapshots).
-func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64) ([]SnapshotEntry, error) {
-	writeDebugLog(fmt.Sprintf("ListSnapshotContents(pbs=%s, backupID=%s, unix=%d)", pbsID, backupID, snapshotUnix))
+// returned by ListSnapshots). Set forceRefresh to bypass the local listing
+// cache — useful for a manual "Reload" action.
+func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, forceRefresh bool) ([]SnapshotEntry, error) {
+	writeDebugLog(fmt.Sprintf("ListSnapshotContents(pbs=%s, backupID=%s, unix=%d, force=%v)",
+		pbsID, backupID, snapshotUnix, forceRefresh))
 
 	cfg, err := a.resolveRestorePBS(pbsID)
 	if err != nil {
@@ -864,7 +871,7 @@ func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64) (
 		BackupID:        backupID,
 		SnapshotTime:    time.Unix(snapshotUnix, 0),
 	}
-	return ListSnapshotContentsInline(opts, "")
+	return ListSnapshotContentsInline(opts, "", forceRefresh)
 }
 
 // RestoreSnapshot extracts a snapshot (or selected files) to destPath.

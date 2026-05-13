@@ -788,7 +788,7 @@ function App() {
     }
   }
 
-  const handleSelectSnapshot = async (snap) => {
+  const handleSelectSnapshot = async (snap, forceRefresh = false) => {
     if (!ListSnapshotContents) {
       showStatus('❌ Wails runtime non disponible', 'error')
       return
@@ -801,12 +801,17 @@ function App() {
     try {
       // Backend uses the snapshot's actual backup_id (snap.backup_id) so split
       // backups list their real contents, not the partial search term.
-      const entries = await ListSnapshotContents(restorePBSID || '', snap.backup_id || restoreBackupId, snap.unix)
+      const entries = await ListSnapshotContents(restorePBSID || '', snap.backup_id || restoreBackupId, snap.unix, forceRefresh)
       setSnapshotEntries(entries || [])
       showStatus(`✅ ${(entries || []).length} ${t('entriesLoaded')}`, 'success')
     } catch (err) {
       showStatus(`❌ ${err}`, 'error')
     }
+  }
+
+  const handleReloadSnapshot = async () => {
+    if (!selectedSnapshot) return
+    await handleSelectSnapshot(selectedSnapshot, true)
   }
 
   const handleBrowseRestoreDest = async () => {
@@ -1841,8 +1846,19 @@ function App() {
           {/* Snapshot navigation tree */}
           {selectedSnapshot && (
             <div style={{marginTop: '24px'}}>
-              <h3>📂 {t('snapshotContents')} — {selectedSnapshot.time}</h3>
-              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '8px'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap'}}>
+                <h3 style={{margin: 0}}>📂 {t('snapshotContents')} — {selectedSnapshot.time}</h3>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={handleReloadSnapshot}
+                  title={t('reloadTreeHint') || 'Bypass local cache and re-download the snapshot tree'}
+                  style={{padding: '4px 10px', fontSize: '13px'}}
+                >
+                  🔄 {t('reloadTree') || 'Recharger'}
+                </button>
+              </div>
+              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '8px', marginTop: '6px'}}>
                 {t('treeHint')}
               </p>
               <div style={{
