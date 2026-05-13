@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.81] - 2026-05-13
+
+### Fixed
+- **Restauration : crash GUI au clic sur un snapshot** — `ListSnapshotContentsInline` et `RestoreSnapshotInline` téléchargeaient `backup.pxar.didx` via `DownloadToBytes` puis tentaient de parser le résultat comme du PXAR. Le `.didx` est en réalité l'index (en-tête 4096 octets + entrées de 40 octets : offset cumulé + SHA-256) et non l'archive assemblée. Le parser PXAR lisait des octets aléatoires comme des en-têtes, déclenchait une panic et fermait la fenêtre Wails.
+
+### Added
+- **`pbscommon.PBSClient.AssembleDIDX(archiveName, maxParallel, progress)`** — télécharge un index dynamique, vérifie le magic DIDX, parse les offsets/digests, récupère chaque chunk via `GetChunkData` avec parallélisme borné (8 par défaut), valide la taille de chaque chunk et retourne le flux complet assemblé. Garde-fou mémoire à 1 TiB.
+- **Progression de l'assemblage** — `RestoreSnapshotInline` mappe la progression chunk-par-chunk sur la portion 20–80 % de la barre globale ; `ListSnapshotContentsInline` journalise toutes les 32 chunks.
+
 ## [0.2.76] - 2026-05-11
 
 ### Added

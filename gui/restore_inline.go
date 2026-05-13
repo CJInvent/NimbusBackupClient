@@ -148,10 +148,14 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string) ([]Snap
 	client.Connect(true, "host")
 	defer client.Close()
 
-	pxarData, err := client.DownloadToBytes(archiveName)
+	pxarData, err := client.AssembleDIDX(archiveName, 8, func(done, total int) {
+		if done == total || done%32 == 0 {
+			writeBackupLog(fmt.Sprintf("Listing: assembled %d/%d chunks of %s", done, total, archiveName))
+		}
+	})
 	if err != nil {
-		writeBackupLog(fmt.Sprintf("Failed to download PXAR for listing: %v", err))
-		return nil, fmt.Errorf("failed to download archive: %v", err)
+		writeBackupLog(fmt.Sprintf("Failed to assemble PXAR for listing: %v", err))
+		return nil, fmt.Errorf("failed to assemble archive: %v", err)
 	}
 
 	reader := pbscommon.NewPXARReader(pxarData)
@@ -228,13 +232,23 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 	progress(0.10, "Connected to PBS")
 
 	progress(0.20, "Downloading backup archive...")
-	pxarData, err := client.DownloadToBytes("backup.pxar.didx")
+	// AssembleDIDX downloads the .didx index and reassembles the actual PXAR
+	// stream by fetching each referenced chunk. DownloadToBytes alone returns
+	// only the index, which would crash the PXAR parser.
+	pxarData, err := client.AssembleDIDX("backup.pxar.didx", 8, func(done, total int) {
+		// Map chunk progress to the 0.20–0.80 portion of the overall bar.
+		if total == 0 {
+			return
+		}
+		pct := 0.20 + 0.60*(float64(done)/float64(total))
+		progress(pct, fmt.Sprintf("Downloading archive (%d/%d chunks)", done, total))
+	})
 	if err != nil {
-		writeBackupLog(fmt.Sprintf("Failed to download PXAR: %v", err))
-		return fmt.Errorf("failed to download backup archive: %v", err)
+		writeBackupLog(fmt.Sprintf("Failed to assemble PXAR: %v", err))
+		return fmt.Errorf("failed to assemble backup archive: %v", err)
 	}
-	writeBackupLog(fmt.Sprintf("Downloaded %d bytes", len(pxarData)))
-	progress(0.80, "Archive downloaded")
+	writeBackupLog(fmt.Sprintf("Assembled %d bytes", len(pxarData)))
+	progress(0.80, "Archive assembled")
 
 	progress(0.85, "Extracting files...")
 
