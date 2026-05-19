@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.85] - 2026-05-19
+
+### Fixed
+- **Build cassé en 0.2.84** — `gui/restore_inline.go` appelait `normalizeIncludes` (non-exporté de `pbscommon`) depuis le package `main`, ce qui faisait échouer `go test` avec `undefined: normalizeIncludes`. La fonction est exportée en `pbscommon.NormalizeIncludes` et le call site corrigé.
+
 ## [0.2.84] - 2026-05-19
 
 ### Added

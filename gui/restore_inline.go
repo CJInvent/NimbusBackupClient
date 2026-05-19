@@ -405,7 +405,7 @@ func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRew
 				return filepath.Join(dest, filepath.FromSlash(archivePath))
 			}, nil
 		}
-		prefix := commonAncestorDir(normalizeIncludes(opts.IncludePaths))
+		prefix := commonAncestorDir(pbscommon.NormalizeIncludes(opts.IncludePaths))
 		dest := opts.DestPath
 		return func(archivePath string) string {
 			// Drop archive entries above the selection root (e.g. parent

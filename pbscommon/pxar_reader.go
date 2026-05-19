@@ -294,7 +294,7 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 	if rewriter == nil {
 		return nil, fmt.Errorf("path rewriter required")
 	}
-	includes := normalizeIncludes(includePaths)
+	includes := NormalizeIncludes(includePaths)
 	extracted := make([]PXARExtractedFile, 0, 64)
 
 	err := pr.walk(func(e PXARTreeEntry, payload []byte) error {
@@ -364,7 +364,11 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 	return extracted, err
 }
 
-func normalizeIncludes(in []string) []string {
+// NormalizeIncludes converts user-supplied include paths to the archive form
+// expected by the reader: forward slashes, no leading/trailing slash, empty
+// strings dropped. Exported so callers (e.g. flat-mode rewriters) can derive
+// helpers from the same normalized list the walker sees.
+func NormalizeIncludes(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, p := range in {
 		p = strings.ReplaceAll(p, "\\", "/")
