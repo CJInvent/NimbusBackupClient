@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.84] - 2026-05-19
+
+### Added
+- **Trois modes de restauration** — choix explicite dans la GUI :
+  - **In-place** : restauration vers `OriginalPath` du sidecar `.nimbus_backup_meta.json`. Refuse les snapshots sans sidecar, OS différent, ou hostname différent (override « forcer cross-host » exigé). `Overwrite` forcé à true automatiquement.
+  - **Autre emplacement, arborescence conservée** : `dest/<archive_path>` (comportement legacy).
+  - **Autre emplacement, à plat** : strip du préfixe commun de la sélection. Un fichier seul `Users/alice/doc.txt` atterrit en `dest/doc.txt`. Mode par défaut pour les restaurations vers un autre emplacement.
+- **`pbscommon.PXARReader.ExtractWithRewriter(rewriter, includes, overwrite)`** — extraction générique paramétrée par un `PathRewriter func(archivePath string) string`. Un rewriter qui retourne `""` drop l'entrée sans la marquer comme skip. `ExtractFiltered` est réimplémentée comme wrapper trivial sur cette nouvelle fonction.
+- **`buildPathRewriter(opts, meta)`** (gui) — construit le rewriter approprié pour le mode demandé, encapsule toute la validation (OS match, hostname match, presence sidecar, `commonAncestorDir` pour le mode flat).
+- **UI : sélecteur de mode + warning rouge in-place + override cross-host + toggle « conserver l'arborescence »** — l'option in-place est désactivée avec tooltip explicite si le snapshot est antérieur au sidecar, si l'OS diffère, ou si le chemin d'origine n'est pas renseigné. Confirmation modale (`window.confirm` provisoire) avant déclenchement d'une restauration in-place.
+- **`GetSystemInfo` expose `os` (runtime.GOOS)** — utilisé par la GUI pour griser le bouton in-place quand le snapshot vient d'une autre plateforme.
+
+### Changed
+- **`App.RestoreSnapshot` signature étendue** — nouveaux paramètres `mode string` et `allowCrossHost bool` insérés après `destPath`. Le frontend est synchronisé ; ancien binding non rétro-compatible.
+- **`RestoreSnapshotInline` — meta lu avant le download en mode in-place** — la validation cross-host/cross-OS échoue avant tout transfert réseau plutôt qu'après plusieurs Go de chunks téléchargés.
+- `restoreOptions.overwrite` ignoré (et grisé dans l'UI) en mode in-place : l'écrasement est implicite par construction.
+
+### Internal
+- `equalHostnames(a, b)` (gui) — comparaison hostname tolerant case + suffixe `.domain.tld` pour éviter les faux refus quand l'un est `WIN-A` et l'autre `WIN-A.local`. Logique miroir côté frontend.
+- `commonAncestorDir(includes)` (gui) — préfixe le plus long partagé par toutes les sélections, sur séparateur `/` archive.
+
 ## [0.2.83] - 2026-05-19
 
 ### Added

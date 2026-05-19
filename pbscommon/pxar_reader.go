@@ -260,17 +260,40 @@ func (pr *PXARReader) ListEntries() ([]PXARTreeEntry, error) {
 	return entries, err
 }
 
+// PathRewriter maps an archive-relative path (forward slash) to a filesystem
+// path on the target host. Returning an empty string skips the entry silently
+// — useful when a rewriter wants to drop entries outside the selection root in
+// flat mode.
+type PathRewriter func(archivePath string) string
+
 // ExtractAll extracts the entire PXAR archive to destDir.
 func (pr *PXARReader) ExtractAll(destDir string) ([]PXARExtractedFile, error) {
 	return pr.ExtractFiltered(destDir, nil, false)
 }
 
-// ExtractFiltered extracts entries whose archive path matches one of includePaths.
-// An empty includePaths means "extract everything". Selecting a directory implies
-// all its descendants. Existing files are skipped unless overwrite is true.
+// ExtractFiltered extracts entries whose archive path matches one of includePaths
+// to destDir, preserving the archive's directory layout below destDir.
 //
-// includePaths may use either forward or backward slashes; they are normalized.
+// Equivalent to ExtractWithRewriter using the default "dest + archive_path"
+// rewriter. Kept for backward compatibility — new callers should use
+// ExtractWithRewriter directly when they need in-place or flat restores.
 func (pr *PXARReader) ExtractFiltered(destDir string, includePaths []string, overwrite bool) ([]PXARExtractedFile, error) {
+	rewriter := func(archivePath string) string {
+		return filepath.Join(destDir, filepath.FromSlash(archivePath))
+	}
+	return pr.ExtractWithRewriter(rewriter, includePaths, overwrite)
+}
+
+// ExtractWithRewriter walks the archive once, runs include filtering, and for
+// each matching entry asks the rewriter where to write it on disk. A rewriter
+// returning "" tells the walker to drop that entry without recording a skip.
+//
+// All filesystem decisions (mkdir parent, overwrite, mode bits, mtime) are
+// centralized here so each restore mode only has to express its path policy.
+func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []string, overwrite bool) ([]PXARExtractedFile, error) {
+	if rewriter == nil {
+		return nil, fmt.Errorf("path rewriter required")
+	}
 	includes := normalizeIncludes(includePaths)
 	extracted := make([]PXARExtractedFile, 0, 64)
 
@@ -279,8 +302,12 @@ func (pr *PXARReader) ExtractFiltered(destDir string, includePaths []string, ove
 			return nil
 		}
 
-		rel := filepath.FromSlash(e.Path)
-		fullPath := filepath.Join(destDir, rel)
+		fullPath := rewriter(e.Path)
+		if fullPath == "" {
+			// Rewriter chose to drop this entry (e.g. ancestor of the flat
+			// selection root). Not a skip — just not visible at the target.
+			return nil
+		}
 
 		if e.IsDir {
 			if err := os.MkdirAll(fullPath, 0755); err != nil {

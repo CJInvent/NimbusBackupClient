@@ -3,10 +3,28 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"pbscommon"
+)
+
+// RestoreMode picks where extracted files land on disk.
+//
+// Original restores back to the original filesystem location captured in the
+// backup metadata sidecar (requires hostname + OS to match). The two Alternate
+// modes write under opts.DestPath: Abs preserves the archive's full directory
+// layout, Flat strips the longest common prefix of the user's selection so a
+// single file lands at dest/<basename>.
+type RestoreMode string
+
+const (
+	RestoreModeOriginal      RestoreMode = "original"
+	RestoreModeAlternateAbs  RestoreMode = "alternate_abs"
+	RestoreModeAlternateFlat RestoreMode = "alternate_flat"
 )
 
 // RestoreOptions contains all parameters for a restore operation.
@@ -30,6 +48,14 @@ type RestoreOptions struct {
 	BackupID        string
 	SnapshotTime    time.Time
 	DestPath        string
+
+	// Mode selects the destination policy. Empty defaults to alternate_abs
+	// (legacy behaviour: dest + full archive path).
+	Mode RestoreMode
+
+	// AllowCrossHost permits an in-place restore even when the snapshot was
+	// taken on a different machine. Honored only in RestoreModeOriginal.
+	AllowCrossHost bool
 
 	IncludePaths      []string
 	Overwrite         bool
@@ -311,6 +337,157 @@ func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta
 	return meta, nil
 }
 
+// buildPathRewriter validates the requested mode against the snapshot metadata
+// (when needed) and returns a rewriter that maps archive paths to filesystem
+// paths on this host.
+//
+// Validation rules:
+//   - original: requires a meta sidecar with OriginalPath. OS must match
+//     runtime.GOOS (no Windows-on-Linux). Hostname must match unless
+//     opts.AllowCrossHost is set.
+//   - alternate_abs / alternate_flat: requires opts.DestPath.
+//   - flat with no IncludePaths is equivalent to abs — flat needs a selection
+//     to derive a common root from.
+func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRewriter, error) {
+	mode := opts.Mode
+	if mode == "" {
+		mode = RestoreModeAlternateAbs
+	}
+
+	switch mode {
+	case RestoreModeOriginal:
+		if meta == nil {
+			return nil, fmt.Errorf("restauration in-place impossible : ce snapshot n'a pas de métadonnées (.nimbus_backup_meta.json absent). Choisissez « autre emplacement ».")
+		}
+		if meta.OriginalPath == "" {
+			return nil, fmt.Errorf("restauration in-place impossible : le chemin d'origine n'est pas renseigné dans les métadonnées.")
+		}
+		if meta.OS != "" && meta.OS != runtime.GOOS {
+			return nil, fmt.Errorf("restauration in-place impossible : sauvegarde faite sur %s, machine actuelle %s.", meta.OS, runtime.GOOS)
+		}
+		if !opts.AllowCrossHost {
+			localHost, err := os.Hostname()
+			if err != nil {
+				return nil, fmt.Errorf("impossible de lire le hostname local : %w", err)
+			}
+			if meta.Hostname != "" && !equalHostnames(meta.Hostname, localHost) {
+				return nil, fmt.Errorf("restauration in-place bloquée : sauvegarde de %q, machine actuelle %q. Cochez « forcer cross-host » si l'intention est délibérée.", meta.Hostname, localHost)
+			}
+		}
+		// Materialize the original root once, with native separators.
+		root := filepath.Clean(meta.OriginalPath)
+		return func(archivePath string) string {
+			if archivePath == "" {
+				return root
+			}
+			return filepath.Join(root, filepath.FromSlash(archivePath))
+		}, nil
+
+	case RestoreModeAlternateAbs:
+		if opts.DestPath == "" {
+			return nil, fmt.Errorf("dossier de destination requis")
+		}
+		dest := opts.DestPath
+		return func(archivePath string) string {
+			return filepath.Join(dest, filepath.FromSlash(archivePath))
+		}, nil
+
+	case RestoreModeAlternateFlat:
+		if opts.DestPath == "" {
+			return nil, fmt.Errorf("dossier de destination requis")
+		}
+		// Empty selection means "restore everything" — flat is meaningless,
+		// fall back to abs so the user gets a sensible result instead of
+		// hundreds of files colliding at the dest root.
+		if len(opts.IncludePaths) == 0 {
+			dest := opts.DestPath
+			return func(archivePath string) string {
+				return filepath.Join(dest, filepath.FromSlash(archivePath))
+			}, nil
+		}
+		prefix := commonAncestorDir(normalizeIncludes(opts.IncludePaths))
+		dest := opts.DestPath
+		return func(archivePath string) string {
+			// Drop archive entries above the selection root (e.g. parent
+			// directory entries the walker emits as scaffolding). The walker
+			// also matches ancestors of includes for mkdir scaffolding —
+			// skip those so they don't pollute the flat root.
+			if archivePath == "" {
+				return ""
+			}
+			if prefix == "" {
+				return filepath.Join(dest, filepath.FromSlash(archivePath))
+			}
+			if archivePath == prefix {
+				return ""
+			}
+			rel := strings.TrimPrefix(archivePath, prefix+"/")
+			if rel == archivePath {
+				// Not a descendant of the common prefix → ancestor scaffolding,
+				// drop silently.
+				return ""
+			}
+			return filepath.Join(dest, filepath.FromSlash(rel))
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("mode de restauration inconnu : %q", string(mode))
+	}
+}
+
+// commonAncestorDir returns the longest path prefix shared by all includes,
+// using forward-slash archive convention. Returns "" when the includes have
+// no common directory (e.g. "a/x.txt" and "b/y.txt").
+func commonAncestorDir(includes []string) string {
+	if len(includes) == 0 {
+		return ""
+	}
+	if len(includes) == 1 {
+		// Single selection: parent dir is the common root. A single file
+		// `a/b/c.txt` becomes flat as `c.txt`; a single dir `a/b/c` becomes
+		// flat as `c/...` because the trim prefix is `a/b`.
+		return parentDir(includes[0])
+	}
+	parts := strings.Split(includes[0], "/")
+	for _, p := range includes[1:] {
+		ps := strings.Split(p, "/")
+		max := len(parts)
+		if len(ps) < max {
+			max = len(ps)
+		}
+		i := 0
+		for i < max && parts[i] == ps[i] {
+			i++
+		}
+		parts = parts[:i]
+		if len(parts) == 0 {
+			return ""
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+func parentDir(archivePath string) string {
+	i := strings.LastIndex(archivePath, "/")
+	if i < 0 {
+		return ""
+	}
+	return archivePath[:i]
+}
+
+// equalHostnames compares hostnames tolerant of case and trailing dot/domain
+// (so "WIN-A" == "win-a" == "WIN-A.local").
+func equalHostnames(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.ToLower(s)
+		if dot := strings.Index(s, "."); dot >= 0 {
+			s = s[:dot]
+		}
+		return s
+	}
+	return norm(a) == norm(b)
+}
+
 // RestoreSnapshotInline restores a snapshot from PBS.
 // SECURITY: Only restores from the configured PBS server/datastore/namespace.
 // Snapshots from other servers will fail with HTTP 404.
@@ -318,8 +495,12 @@ func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta
 // When opts.IncludePaths is non-empty, only the matching files and directories
 // are extracted. Otherwise the whole snapshot is restored.
 func RestoreSnapshotInline(opts RestoreOptions) error {
-	writeBackupLog(fmt.Sprintf("Starting restore: snapshot=%s, dest=%s, includes=%d, overwrite=%v from %s/%s/%s",
-		opts.SnapshotTime.Format("2006-01-02T15:04:05Z"), opts.DestPath, len(opts.IncludePaths), opts.Overwrite,
+	mode := opts.Mode
+	if mode == "" {
+		mode = RestoreModeAlternateAbs
+	}
+	writeBackupLog(fmt.Sprintf("Starting restore: snapshot=%s, mode=%s, dest=%s, includes=%d, overwrite=%v, allowCrossHost=%v from %s/%s/%s",
+		opts.SnapshotTime.Format("2006-01-02T15:04:05Z"), mode, opts.DestPath, len(opts.IncludePaths), opts.Overwrite, opts.AllowCrossHost,
 		opts.BaseURL, opts.Datastore, opts.Namespace))
 
 	progress := func(pct float64, msg string) {
@@ -335,11 +516,33 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 	if opts.BackupID == "" {
 		return fmt.Errorf("backup ID required")
 	}
-	if opts.DestPath == "" {
-		return fmt.Errorf("destination path required")
-	}
 	if opts.Datastore == "" {
 		return fmt.Errorf("datastore required for security")
+	}
+	// DestPath is required for alternate modes only — original reads the
+	// target from the backup metadata sidecar.
+	if mode != RestoreModeOriginal && opts.DestPath == "" {
+		return fmt.Errorf("destination path required")
+	}
+
+	// In-place restores need the sidecar up front to validate before we burn
+	// time on the multi-GB download. Cheap if the snapshot was listed first.
+	var meta *BackupMeta
+	if mode == RestoreModeOriginal {
+		var err error
+		meta, err = ReadSnapshotMetaInline(opts, false)
+		if err != nil {
+			return fmt.Errorf("lecture du sidecar pour restauration in-place: %w", err)
+		}
+		// Validate immediately so the user sees the cross-host / cross-OS
+		// refusal before any chunk is downloaded.
+		if _, err := buildPathRewriter(opts, meta); err != nil {
+			return err
+		}
+		// In-place implies overwrite. Files in OriginalPath are by definition
+		// candidates for replacement; skipping them would be confusing.
+		opts.Overwrite = true
+		writeBackupLog(fmt.Sprintf("In-place target: %s (host=%s, os=%s)", meta.OriginalPath, meta.Hostname, meta.OS))
 	}
 
 	progress(0.05, "Connecting to PBS...")
@@ -387,7 +590,13 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 	progress(0.85, "Extracting files...")
 
 	reader := pbscommon.NewPXARReader(pxarData)
-	extracted, err := reader.ExtractFiltered(opts.DestPath, opts.IncludePaths, opts.Overwrite)
+	// For alternate modes, meta is unused so we don't pay an extra parse.
+	// For in-place, meta was read above before download.
+	rewriter, err := buildPathRewriter(opts, meta)
+	if err != nil {
+		return err
+	}
+	extracted, err := reader.ExtractWithRewriter(rewriter, opts.IncludePaths, opts.Overwrite)
 	if err != nil {
 		writeBackupLog(fmt.Sprintf("PXAR extraction failed: %v", err))
 		return fmt.Errorf("failed to extract archive: %v", err)

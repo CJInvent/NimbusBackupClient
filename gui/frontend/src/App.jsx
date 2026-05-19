@@ -49,7 +49,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('servers')
   const [hostname, setHostname] = useState('')
   const [appVersion, setAppVersion] = useState('dev')
-  const [systemInfo, setSystemInfo] = useState({ mode: 'Standalone', is_admin: false, service_available: false })
+  const [systemInfo, setSystemInfo] = useState({ mode: 'Standalone', is_admin: false, service_available: false, os: '' })
   const [config, setConfig] = useState({
     baseurl: '',
     certfingerprint: '',
@@ -113,6 +113,11 @@ function App() {
   const [expandedDirs, setExpandedDirs] = useState(new Set())     // expanded paths in tree
   const [selectedPaths, setSelectedPaths] = useState(new Set())   // selected entry paths
   const [restoreDestPath, setRestoreDestPath] = useState('')
+  // 'original' (in-place), 'alternate_abs' (preserve tree), 'alternate_flat' (strip prefix)
+  const [restoreMode, setRestoreMode] = useState('alternate_abs')
+  const [restoreAllowCrossHost, setRestoreAllowCrossHost] = useState(false)
+  // alternate sub-mode toggle: true = abs (keep tree), false = flat. Default flat per spec.
+  const [restoreKeepTree, setRestoreKeepTree] = useState(false)
   const [restoreOptions, setRestoreOptions] = useState({
     overwrite: false,
     timestamps: true,
@@ -128,6 +133,18 @@ function App() {
       setRestoreBackupId(config['backup-id'] || hostname)
     }
   }, [config['backup-id'], hostname])
+
+  // When the selected snapshot has no sidecar (legacy) or its OS doesn't match
+  // the current host, in-place is impossible. Snap the mode back to alternate
+  // so a stale "original" selection doesn't survive across snapshot switches.
+  useEffect(() => {
+    if (restoreMode !== 'original') return
+    if (!snapshotMeta) { setRestoreMode('alternate_abs'); return }
+    if (!snapshotMeta.original_path) { setRestoreMode('alternate_abs'); return }
+    if (systemInfo.os && snapshotMeta.os && systemInfo.os !== snapshotMeta.os) {
+      setRestoreMode('alternate_abs')
+    }
+  }, [snapshotMeta, systemInfo.os, restoreMode])
 
   // Sync restore PBS dropdown with default once it's loaded
   useEffect(() => {
@@ -842,6 +859,24 @@ function App() {
     }
   }
 
+  // inPlaceBlocker returns a translation key (or null when in-place is OK).
+  // Drives the disabled state of the in-place radio + its tooltip.
+  const inPlaceBlocker = () => {
+    if (!snapshotMeta) return 'inPlaceNoMeta'
+    if (!snapshotMeta.original_path) return 'inPlaceNoOriginalPath'
+    if (systemInfo.os && snapshotMeta.os && systemInfo.os !== snapshotMeta.os) return 'inPlaceOsMismatch'
+    return null
+  }
+
+  // crossHostMismatch returns true when the backup hostname differs from the
+  // current machine. Comparison is case-insensitive and ignores the domain
+  // suffix — same rule as backend equalHostnames.
+  const crossHostMismatch = () => {
+    if (!snapshotMeta || !snapshotMeta.hostname || !hostname) return false
+    const norm = s => (s || '').toLowerCase().split('.')[0]
+    return norm(snapshotMeta.hostname) !== norm(hostname)
+  }
+
   const handleRestoreSnapshot = async () => {
     if (!RestoreSnapshot) {
       showStatus('❌ Wails runtime non disponible', 'error')
@@ -851,9 +886,29 @@ function App() {
       showStatus('❌ ' + t('selectSnapshotFirst'), 'error')
       return
     }
-    if (!restoreDestPath) {
+
+    // Resolve effective mode. The UI radio is binary (in-place / alternate);
+    // the alternate sub-mode comes from the "keep tree" toggle.
+    let effectiveMode = restoreMode
+    if (restoreMode !== 'original') {
+      effectiveMode = restoreKeepTree ? 'alternate_abs' : 'alternate_flat'
+    }
+
+    if (effectiveMode !== 'original' && !restoreDestPath) {
       showStatus('❌ ' + t('destinationRequired'), 'error')
       return
+    }
+
+    // In-place: scary, get explicit confirmation. confirm() is a stopgap until
+    // we wire a real modal — for the alpha phase it's enough and the message
+    // is precise about what will happen.
+    if (effectiveMode === 'original') {
+      const target = snapshotMeta?.original_path || '?'
+      const msg = t('inPlaceConfirm').replace('{path}', target)
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(msg)) {
+        return
+      }
     }
 
     // Empty selection = restore everything in the snapshot
@@ -869,7 +924,9 @@ function App() {
         selectedSnapshot.backup_id || restoreBackupId,
         selectedSnapshot.id,
         restoreDestPath,
+        effectiveMode,
         includes,
+        restoreAllowCrossHost,
         restoreOptions.acls,
         restoreOptions.ads,
         restoreOptions.timestamps,
@@ -1925,77 +1982,173 @@ function App() {
             </div>
           )}
 
-          {/* Destination + options + restore button */}
-          {selectedSnapshot && (
-            <div style={{marginTop: '20px'}}>
-              <div className="form-group">
-                <label>{t('destinationPath')}</label>
-                <div style={{display: 'flex', gap: '8px'}}>
-                  <input
-                    type="text"
-                    value={restoreDestPath}
-                    onChange={(e) => setRestoreDestPath(e.target.value)}
-                    placeholder="C:\\Restore"
-                    style={{flex: 1}}
-                  />
-                  <button className="btn" onClick={handleBrowseRestoreDest} type="button">
-                    📁 {t('browse')}
-                  </button>
+          {/* Restore mode picker + destination + options + restore button */}
+          {selectedSnapshot && (() => {
+            const blocker = inPlaceBlocker()
+            const isInPlace = restoreMode === 'original'
+            const crossHost = isInPlace && crossHostMismatch()
+            const blockerTooltip = blocker ? (t(blocker) || '') : ''
+            return (
+              <div style={{marginTop: '20px'}}>
+                {/* Mode picker */}
+                <div style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '20px',
+                  marginBottom: '14px',
+                  padding: '10px 14px',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '8px',
+                  backgroundColor: '#f8fafc'
+                }}>
+                  <label
+                    title={blockerTooltip}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      opacity: blocker ? 0.5 : 1,
+                      cursor: blocker ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="restoreMode"
+                      value="original"
+                      checked={restoreMode === 'original'}
+                      disabled={!!blocker}
+                      onChange={() => setRestoreMode('original')}
+                    />
+                    <strong>{t('restoreModeInPlace') || 'Restaurer in-place'}</strong>
+                    {blocker && <span style={{fontSize: '11px', color: '#dc2626'}}> ({blockerTooltip})</span>}
+                  </label>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer'}}>
+                    <input
+                      type="radio"
+                      name="restoreMode"
+                      value="alternate"
+                      checked={restoreMode !== 'original'}
+                      onChange={() => setRestoreMode('alternate_abs')}
+                    />
+                    <strong>{t('restoreModeAlternate') || 'Restaurer vers un autre emplacement'}</strong>
+                  </label>
                 </div>
-              </div>
 
-              <div style={{display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '12px'}}>
-                <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
-                  <input
-                    type="checkbox"
-                    checked={restoreOptions.overwrite}
-                    onChange={(e) => setRestoreOptions(o => ({...o, overwrite: e.target.checked}))}
-                  />
-                  {t('optionOverwrite')}
-                </label>
-                <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
-                  <input
-                    type="checkbox"
-                    checked={restoreOptions.timestamps}
-                    onChange={(e) => setRestoreOptions(o => ({...o, timestamps: e.target.checked}))}
-                  />
-                  {t('optionTimestamps')}
-                </label>
-                <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
-                  <input type="checkbox" disabled checked={false} />
-                  {t('optionACLs')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
-                </label>
-                <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
-                  <input type="checkbox" disabled checked={false} />
-                  {t('optionADS')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
-                </label>
-              </div>
-
-              <button
-                className="btn btn-primary"
-                onClick={handleRestoreSnapshot}
-                disabled={restoreLoading}
-              >
-                {restoreLoading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
-              </button>
-
-              {restoreLoading && (
-                <div style={{marginTop: '12px'}}>
-                  <div style={{height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden'}}>
-                    <div style={{
-                      height: '100%',
-                      width: `${restoreProgress}%`,
-                      backgroundColor: '#2563eb',
-                      transition: 'width 0.3s ease'
-                    }}/>
+                {/* In-place: warning banner + cross-host override */}
+                {isInPlace && (
+                  <div style={{
+                    marginBottom: '14px',
+                    padding: '10px 14px',
+                    border: '1px solid #fca5a5',
+                    backgroundColor: '#fef2f2',
+                    borderRadius: '8px',
+                    fontSize: '13px'
+                  }}>
+                    <div style={{color: '#991b1b', marginBottom: '6px'}}>
+                      ⚠️ {t('inPlaceWarning').replace('{path}', snapshotMeta?.original_path || '?')}
+                    </div>
+                    {crossHost && (
+                      <label style={{display: 'flex', alignItems: 'center', gap: '6px', color: '#7c2d12'}}>
+                        <input
+                          type="checkbox"
+                          checked={restoreAllowCrossHost}
+                          onChange={(e) => setRestoreAllowCrossHost(e.target.checked)}
+                        />
+                        {t('crossHostOverride')
+                          .replace('{src}', snapshotMeta?.hostname || '?')
+                          .replace('{dst}', hostname || '?')}
+                      </label>
+                    )}
                   </div>
-                  <p style={{textAlign: 'center', fontSize: '13px', color: '#64748b', marginTop: '4px'}}>
-                    {restoreProgress}%
-                  </p>
+                )}
+
+                {/* Alternate: destination + keep-tree toggle */}
+                {!isInPlace && (
+                  <>
+                    <div className="form-group">
+                      <label>{t('destinationPath')}</label>
+                      <div style={{display: 'flex', gap: '8px'}}>
+                        <input
+                          type="text"
+                          value={restoreDestPath}
+                          onChange={(e) => setRestoreDestPath(e.target.value)}
+                          placeholder="C:\\Restore"
+                          style={{flex: 1}}
+                        />
+                        <button className="btn" onClick={handleBrowseRestoreDest} type="button">
+                          📁 {t('browse')}
+                        </button>
+                      </div>
+                    </div>
+                    <label style={{display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px'}}>
+                      <input
+                        type="checkbox"
+                        checked={restoreKeepTree}
+                        onChange={(e) => setRestoreKeepTree(e.target.checked)}
+                      />
+                      {t('keepTreeLabel') || 'Conserver l\'arborescence d\'origine'}
+                      <span style={{fontSize: '12px', color: '#64748b'}}>
+                        {restoreKeepTree
+                          ? (t('keepTreeOnHint') || '(dest/Users/alice/doc.txt)')
+                          : (t('keepTreeOffHint') || '(dest/doc.txt — recommandé pour un fichier seul)')}
+                      </span>
+                    </label>
+                  </>
+                )}
+
+                <div style={{display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '12px'}}>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: isInPlace ? 0.5 : 1}}
+                         title={isInPlace ? (t('overwriteForcedInPlace') || '') : ''}>
+                    <input
+                      type="checkbox"
+                      checked={isInPlace ? true : restoreOptions.overwrite}
+                      disabled={isInPlace}
+                      onChange={(e) => setRestoreOptions(o => ({...o, overwrite: e.target.checked}))}
+                    />
+                    {t('optionOverwrite')}
+                  </label>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                    <input
+                      type="checkbox"
+                      checked={restoreOptions.timestamps}
+                      onChange={(e) => setRestoreOptions(o => ({...o, timestamps: e.target.checked}))}
+                    />
+                    {t('optionTimestamps')}
+                  </label>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
+                    <input type="checkbox" disabled checked={false} />
+                    {t('optionACLs')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
+                  </label>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
+                    <input type="checkbox" disabled checked={false} />
+                    {t('optionADS')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
+                  </label>
                 </div>
-              )}
-            </div>
-          )}
+
+                <button
+                  className="btn btn-primary"
+                  onClick={handleRestoreSnapshot}
+                  disabled={restoreLoading || (isInPlace && crossHost && !restoreAllowCrossHost)}
+                >
+                  {restoreLoading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
+                </button>
+
+                {restoreLoading && (
+                  <div style={{marginTop: '12px'}}>
+                    <div style={{height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden'}}>
+                      <div style={{
+                        height: '100%',
+                        width: `${restoreProgress}%`,
+                        backgroundColor: '#2563eb',
+                        transition: 'width 0.3s ease'
+                      }}/>
+                    </div>
+                    <p style={{textAlign: 'center', fontSize: '13px', color: '#64748b', marginTop: '4px'}}>
+                      {restoreProgress}%
+                    </p>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           <div className="info-box" style={{marginTop: '20px'}}>
             💡 <strong>{t('restoreInfo')}</strong> {t('restoreInfoText')}<br/>

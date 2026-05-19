@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	stdruntime "runtime"
 	"runtime/debug"
 	"syscall"
 	"time"
@@ -286,10 +287,14 @@ func (a *App) GetHostname() string {
 // GetSystemInfo returns system information for UI (mode, admin status, etc.)
 func (a *App) GetSystemInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"mode":     a.mode.String(),
-		"is_admin": isAdmin(),
-		"hostname": a.GetHostname(),
+		"mode":              a.mode.String(),
+		"is_admin":          isAdmin(),
+		"hostname":          a.GetHostname(),
 		"service_available": a.mode == api.ModeService,
+		// os = runtime.GOOS ("windows", "linux", "darwin") — used by the
+		// restore UI to enable/disable the in-place mode when the snapshot
+		// was taken on a different platform.
+		"os": stdruntime.GOOS,
 	}
 }
 
@@ -905,7 +910,16 @@ func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*Back
 	return ReadSnapshotMetaInline(opts, false)
 }
 
-// RestoreSnapshot extracts a snapshot (or selected files) to destPath.
+// RestoreSnapshot extracts a snapshot (or selected files) according to mode.
+//
+//   - mode "original": restore in-place to the path captured in the snapshot's
+//     .nimbus_backup_meta.json sidecar. destPath is ignored. Cross-host
+//     attempts are refused unless allowCrossHost is true.
+//   - mode "alternate_abs" (or empty): write to destPath, preserving the full
+//     archive directory layout below it.
+//   - mode "alternate_flat": write to destPath stripping the longest common
+//     prefix of the selection — useful for restoring a single file as
+//     destPath/<basename>.
 //
 // includePaths uses archive-style paths (forward slash). When empty the entire
 // snapshot is restored. The ACL/ADS/timestamps flags are accepted today but
@@ -914,10 +928,10 @@ func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*Back
 //
 // Progress is streamed to the frontend via the "restore:progress" event;
 // completion via "restore:complete".
-func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath string,
-	includePaths []string, restoreACLs, restoreADS, restoreTimestamps, overwrite bool) error {
-	writeDebugLog(fmt.Sprintf("RestoreSnapshot(pbs=%s, backupID=%s, snap=%s, dest=%s, includes=%d, acl=%v, ads=%v, ts=%v, overwrite=%v)",
-		pbsID, backupID, snapshotID, destPath, len(includePaths), restoreACLs, restoreADS, restoreTimestamps, overwrite))
+func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string,
+	includePaths []string, allowCrossHost, restoreACLs, restoreADS, restoreTimestamps, overwrite bool) error {
+	writeDebugLog(fmt.Sprintf("RestoreSnapshot(pbs=%s, backupID=%s, snap=%s, mode=%s, dest=%s, includes=%d, crossHost=%v, acl=%v, ads=%v, ts=%v, overwrite=%v)",
+		pbsID, backupID, snapshotID, mode, destPath, len(includePaths), allowCrossHost, restoreACLs, restoreADS, restoreTimestamps, overwrite))
 
 	cfg, err := a.resolveRestorePBS(pbsID)
 	if err != nil {
@@ -929,13 +943,21 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath string,
 	if snapshotID == "" {
 		return fmt.Errorf("ID du snapshot requis")
 	}
-	if destPath == "" {
-		return fmt.Errorf("chemin de destination requis")
+
+	restoreMode := RestoreMode(mode)
+	if restoreMode == "" {
+		restoreMode = RestoreModeAlternateAbs
 	}
 
-	// Validate destination is a real path the user wanted (basic check).
-	if err := security.ValidatePath(destPath); err != nil {
-		return fmt.Errorf("chemin de destination invalide: %w", err)
+	// Destination is only required + validated for alternate modes. In-place
+	// derives the target from the backup metadata sidecar.
+	if restoreMode != RestoreModeOriginal {
+		if destPath == "" {
+			return fmt.Errorf("chemin de destination requis")
+		}
+		if err := security.ValidatePath(destPath); err != nil {
+			return fmt.Errorf("chemin de destination invalide: %w", err)
+		}
 	}
 
 	timestamp, err := time.Parse("2006-01-02T15:04:05Z", snapshotID)
@@ -963,6 +985,8 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath string,
 		BackupID:          backupID,
 		SnapshotTime:      timestamp,
 		DestPath:          destPath,
+		Mode:              restoreMode,
+		AllowCrossHost:    allowCrossHost,
 		IncludePaths:      includePaths,
 		Overwrite:         overwrite,
 		RestoreACLs:       restoreACLs,
