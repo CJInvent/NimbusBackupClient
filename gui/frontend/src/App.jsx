@@ -3,7 +3,7 @@ import { useTranslation } from './i18n/i18nContext'
 import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -16,6 +16,7 @@ if (window.go) {
   StartBackup = window.go.main.App.StartBackup
   ListSnapshots = window.go.main.App.ListSnapshots
   ListSnapshotContents = window.go.main.App.ListSnapshotContents
+  GetSnapshotMeta = window.go.main.App.GetSnapshotMeta
   RestoreSnapshot = window.go.main.App.RestoreSnapshot
   OpenRestoreDestDialog = window.go.main.App.OpenRestoreDestDialog
   ListPhysicalDisks = window.go.main.App.ListPhysicalDisks
@@ -107,6 +108,7 @@ function App() {
   const [showSnapshots, setShowSnapshots] = useState(false)
   const [restorePBSID, setRestorePBSID] = useState('')
   const [selectedSnapshot, setSelectedSnapshot] = useState(null) // { id, unix, time }
+  const [snapshotMeta, setSnapshotMeta] = useState(null)         // .nimbus_backup_meta.json sidecar (null if legacy)
   const [snapshotEntries, setSnapshotEntries] = useState([])     // flat list from backend
   const [expandedDirs, setExpandedDirs] = useState(new Set())     // expanded paths in tree
   const [selectedPaths, setSelectedPaths] = useState(new Set())   // selected entry paths
@@ -794,18 +796,31 @@ function App() {
       return
     }
     setSelectedSnapshot(snap)
+    setSnapshotMeta(null)
     setSnapshotEntries([])
     setSelectedPaths(new Set())
     setExpandedDirs(new Set())
     showStatus(`📥 ${t('loadingSnapshotContents')}`, 'info')
+    const effectiveBackupId = snap.backup_id || restoreBackupId
     try {
       // Backend uses the snapshot's actual backup_id (snap.backup_id) so split
       // backups list their real contents, not the partial search term.
-      const entries = await ListSnapshotContents(restorePBSID || '', snap.backup_id || restoreBackupId, snap.unix, forceRefresh)
+      const entries = await ListSnapshotContents(restorePBSID || '', effectiveBackupId, snap.unix, forceRefresh)
       setSnapshotEntries(entries || [])
       showStatus(`✅ ${(entries || []).length} ${t('entriesLoaded')}`, 'success')
     } catch (err) {
       showStatus(`❌ ${err}`, 'error')
+    }
+    // Meta is informational — fire-and-forget. The listing call above has
+    // already populated the cache, so this is a cheap cache hit. Failure is
+    // silent: legacy snapshots simply have no sidecar.
+    if (GetSnapshotMeta) {
+      try {
+        const meta = await GetSnapshotMeta(restorePBSID || '', effectiveBackupId, snap.unix)
+        if (meta) setSnapshotMeta(meta)
+      } catch (_err) {
+        // ignored — banner stays hidden
+      }
     }
   }
 
@@ -1840,6 +1855,30 @@ function App() {
                   })
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Backup origin banner — driven by the .nimbus_backup_meta.json sidecar */}
+          {selectedSnapshot && snapshotMeta && (
+            <div style={{
+              marginTop: '20px',
+              padding: '10px 14px',
+              border: '1px solid #c7d2fe',
+              backgroundColor: '#eef2ff',
+              borderRadius: '8px',
+              fontSize: '13px',
+              color: '#1e293b',
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              columnGap: '12px',
+              rowGap: '4px'
+            }}>
+              <strong>{t('metaOriginalPath') || 'Source d\'origine'}</strong>
+              <span style={{fontFamily: 'monospace'}}>{snapshotMeta.original_path || '—'}</span>
+              <strong>{t('metaHostname') || 'Machine'}</strong>
+              <span>{snapshotMeta.hostname || '—'}{snapshotMeta.os ? ` (${snapshotMeta.os})` : ''}{snapshotMeta.vss_used ? ' · VSS' : ''}</span>
+              <strong>{t('metaBackupTime') || 'Sauvegardé le'}</strong>
+              <span>{snapshotMeta.backup_time || '—'}{snapshotMeta.client_version ? ` · client ${snapshotMeta.client_version}` : ''}</span>
             </div>
           )}
 

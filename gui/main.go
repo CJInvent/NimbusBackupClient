@@ -874,6 +874,37 @@ func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, f
 	return ListSnapshotContentsInline(opts, "", forceRefresh)
 }
 
+// GetSnapshotMeta returns the `.nimbus_backup_meta.json` sidecar from a
+// snapshot. Returns nil (not an error) when the snapshot predates the sidecar
+// — the frontend should fall back to a generic banner in that case.
+//
+// Cheap when the snapshot has already been listed: the meta is bundled in the
+// same restore-cache envelope as the entries.
+func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*BackupMeta, error) {
+	writeDebugLog(fmt.Sprintf("GetSnapshotMeta(pbs=%s, backupID=%s, unix=%d)",
+		pbsID, backupID, snapshotUnix))
+
+	cfg, err := a.resolveRestorePBS(pbsID)
+	if err != nil {
+		return nil, err
+	}
+	if backupID == "" {
+		return nil, fmt.Errorf("backup ID requis")
+	}
+
+	opts := RestoreOptions{
+		BaseURL:         cfg.BaseURL,
+		AuthID:          cfg.AuthID,
+		Secret:          cfg.Secret,
+		Datastore:       cfg.Datastore,
+		Namespace:       cfg.Namespace,
+		CertFingerprint: cfg.CertFingerprint,
+		BackupID:        backupID,
+		SnapshotTime:    time.Unix(snapshotUnix, 0),
+	}
+	return ReadSnapshotMetaInline(opts, false)
+}
+
 // RestoreSnapshot extracts a snapshot (or selected files) to destPath.
 //
 // includePaths uses archive-style paths (forward slash). When empty the entire

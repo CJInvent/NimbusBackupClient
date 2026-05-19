@@ -3,6 +3,7 @@ package pbscommon
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -214,6 +215,38 @@ func joinArchivePath(parent, child string) string {
 		return parent
 	}
 	return parent + "/" + child
+}
+
+// ReadVirtualFile returns the payload of a file located at the archive root,
+// matched by its exact name (e.g. ".nimbus_backup_meta.json"). Returns
+// os.ErrNotExist if no such root-level file is present.
+//
+// Only root-level entries are considered — nested files of the same name are
+// ignored. This matches how the writer injects sidecar files (always at root).
+func (pr *PXARReader) ReadVirtualFile(name string) ([]byte, error) {
+	var found []byte
+	stopErr := errors.New("pxar: virtual file found")
+	err := pr.walk(func(e PXARTreeEntry, payload []byte) error {
+		if e.IsDir {
+			return nil
+		}
+		// Root-level files have no slash in their archive path.
+		if strings.Contains(e.Path, "/") {
+			return nil
+		}
+		if e.Path == name {
+			found = append([]byte(nil), payload...)
+			return stopErr
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, stopErr) {
+		return nil, err
+	}
+	if found == nil {
+		return nil, os.ErrNotExist
+	}
+	return found, nil
 }
 
 // ListEntries returns all files and directories in the archive without extracting

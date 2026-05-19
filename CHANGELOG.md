@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.83] - 2026-05-19
+
+### Added
+- **Bandeau d'origine au-dessus de l'arborescence de restauration** — affiche le chemin d'origine (`OriginalPath`), la machine source, l'OS, l'usage VSS et la date de sauvegarde. Lecture du sidecar `.nimbus_backup_meta.json` injecté au backup (et déjà présent dans les snapshots récents). Prépare le mode « restauration in-place » de la Phase 2.
+- **`pbscommon.PXARReader.ReadVirtualFile(name)`** — lit le payload d'un fichier injecté à la racine de l'archive (sidecars). Cherche uniquement au niveau racine, retourne `os.ErrNotExist` si absent (snapshots legacy gérés silencieusement).
+- **`ReadSnapshotMetaInline` + binding `App.GetSnapshotMeta(pbsID, backupID, snapshotUnix)`** — récupère le sidecar `BackupMeta`. Hit cache après un listing (coût réseau nul), sinon assemble le PXAR comme un listing puis rafraîchit le cache.
+- **`assembleSnapshotPXAR` et `buildSnapshotCacheKey`** — helpers internes partagés par listing + lecture du sidecar, pour éviter de dupliquer l'assembly DIDX.
+
+### Changed
+- **Cache de listing étendu (schéma `v1` → `v2`)** — l'enveloppe transporte désormais le `BackupMeta` à côté des entries. Les caches `v1` existants sont invalidés silencieusement (re-fetch transparent à la prochaine ouverture).
+- `loadSnapshotTreeCache` renvoie maintenant `*cachedSnapshotTree` (envelope complète) au lieu d'un slice d'entries ; `saveSnapshotTreeCache` prend un argument `meta *BackupMeta` supplémentaire.
+
 ## [0.2.82] - 2026-05-13
 
 ### Added

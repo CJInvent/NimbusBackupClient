@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -108,22 +109,13 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 	return result, nil
 }
 
-// ListSnapshotContentsInline downloads a snapshot's PXAR archive and returns
-// its tree of entries (files + directories) without extracting anything to disk.
-// Used by the GUI to power the restore navigation tree.
-//
-// Results are cached locally per snapshot — a snapshot's contents are immutable
-// once written, so the cache never goes stale, only ages out. Set forceRefresh
-// to bypass the cache (e.g. for a manual "Reload" button).
-//
-// archiveName defaults to "backup.pxar.didx" when empty.
-func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRefresh bool) ([]SnapshotEntry, error) {
+// assembleSnapshotPXAR downloads + reassembles a snapshot archive. Logging
+// only — no cache interaction here. Caller is responsible for closing the
+// client *before* calling, or for managing the lifecycle separately.
+func assembleSnapshotPXAR(opts RestoreOptions, archiveName, logTag string) ([]byte, error) {
 	if archiveName == "" {
 		archiveName = "backup.pxar.didx"
 	}
-	writeBackupLog(fmt.Sprintf("Listing contents: backupID=%s snapshot=%s archive=%s force=%v",
-		opts.BackupID, opts.SnapshotTime.Format(time.RFC3339), archiveName, forceRefresh))
-
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
 		return nil, fmt.Errorf("PBS connection parameters required")
 	}
@@ -132,21 +124,6 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRe
 	}
 	if opts.Datastore == "" {
 		return nil, fmt.Errorf("datastore required")
-	}
-
-	cacheKey := snapshotCacheKey{
-		PBSID:      opts.BaseURL,
-		Datastore:  opts.Datastore,
-		Namespace:  opts.Namespace,
-		BackupType: "host", // this client only ever creates host-type snapshots
-		BackupID:   opts.BackupID,
-		SnapshotAt: opts.SnapshotTime.Unix(),
-	}
-	if !forceRefresh {
-		if entries, ok := loadSnapshotTreeCache(cacheKey); ok {
-			writeBackupLog(fmt.Sprintf("Restore cache hit: %d entries (skipping download)", len(entries)))
-			return entries, nil
-		}
 	}
 
 	client := &pbscommon.PBSClient{
@@ -163,18 +140,64 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRe
 			BackupTime: opts.SnapshotTime.Unix(),
 		},
 	}
-
 	client.Connect(true, "host")
 	defer client.Close()
 
 	pxarData, err := client.AssembleDIDX(archiveName, 8, func(done, total int) {
 		if done == total || done%32 == 0 {
-			writeBackupLog(fmt.Sprintf("Listing: assembled %d/%d chunks of %s", done, total, archiveName))
+			writeBackupLog(fmt.Sprintf("%s: assembled %d/%d chunks of %s", logTag, done, total, archiveName))
 		}
 	})
 	if err != nil {
-		writeBackupLog(fmt.Sprintf("Failed to assemble PXAR for listing: %v", err))
+		writeBackupLog(fmt.Sprintf("Failed to assemble PXAR (%s): %v", logTag, err))
 		return nil, fmt.Errorf("failed to assemble archive: %v", err)
+	}
+	return pxarData, nil
+}
+
+// buildSnapshotCacheKey is the canonical cache key for a given snapshot.
+// Centralized so list/meta/restore all hit the same envelope.
+func buildSnapshotCacheKey(opts RestoreOptions) snapshotCacheKey {
+	return snapshotCacheKey{
+		PBSID:      opts.BaseURL,
+		Datastore:  opts.Datastore,
+		Namespace:  opts.Namespace,
+		BackupType: "host", // this client only ever creates host-type snapshots
+		BackupID:   opts.BackupID,
+		SnapshotAt: opts.SnapshotTime.Unix(),
+	}
+}
+
+// ListSnapshotContentsInline downloads a snapshot's PXAR archive and returns
+// its tree of entries (files + directories) without extracting anything to disk.
+// Used by the GUI to power the restore navigation tree.
+//
+// Results are cached locally per snapshot — a snapshot's contents are immutable
+// once written, so the cache never goes stale, only ages out. Set forceRefresh
+// to bypass the cache (e.g. for a manual "Reload" button).
+//
+// As a side effect, the snapshot's `.nimbus_backup_meta.json` sidecar is parsed
+// and cached too, so a subsequent ReadSnapshotMetaInline call is free.
+//
+// archiveName defaults to "backup.pxar.didx" when empty.
+func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRefresh bool) ([]SnapshotEntry, error) {
+	if archiveName == "" {
+		archiveName = "backup.pxar.didx"
+	}
+	writeBackupLog(fmt.Sprintf("Listing contents: backupID=%s snapshot=%s archive=%s force=%v",
+		opts.BackupID, opts.SnapshotTime.Format(time.RFC3339), archiveName, forceRefresh))
+
+	cacheKey := buildSnapshotCacheKey(opts)
+	if !forceRefresh {
+		if cached, ok := loadSnapshotTreeCache(cacheKey); ok {
+			writeBackupLog(fmt.Sprintf("Restore cache hit: %d entries (skipping download)", len(cached.Entries)))
+			return cached.Entries, nil
+		}
+	}
+
+	pxarData, err := assembleSnapshotPXAR(opts, archiveName, "Listing")
+	if err != nil {
+		return nil, err
 	}
 
 	reader := pbscommon.NewPXARReader(pxarData)
@@ -194,13 +217,98 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRe
 	}
 	writeBackupLog(fmt.Sprintf("Listed %d entries in snapshot", len(result)))
 
+	// Pull the meta sidecar from the same in-memory archive so the next
+	// GetSnapshotMeta call doesn't re-download multi-GB of data.
+	meta := tryReadBackupMeta(reader)
+
 	// Best-effort cache write — a failure here just means the next listing
 	// pays the assembly cost again.
-	if err := saveSnapshotTreeCache(cacheKey, result); err != nil {
+	if err := saveSnapshotTreeCache(cacheKey, result, meta); err != nil {
 		writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", err))
 	}
 
 	return result, nil
+}
+
+// tryReadBackupMeta extracts the .nimbus_backup_meta.json sidecar from an
+// already-parsed archive. Returns nil on any failure (legacy snapshots,
+// corrupted JSON, missing file) — meta is informational, never fatal.
+func tryReadBackupMeta(reader *pbscommon.PXARReader) *BackupMeta {
+	raw, err := reader.ReadVirtualFile(BackupMetaFilename)
+	if err != nil {
+		// os.ErrNotExist is expected for legacy snapshots created before the
+		// sidecar shipped — log at debug volume only.
+		writeBackupLog(fmt.Sprintf("Backup meta sidecar not available: %v", err))
+		return nil
+	}
+	var meta BackupMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		writeBackupLog(fmt.Sprintf("Backup meta sidecar malformed: %v", err))
+		return nil
+	}
+	return &meta
+}
+
+// ReadSnapshotMetaInline returns the .nimbus_backup_meta.json sidecar stored
+// at the root of a snapshot, or nil with a non-nil error when no sidecar is
+// present (legacy snapshots created before the sidecar shipped).
+//
+// Hits the local cache first — if ListSnapshotContentsInline has run for this
+// snapshot, the meta is already there and no download is performed. Otherwise
+// the archive is downloaded + assembled (same cost as a listing).
+func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta, error) {
+	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
+		return nil, fmt.Errorf("PBS connection parameters required")
+	}
+	if opts.BackupID == "" {
+		return nil, fmt.Errorf("backup ID required")
+	}
+	if opts.Datastore == "" {
+		return nil, fmt.Errorf("datastore required")
+	}
+
+	cacheKey := buildSnapshotCacheKey(opts)
+	if !forceRefresh {
+		if cached, ok := loadSnapshotTreeCache(cacheKey); ok {
+			if cached.Meta != nil {
+				writeBackupLog("Snapshot meta: cache hit")
+				return cached.Meta, nil
+			}
+			// Cache exists but predates meta capture (or this snapshot has no
+			// sidecar). Don't bother re-downloading just to confirm — caller
+			// can pass forceRefresh=true explicitly if they want to retry.
+			writeBackupLog("Snapshot meta: cache hit without meta — no sidecar in this snapshot")
+			return nil, nil
+		}
+	}
+
+	writeBackupLog(fmt.Sprintf("Snapshot meta: downloading archive for backupID=%s snapshot=%s",
+		opts.BackupID, opts.SnapshotTime.Format(time.RFC3339)))
+
+	pxarData, err := assembleSnapshotPXAR(opts, "backup.pxar.didx", "Meta")
+	if err != nil {
+		return nil, err
+	}
+
+	reader := pbscommon.NewPXARReader(pxarData)
+	meta := tryReadBackupMeta(reader)
+
+	// While we have the archive in memory, parse the tree too and refresh the
+	// cache so a later list call avoids the same download.
+	entries, err := reader.ListEntries()
+	if err == nil {
+		result := make([]SnapshotEntry, 0, len(entries))
+		for _, e := range entries {
+			result = append(result, SnapshotEntry{
+				Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime,
+			})
+		}
+		if werr := saveSnapshotTreeCache(cacheKey, result, meta); werr != nil {
+			writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", werr))
+		}
+	}
+
+	return meta, nil
 }
 
 // RestoreSnapshotInline restores a snapshot from PBS.

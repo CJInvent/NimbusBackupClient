@@ -12,7 +12,10 @@ import (
 
 // cachedTreeSchema gates the on-disk format. Bump when SnapshotEntry layout or
 // the cache envelope changes so stale files are ignored instead of misparsed.
-const cachedTreeSchema = 1
+//
+// v2: added optional Meta (BackupMeta sidecar) so GetSnapshotMeta is free
+// after a listing.
+const cachedTreeSchema = 2
 
 // snapshotCacheKey identifies a single snapshot's content listing. The whole
 // tuple is hashed into the filename so unrelated cache lines stay isolated
@@ -29,11 +32,15 @@ type snapshotCacheKey struct {
 // cachedSnapshotTree is the on-disk envelope. We keep the key inside the file
 // so a stray hash collision (or a copied cache dir) doesn't return the wrong
 // tree silently.
+//
+// Meta is the `.nimbus_backup_meta.json` sidecar parsed at listing time. nil
+// means "snapshot has no sidecar" (legacy backup), not "we haven't looked".
 type cachedSnapshotTree struct {
-	Schema      int             `json:"schema"`
-	GeneratedAt int64           `json:"generated_at"`
+	Schema      int              `json:"schema"`
+	GeneratedAt int64            `json:"generated_at"`
 	Key         snapshotCacheKey `json:"key"`
-	Entries     []SnapshotEntry `json:"entries"`
+	Entries     []SnapshotEntry  `json:"entries"`
+	Meta        *BackupMeta      `json:"meta,omitempty"`
 }
 
 func getRestoreCacheDir() (string, error) {
@@ -67,10 +74,13 @@ func (k snapshotCacheKey) filename() (string, error) {
 	return filepath.Join(dir, k.fingerprint()+".json"), nil
 }
 
-// loadSnapshotTreeCache returns (entries, true) on a fresh hit, or (nil, false)
+// loadSnapshotTreeCache returns (envelope, true) on a fresh hit, or (nil, false)
 // on any miss/parse/age failure. The key inside the file must match exactly —
 // if it doesn't, we treat the line as garbage and let the caller refetch.
-func loadSnapshotTreeCache(key snapshotCacheKey) ([]SnapshotEntry, bool) {
+//
+// Returns the full envelope (entries + meta) so callers can use either one
+// without re-reading the file.
+func loadSnapshotTreeCache(key snapshotCacheKey) (*cachedSnapshotTree, bool) {
 	path, err := key.filename()
 	if err != nil {
 		return nil, false
@@ -93,10 +103,10 @@ func loadSnapshotTreeCache(key snapshotCacheKey) ([]SnapshotEntry, bool) {
 		writeBackupLog(fmt.Sprintf("Restore cache: key mismatch on %s — refetching", filepath.Base(path)))
 		return nil, false
 	}
-	return c.Entries, true
+	return &c, true
 }
 
-func saveSnapshotTreeCache(key snapshotCacheKey, entries []SnapshotEntry) error {
+func saveSnapshotTreeCache(key snapshotCacheKey, entries []SnapshotEntry, meta *BackupMeta) error {
 	path, err := key.filename()
 	if err != nil {
 		return err
@@ -106,6 +116,7 @@ func saveSnapshotTreeCache(key snapshotCacheKey, entries []SnapshotEntry) error 
 		GeneratedAt: time.Now().Unix(),
 		Key:         key,
 		Entries:     entries,
+		Meta:        meta,
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {
