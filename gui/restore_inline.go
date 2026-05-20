@@ -205,7 +205,7 @@ func withSnapshotReader(opts RestoreOptions, archiveName, logTag string, progres
 	if err != nil {
 		return fmt.Errorf("open assembled archive: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	return fn(pbscommon.NewPXARReaderAt(f, size))
 }
