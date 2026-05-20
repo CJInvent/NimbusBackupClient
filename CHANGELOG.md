@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.87] - 2026-05-20
+
+### Fixed
+- **Crash à la restauration d'un gros split (OOM)** — `AssembleDIDX` reconstruisait l'archive entière en mémoire (`make([]byte, totalSize)`), soit jusqu'à ~100 Go pour un job auto-split, ce qui saturait la RAM et tuait le process. Le crash était indépendant du mode (in-place comme « autre emplacement ») car l'assemblage précède toute logique de destination.
+- **Bouton « Parcourir » (destination) qui crashe** — `OpenRestoreDestDialog` ouvrait le sélecteur natif sans `DefaultDirectory`, déclencheur connu de plantage du picker Windows. Ajout d'un dossier initial garanti existant (home, sinon temp), d'un `recover()` et de logs avant/après l'appel pour diagnostiquer un éventuel crash natif résiduel.
+
+### Added
+- **Restauration en streaming** — `pbscommon.AssembleDIDXToFile` assemble les chunks DIDX dans un fichier temporaire (`WriteAt`, mémoire bornée), et `PXARReader` lit l'archive via `io.ReaderAt` en streamant chaque payload vers le disque (`io.Copy`). Une restauration de 100 Go ne sature plus la RAM. ⚠️ Nécessite désormais de l'espace libre dans `%TEMP%` ≈ taille de l'archive. `recover()` ajouté au goroutine de restauration.
+- **Recherche de fichier multi-snapshots** — `restore_search.go` : `SearchFilesInline` balaye toutes les sauvegardes dont le backup-id contient le préfixe host (toutes les parties de split), sur une période donnée. Cache d'abord (instantané) ; assemble les snapshots manquants seulement sur demande (case à cocher). Trois modes : nom de fichier (sous-chaîne, insensible casse), expression régulière, chemin complet. Tri du plus récent au plus ancien, plafond de 5000 résultats, annulation entre snapshots. Méthodes GUI `App.SearchFiles(...)` / `App.CancelSearch()` (events `search:progress`).
+- **UI restauration** — panneau de recherche (terme, type, période, option « assembler les manquants », progression, annulation) avec liste de résultats (nom, chemin d'origine reconstruit, backup-id, date, taille) et bouton « Préparer la restauration » par résultat qui pré-sélectionne le snapshot et coche le fichier. Infobulle du chemin d'origine absolu sur chaque entrée de l'arbre, et total en octets de la sélection à restaurer.
+
 ## [0.2.86] - 2026-05-19
 
 ### Fixed
