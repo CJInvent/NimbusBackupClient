@@ -996,7 +996,19 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 	}
 
 	go func() {
-		err := RestoreSnapshotInline(opts)
+		// A restore can fail in surprising ways (corrupt archive, disk full).
+		// Recover so a panic surfaces as an error in the UI instead of taking
+		// the whole GUI process down.
+		var err error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("restore panic: %v", r)
+					writeDebugLog(fmt.Sprintf("CRITICAL: restore panic: %v\n%s", r, debug.Stack()))
+				}
+			}()
+			err = RestoreSnapshotInline(opts)
+		}()
 		success := err == nil
 		msg := "Restauration terminée"
 		if err != nil {
@@ -1015,11 +1027,96 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 
 // OpenRestoreDestDialog opens a native folder picker so the user can choose
 // where to restore files. Returns "" if the dialog was cancelled.
-func (a *App) OpenRestoreDestDialog() (string, error) {
+//
+// Hardened against a reported crash on the client: the native Windows folder
+// picker (IFileDialog) can fault when handed an empty/invalid initial folder,
+// so we seed DefaultDirectory with a path we know exists. A recover() turns any
+// Go-level panic into an error instead of taking the process down, and the
+// surrounding logging makes the next failure diagnosable from the debug log.
+func (a *App) OpenRestoreDestDialog() (dir string, err error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("runtime non disponible")
 	}
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Choisir le dossier de destination",
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("folder picker panic: %v", r)
+			writeDebugLog(fmt.Sprintf("CRITICAL: OpenRestoreDestDialog panic: %v\n%s", r, debug.Stack()))
+		}
+	}()
+
+	// Seed the dialog with a folder that is guaranteed to exist. An empty or
+	// stale DefaultDirectory is a known trigger for native dialog crashes.
+	defaultDir, herr := os.UserHomeDir()
+	if herr != nil || defaultDir == "" {
+		defaultDir = os.TempDir()
+	}
+
+	writeDebugLog(fmt.Sprintf("OpenRestoreDestDialog: opening folder picker (default=%s)", defaultDir))
+	dir, err = runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Choisir le dossier de destination",
+		DefaultDirectory: defaultDir,
 	})
+	writeDebugLog(fmt.Sprintf("OpenRestoreDestDialog: returned dir=%q err=%v", dir, err))
+	return dir, err
+}
+
+// SearchFiles scans every backup-id matching hostPrefix over the given period
+// for entries matching query, and returns the matches. mode is one of "name"
+// (substring on file name), "regex", or "path" (substring on full path).
+//
+// fromUnix/toUnix bound the snapshot period in Unix seconds; pass 0 for an
+// open end. When assembleMissing is true, snapshots not already in the local
+// listing cache are downloaded + assembled (slow, needs temp space); otherwise
+// only cached snapshots are searched. Progress is streamed via "search:progress".
+func (a *App) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUnix int64, assembleMissing bool) (*SearchResult, error) {
+	writeDebugLog(fmt.Sprintf("SearchFiles(pbs=%s, prefix=%s, query=%q, mode=%s, from=%d, to=%d, assemble=%v)",
+		pbsID, hostPrefix, query, mode, fromUnix, toUnix, assembleMissing))
+
+	cfg, err := a.resolveRestorePBS(pbsID)
+	if err != nil {
+		return nil, err
+	}
+
+	var from, to time.Time
+	if fromUnix > 0 {
+		from = time.Unix(fromUnix, 0)
+	}
+	if toUnix > 0 {
+		to = time.Unix(toUnix, 0)
+	}
+
+	emit := func(percent float64, message string) {
+		if a.ctx == nil {
+			return
+		}
+		runtime.EventsEmit(a.ctx, "search:progress", map[string]interface{}{
+			"percent": percent,
+			"message": message,
+		})
+	}
+
+	opts := SearchOptions{
+		BaseURL:         cfg.BaseURL,
+		AuthID:          cfg.AuthID,
+		Secret:          cfg.Secret,
+		Datastore:       cfg.Datastore,
+		Namespace:       cfg.Namespace,
+		CertFingerprint: cfg.CertFingerprint,
+		HostPrefix:      hostPrefix,
+		Query:           query,
+		Mode:            SearchMatchMode(mode),
+		From:            from,
+		To:              to,
+		AssembleMissing: assembleMissing,
+		OnProgress:      emit,
+	}
+	return SearchFilesInline(opts)
+}
+
+// CancelSearch asks an in-flight SearchFiles to stop at the next snapshot
+// boundary. The call returning does not mean the search has stopped yet — the
+// search returns its partial result with Cancelled=true.
+func (a *App) CancelSearch() {
+	writeDebugLog("CancelSearch requested")
+	CancelFileSearch()
 }

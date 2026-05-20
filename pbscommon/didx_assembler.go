@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 )
@@ -17,24 +18,18 @@ const (
 	didxEntrySize  = 40 // 8 bytes cumulative end-offset (uint64 LE) + 32 bytes SHA-256 digest
 )
 
-// AssembleDIDX downloads a dynamic-index archive (e.g. "backup.pxar.didx")
-// from PBS and reconstructs the original byte stream by fetching every
-// referenced chunk and concatenating them in order.
-//
-// The .didx file is NOT the archive itself — it is an index of cumulative
-// end-offsets and chunk digests. Calling DownloadToBytes alone returns only
-// this index; parsing those bytes as PXAR will fail. Use this helper instead.
-//
-// Chunks are fetched with bounded parallelism (maxParallel; defaults to 8).
-// progress is invoked after each chunk lands with (done, total). It may be nil.
-//
-// The full assembled stream is materialised in memory. A streaming variant
-// will be needed once we routinely restore archives bigger than a few GB.
-func (pbs *PBSClient) AssembleDIDX(archiveName string, maxParallel int, progress func(done, total int)) ([]byte, error) {
-	if maxParallel <= 0 {
-		maxParallel = 8
-	}
+// didxIndex is the parsed contents of a .didx dynamic-index file: the ordered
+// list of chunk digests and their cumulative end-offsets in the reconstructed
+// stream. offsets[i] is the byte offset one past the end of chunk i.
+type didxIndex struct {
+	offsets []uint64
+	digests []string
+	total   uint64
+}
 
+// downloadDIDXIndex fetches and parses a .didx index. The .didx file is NOT the
+// archive itself — it is an index of cumulative end-offsets and chunk digests.
+func (pbs *PBSClient) downloadDIDXIndex(archiveName string) (*didxIndex, error) {
 	indexBytes, err := pbs.DownloadToBytes(archiveName)
 	if err != nil {
 		return nil, fmt.Errorf("download index %q: %w", archiveName, err)
@@ -53,24 +48,80 @@ func (pbs *PBSClient) AssembleDIDX(archiveName string, maxParallel int, progress
 			archiveName, len(entries), didxEntrySize)
 	}
 	chunkCount := len(entries) / didxEntrySize
-	if chunkCount == 0 {
-		return []byte{}, nil
-	}
 
-	offsets := make([]uint64, chunkCount)
-	digests := make([]string, chunkCount)
+	idx := &didxIndex{
+		offsets: make([]uint64, chunkCount),
+		digests: make([]string, chunkCount),
+	}
 	for i := 0; i < chunkCount; i++ {
 		base := i * didxEntrySize
-		offsets[i] = binary.LittleEndian.Uint64(entries[base : base+8])
-		digests[i] = hex.EncodeToString(entries[base+8 : base+40])
+		idx.offsets[i] = binary.LittleEndian.Uint64(entries[base : base+8])
+		idx.digests[i] = hex.EncodeToString(entries[base+8 : base+40])
+	}
+	if chunkCount > 0 {
+		idx.total = idx.offsets[chunkCount-1]
+	}
+	return idx, nil
+}
+
+// chunkRange returns the [start,end) byte span of chunk i in the reconstructed
+// stream.
+func (idx *didxIndex) chunkRange(i int) (start, end uint64) {
+	if i > 0 {
+		start = idx.offsets[i-1]
+	}
+	return start, idx.offsets[i]
+}
+
+// AssembleDIDXToFile downloads a dynamic-index archive (e.g. "backup.pxar.didx")
+// from PBS and reconstructs the original byte stream into a temp file by
+// fetching every referenced chunk and writing it at its offset.
+//
+// Unlike an in-memory assembly, peak memory is bounded to roughly maxParallel
+// decompressed chunks (a few MB each) rather than the full archive size — so a
+// 100 GB split restores without OOM-killing the process.
+//
+// On success it returns the path of the temp file and its total size. The
+// caller owns the file and MUST remove it when done. On any error the temp
+// file is cleaned up before returning.
+//
+// Chunks are fetched with bounded parallelism (maxParallel; defaults to 8).
+// progress is invoked after each chunk lands with (done, total). It may be nil.
+func (pbs *PBSClient) AssembleDIDXToFile(archiveName string, maxParallel int, progress func(done, total int)) (path string, size int64, err error) {
+	if maxParallel <= 0 {
+		maxParallel = 8
 	}
 
-	totalSize := offsets[chunkCount-1]
-	// 1 TiB sanity cap — anything bigger needs the streaming variant.
-	if totalSize > 1<<40 {
-		return nil, fmt.Errorf("assembled archive too large for in-memory restore: %d bytes (cap 1 TiB)", totalSize)
+	idx, err := pbs.downloadDIDXIndex(archiveName)
+	if err != nil {
+		return "", 0, err
 	}
-	out := make([]byte, totalSize)
+	chunkCount := len(idx.digests)
+
+	tmp, err := os.CreateTemp("", "nimbus-restore-*.pxar")
+	if err != nil {
+		return "", 0, fmt.Errorf("create temp file for archive assembly: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// Any early return past this point must clean up the temp file.
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+
+	if chunkCount == 0 {
+		if cerr := tmp.Close(); cerr != nil {
+			_ = os.Remove(tmpPath)
+			return "", 0, fmt.Errorf("close temp file: %w", cerr)
+		}
+		return tmpPath, 0, nil
+	}
+
+	// Preallocate so concurrent WriteAt calls land at the right offsets.
+	if terr := tmp.Truncate(int64(idx.total)); terr != nil {
+		cleanup()
+		return "", 0, fmt.Errorf("preallocate %d bytes: %w", idx.total, terr)
+	}
 
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
@@ -80,31 +131,32 @@ func (pbs *PBSClient) AssembleDIDX(archiveName string, maxParallel int, progress
 	for i := 0; i < chunkCount; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(idx int) {
+		go func(idxNum int) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
 			if firstErr.Load() != nil {
 				return
 			}
-			chunk, gerr := pbs.GetChunkData(digests[idx])
+			chunk, gerr := pbs.GetChunkData(idx.digests[idxNum])
 			if gerr != nil {
 				firstErr.CompareAndSwap(nil, fmt.Errorf("chunk %s (index %d/%d): %w",
-					digests[idx], idx, chunkCount, gerr))
+					idx.digests[idxNum], idxNum, chunkCount, gerr))
 				return
 			}
-			start := uint64(0)
-			if idx > 0 {
-				start = offsets[idx-1]
-			}
-			end := offsets[idx]
+			start, end := idx.chunkRange(idxNum)
 			expected := int(end - start)
 			if len(chunk) != expected {
 				firstErr.CompareAndSwap(nil, fmt.Errorf("chunk %s (index %d): decompressed size %d != expected %d",
-					digests[idx], idx, len(chunk), expected))
+					idx.digests[idxNum], idxNum, len(chunk), expected))
 				return
 			}
-			copy(out[start:end], chunk)
+			// Concurrent WriteAt at non-overlapping offsets is safe on *os.File.
+			if _, werr := tmp.WriteAt(chunk, int64(start)); werr != nil {
+				firstErr.CompareAndSwap(nil, fmt.Errorf("chunk %s (index %d): write at %d: %w",
+					idx.digests[idxNum], idxNum, start, werr))
+				return
+			}
 
 			n := done.Add(1)
 			if progress != nil {
@@ -116,7 +168,13 @@ func (pbs *PBSClient) AssembleDIDX(archiveName string, maxParallel int, progress
 	wg.Wait()
 
 	if v := firstErr.Load(); v != nil {
-		return nil, v.(error)
+		cleanup()
+		return "", 0, v.(error)
 	}
-	return out, nil
+
+	if cerr := tmp.Close(); cerr != nil {
+		_ = os.Remove(tmpPath)
+		return "", 0, fmt.Errorf("close temp file: %w", cerr)
+	}
+	return tmpPath, int64(idx.total), nil
 }

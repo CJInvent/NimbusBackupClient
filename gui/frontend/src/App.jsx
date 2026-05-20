@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from './i18n/i18nContext'
 import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -19,6 +19,8 @@ if (window.go) {
   GetSnapshotMeta = window.go.main.App.GetSnapshotMeta
   RestoreSnapshot = window.go.main.App.RestoreSnapshot
   OpenRestoreDestDialog = window.go.main.App.OpenRestoreDestDialog
+  SearchFiles = window.go.main.App.SearchFiles
+  CancelSearch = window.go.main.App.CancelSearch
   ListPhysicalDisks = window.go.main.App.ListPhysicalDisks
   GetVersion = window.go.main.App.GetVersion
   SaveScheduledJob = window.go.main.App.SaveScheduledJob
@@ -126,6 +128,17 @@ function App() {
   })
   const [restoreLoading, setRestoreLoading] = useState(false)
   const [restoreProgress, setRestoreProgress] = useState(0)
+
+  // ===== file search across snapshots =====
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMode, setSearchMode] = useState('name')      // 'name' | 'regex' | 'path'
+  const [searchFrom, setSearchFrom] = useState('')           // yyyy-mm-dd
+  const [searchTo, setSearchTo] = useState('')               // yyyy-mm-dd
+  const [searchAssembleMissing, setSearchAssembleMissing] = useState(false)
+  const [searchRunning, setSearchRunning] = useState(false)
+  const [searchProgress, setSearchProgress] = useState({ percent: 0, message: '' })
+  const [searchResult, setSearchResult] = useState(null)     // { hits, snapshots_*, truncated, cancelled }
 
   // Update restoreBackupId when config or hostname changes
   useEffect(() => {
@@ -251,6 +264,15 @@ function App() {
       if (unsubP) unsubP()
       if (unsubC) unsubC()
     }
+  }, [])
+
+  // Listen to search progress
+  useEffect(() => {
+    if (!EventsOn) return
+    const unsub = EventsOn('search:progress', (data) => {
+      setSearchProgress({ percent: Math.round((data.percent || 0) * 100), message: data.message || '' })
+    })
+    return () => { if (unsub) unsub() }
   }, [])
 
   // Load config with hostname on mount
@@ -859,6 +881,81 @@ function App() {
     }
   }
 
+  // ===== file search handlers =====
+
+  // Convert a yyyy-mm-dd local date string to Unix seconds. endOfDay pushes to
+  // 23:59:59 so the "To" bound is inclusive of the whole day. "" → 0 (open).
+  const parseDateToUnix = (s, endOfDay = false) => {
+    if (!s) return 0
+    const [y, m, d] = s.split('-').map(Number)
+    if (!y || !m || !d) return 0
+    const dt = endOfDay ? new Date(y, m - 1, d, 23, 59, 59) : new Date(y, m - 1, d, 0, 0, 0)
+    return Math.floor(dt.getTime() / 1000)
+  }
+
+  const handleSearch = async () => {
+    if (!SearchFiles) {
+      showStatus('❌ Wails runtime non disponible', 'error')
+      return
+    }
+    if (!searchQuery.trim()) {
+      showStatus('❌ ' + t('searchQueryRequired'), 'error')
+      return
+    }
+    const prefix = (restoreBackupId || hostname || '').trim()
+    setSearchRunning(true)
+    setSearchResult(null)
+    setSearchProgress({ percent: 0, message: '' })
+    try {
+      const res = await SearchFiles(
+        restorePBSID || '',
+        prefix,
+        searchQuery,
+        searchMode,
+        parseDateToUnix(searchFrom, false),
+        parseDateToUnix(searchTo, true),
+        searchAssembleMissing
+      )
+      setSearchResult(res)
+      const n = (res && res.hits) ? res.hits.length : 0
+      showStatus(`✅ ${t('searchDone').replace('{n}', n)}`, 'success')
+    } catch (err) {
+      showStatus(`❌ ${err}`, 'error')
+    } finally {
+      setSearchRunning(false)
+    }
+  }
+
+  const handleCancelSearch = () => {
+    if (CancelSearch) {
+      try { CancelSearch() } catch (_e) { /* best effort */ }
+    }
+  }
+
+  // Pre-fill the restore form from a search hit: select the hit's snapshot,
+  // load its contents, and tick the matched entry.
+  const handleRestoreHit = async (hit) => {
+    setRestoreBackupId(hit.backup_id)
+    const iso = new Date(hit.snapshot_time * 1000).toISOString()
+    const snap = {
+      id: iso.slice(0, 19) + 'Z',
+      backup_id: hit.backup_id,
+      unix: hit.snapshot_time,
+      time: new Date(hit.snapshot_time * 1000).toLocaleString(),
+    }
+    setShowSnapshots(true)
+    await handleSelectSnapshot(snap)
+    setSelectedPaths(new Set([hit.path]))
+    const parts = hit.path.split('/')
+    const dirs = new Set()
+    let acc = ''
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i]
+      dirs.add(acc)
+    }
+    setExpandedDirs(dirs)
+  }
+
   // inPlaceBlocker returns a translation key (or null when in-place is OK).
   // Drives the disabled state of the in-place radio + its tooltip.
   const inPlaceBlocker = () => {
@@ -996,15 +1093,51 @@ function App() {
     return `${n.toFixed(1)} ${units[i]}`
   }
 
+  // Reconstruct the absolute on-disk location a file came from, by joining the
+  // backup's original_path (from the meta sidecar) with the archive-relative
+  // path. Critical for split backups, where each part is a separate backup-id
+  // and the relative tree alone doesn't tell you which physical folder/drive a
+  // file belonged to. Returns null when the snapshot has no meta sidecar.
+  const absOriginPath = (archivePath) => {
+    const root = snapshotMeta?.original_path
+    if (!root) return null
+    const sep = (snapshotMeta?.os === 'windows' || root.includes('\\')) ? '\\' : '/'
+    const base = root.endsWith(sep) ? root.slice(0, -1) : root
+    if (!archivePath) return base
+    return base + sep + archivePath.split('/').join(sep)
+  }
+
+  // Total bytes the current selection will restore. Selecting a directory pulls
+  // in all its descendants, so we sum every file that is itself selected or
+  // lives under a selected path. An empty selection means "restore everything",
+  // so we sum the whole snapshot. Memoized — snapshots can hold 100k+ entries.
+  const selectionBytes = useMemo(() => {
+    if (!snapshotEntries.length) return 0
+    if (selectedPaths.size === 0) {
+      return snapshotEntries.reduce((sum, e) => e.is_dir ? sum : sum + (e.size || 0), 0)
+    }
+    const sel = Array.from(selectedPaths)
+    let sum = 0
+    for (const e of snapshotEntries) {
+      if (e.is_dir) continue
+      for (const p of sel) {
+        if (e.path === p || e.path.startsWith(p + '/')) { sum += (e.size || 0); break }
+      }
+    }
+    return sum
+  }, [snapshotEntries, selectedPaths])
+
   // Recursive renderer driven by the children map. Depth is only used for the
   // visual indent.
   const renderTreeNode = (entry, childrenByDir, depth) => {
     const isExpanded = expandedDirs.has(entry.path)
     const isSelected = selectedPaths.has(entry.path)
     const indent = { paddingLeft: `${depth * 16}px` }
+    const origin = absOriginPath(entry.path)
+    const rowTitle = origin ? t('originTooltip').replace('{path}', origin) : entry.path
     return (
       <div key={entry.path}>
-        <div style={{ ...indent, display: 'flex', alignItems: 'center', padding: '4px 8px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}>
+        <div title={rowTitle} style={{ ...indent, display: 'flex', alignItems: 'center', padding: '4px 8px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}>
           <input
             type="checkbox"
             checked={isSelected}
@@ -1878,6 +2011,147 @@ function App() {
           </div>
 
           <button className="btn" onClick={handleListSnapshots}>📋 {t('listSnapshots')}</button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => setShowSearch(v => !v)}
+            style={{marginLeft: '8px'}}
+          >
+            🔎 {t('searchTitle')}
+          </button>
+
+          {showSearch && (
+            <div style={{
+              marginTop: '16px',
+              padding: '14px',
+              border: '1px solid #cbd5e1',
+              borderRadius: '8px',
+              backgroundColor: '#f8fafc'
+            }}>
+              <p style={{fontSize: '13px', color: '#64748b', marginTop: 0}}>
+                {t('searchHint').replace('{prefix}', (restoreBackupId || hostname || '?'))}
+              </p>
+
+              <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end'}}>
+                <div className="form-group" style={{flex: '2 1 280px', margin: 0}}>
+                  <label>{t('searchQueryLabel')}</label>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t('searchQueryPlaceholder')}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !searchRunning) handleSearch() }}
+                  />
+                </div>
+                <div className="form-group" style={{flex: '1 1 160px', margin: 0}}>
+                  <label>{t('searchModeLabel')}</label>
+                  <select value={searchMode} onChange={(e) => setSearchMode(e.target.value)}>
+                    <option value="name">{t('searchModeName')}</option>
+                    <option value="regex">{t('searchModeRegex')}</option>
+                    <option value="path">{t('searchModePath')}</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', marginTop: '10px'}}>
+                <div className="form-group" style={{flex: '1 1 150px', margin: 0}}>
+                  <label>{t('searchFrom')}</label>
+                  <input type="date" value={searchFrom} onChange={(e) => setSearchFrom(e.target.value)} />
+                </div>
+                <div className="form-group" style={{flex: '1 1 150px', margin: 0}}>
+                  <label>{t('searchTo')}</label>
+                  <input type="date" value={searchTo} onChange={(e) => setSearchTo(e.target.value)} />
+                </div>
+                <label style={{display: 'flex', alignItems: 'center', gap: '8px', flex: '2 1 260px', fontSize: '14px'}}>
+                  <input
+                    type="checkbox"
+                    checked={searchAssembleMissing}
+                    onChange={(e) => setSearchAssembleMissing(e.target.checked)}
+                  />
+                  {t('searchAssembleMissing')}
+                </label>
+              </div>
+
+              <div style={{marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center'}}>
+                <button className="btn" type="button" onClick={handleSearch} disabled={searchRunning}>
+                  {searchRunning ? `⏳ ${t('searching')}` : `🔎 ${t('searchButton')}`}
+                </button>
+                {searchRunning && (
+                  <button className="btn" type="button" onClick={handleCancelSearch} style={{backgroundColor: '#ef4444'}}>
+                    ✖ {t('cancel')}
+                  </button>
+                )}
+                {searchRunning && (
+                  <span style={{fontSize: '13px', color: '#64748b'}}>
+                    {searchProgress.percent}% — {searchProgress.message}
+                  </span>
+                )}
+              </div>
+
+              {searchResult && (
+                <div style={{marginTop: '14px'}}>
+                  <p style={{fontSize: '13px', color: '#334155', margin: '0 0 6px 0'}}>
+                    {t('searchSummary')
+                      .replace('{hits}', searchResult.hits ? searchResult.hits.length : 0)
+                      .replace('{searched}', searchResult.snapshots_searched || 0)
+                      .replace('{assembled}', searchResult.snapshots_assembled || 0)}
+                    {searchResult.truncated ? ` ⚠️ ${t('searchTruncated').replace('{max}', 5000)}` : ''}
+                    {searchResult.cancelled ? ` ⚠️ ${t('searchCancelled')}` : ''}
+                  </p>
+                  {(searchResult.snapshots_skipped > 0 && !searchAssembleMissing) && (
+                    <p style={{fontSize: '12px', color: '#b45309', margin: '0 0 8px 0'}}>
+                      ⚠️ {t('searchSkippedWarning').replace('{n}', searchResult.snapshots_skipped)}
+                    </p>
+                  )}
+
+                  <div style={{
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '8px',
+                    maxHeight: '320px',
+                    overflowY: 'auto',
+                    backgroundColor: '#fff'
+                  }}>
+                    {(!searchResult.hits || searchResult.hits.length === 0) ? (
+                      <p style={{padding: '12px', color: '#718096'}}>{t('searchNoResults')}</p>
+                    ) : (
+                      searchResult.hits.map((hit, idx) => (
+                        <div
+                          key={`${hit.backup_id}-${hit.snapshot_time}-${hit.path}-${idx}`}
+                          title={hit.origin_path || hit.path}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontSize: '13px'
+                          }}
+                        >
+                          <span style={{fontSize: '15px'}}>{hit.is_dir ? '📁' : '📄'}</span>
+                          <div style={{flex: 1, minWidth: 0}}>
+                            <div style={{fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                              {hit.path.split('/').pop() || hit.path}
+                            </div>
+                            <div style={{color: '#64748b', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                              {hit.origin_path || hit.path}
+                            </div>
+                            <div style={{color: '#94a3b8', fontSize: '11px'}}>
+                              {hit.backup_id} · {new Date(hit.snapshot_time * 1000).toLocaleString()}
+                              {hit.is_dir ? '' : ` · ${formatBytes(hit.size)}`}
+                            </div>
+                          </div>
+                          <button
+                            className="btn"
+                            type="button"
+                            onClick={() => handleRestoreHit(hit)}
+                            style={{padding: '4px 10px', fontSize: '12px'}}
+                          >
+                            {t('searchRestoreThis')}
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {showSnapshots && (
             <div style={{marginTop: '20px'}}>
@@ -1976,8 +2250,10 @@ function App() {
               </div>
               <p style={{marginTop: '6px', fontSize: '12px', color: '#64748b'}}>
                 {selectedPaths.size === 0
-                  ? t('selectionEmptyAll')
-                  : t('selectionCount').replace('{n}', selectedPaths.size)}
+                  ? t('selectionEmptyAllSize').replace('{size}', formatBytes(selectionBytes))
+                  : t('selectionCountSize')
+                      .replace('{n}', selectedPaths.size)
+                      .replace('{size}', formatBytes(selectionBytes))}
               </p>
             </div>
           )}

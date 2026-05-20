@@ -135,21 +135,27 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 	return result, nil
 }
 
-// assembleSnapshotPXAR downloads + reassembles a snapshot archive. Logging
-// only — no cache interaction here. Caller is responsible for closing the
-// client *before* calling, or for managing the lifecycle separately.
-func assembleSnapshotPXAR(opts RestoreOptions, archiveName, logTag string) ([]byte, error) {
+// assembleSnapshotToFile downloads + reassembles a snapshot archive into a temp
+// file and returns its path and size. The archive is streamed chunk-by-chunk to
+// disk so memory stays bounded regardless of archive size — a 100 GB split no
+// longer OOM-kills the process.
+//
+// The caller owns the returned temp file and MUST os.Remove it when done. The
+// optional progress callback receives (done, total) chunk counts for UI; chunk
+// progress is also logged here every 32 chunks. Caller is responsible for the
+// PBS client lifecycle being independent of this one.
+func assembleSnapshotToFile(opts RestoreOptions, archiveName, logTag string, progress func(done, total int)) (string, int64, error) {
 	if archiveName == "" {
 		archiveName = "backup.pxar.didx"
 	}
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
-		return nil, fmt.Errorf("PBS connection parameters required")
+		return "", 0, fmt.Errorf("PBS connection parameters required")
 	}
 	if opts.BackupID == "" {
-		return nil, fmt.Errorf("backup ID required")
+		return "", 0, fmt.Errorf("backup ID required")
 	}
 	if opts.Datastore == "" {
-		return nil, fmt.Errorf("datastore required")
+		return "", 0, fmt.Errorf("datastore required")
 	}
 
 	client := &pbscommon.PBSClient{
@@ -169,16 +175,39 @@ func assembleSnapshotPXAR(opts RestoreOptions, archiveName, logTag string) ([]by
 	client.Connect(true, "host")
 	defer client.Close()
 
-	pxarData, err := client.AssembleDIDX(archiveName, 8, func(done, total int) {
+	path, size, err := client.AssembleDIDXToFile(archiveName, 8, func(done, total int) {
 		if done == total || done%32 == 0 {
 			writeBackupLog(fmt.Sprintf("%s: assembled %d/%d chunks of %s", logTag, done, total, archiveName))
+		}
+		if progress != nil {
+			progress(done, total)
 		}
 	})
 	if err != nil {
 		writeBackupLog(fmt.Sprintf("Failed to assemble PXAR (%s): %v", logTag, err))
-		return nil, fmt.Errorf("failed to assemble archive: %v", err)
+		return "", 0, fmt.Errorf("failed to assemble archive: %v", err)
 	}
-	return pxarData, nil
+	return path, size, nil
+}
+
+// withSnapshotReader assembles a snapshot archive to a temp file, opens a
+// file-backed PXAR reader over it, and hands it to fn. The temp file is removed
+// and the handle closed once fn returns, so callers never have to manage the
+// archive lifecycle themselves.
+func withSnapshotReader(opts RestoreOptions, archiveName, logTag string, progress func(done, total int), fn func(*pbscommon.PXARReader) error) error {
+	path, size, err := assembleSnapshotToFile(opts, archiveName, logTag, progress)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(path) }()
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open assembled archive: %w", err)
+	}
+	defer f.Close()
+
+	return fn(pbscommon.NewPXARReaderAt(f, size))
 }
 
 // buildSnapshotCacheKey is the canonical cache key for a given snapshot.
@@ -221,36 +250,37 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRe
 		}
 	}
 
-	pxarData, err := assembleSnapshotPXAR(opts, archiveName, "Listing")
+	var result []SnapshotEntry
+	err := withSnapshotReader(opts, archiveName, "Listing", nil, func(reader *pbscommon.PXARReader) error {
+		entries, lerr := reader.ListEntries()
+		if lerr != nil {
+			return fmt.Errorf("failed to parse archive: %v", lerr)
+		}
+
+		result = make([]SnapshotEntry, 0, len(entries))
+		for _, e := range entries {
+			result = append(result, SnapshotEntry{
+				Path:    e.Path,
+				IsDir:   e.IsDir,
+				Size:    e.Size,
+				ModTime: e.ModTime,
+			})
+		}
+		writeBackupLog(fmt.Sprintf("Listed %d entries in snapshot", len(result)))
+
+		// Pull the meta sidecar from the same archive so the next
+		// GetSnapshotMeta call doesn't re-download multi-GB of data.
+		meta := tryReadBackupMeta(reader)
+
+		// Best-effort cache write — a failure here just means the next listing
+		// pays the assembly cost again.
+		if werr := saveSnapshotTreeCache(cacheKey, result, meta); werr != nil {
+			writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", werr))
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	reader := pbscommon.NewPXARReader(pxarData)
-	entries, err := reader.ListEntries()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse archive: %v", err)
-	}
-
-	result := make([]SnapshotEntry, 0, len(entries))
-	for _, e := range entries {
-		result = append(result, SnapshotEntry{
-			Path:    e.Path,
-			IsDir:   e.IsDir,
-			Size:    e.Size,
-			ModTime: e.ModTime,
-		})
-	}
-	writeBackupLog(fmt.Sprintf("Listed %d entries in snapshot", len(result)))
-
-	// Pull the meta sidecar from the same in-memory archive so the next
-	// GetSnapshotMeta call doesn't re-download multi-GB of data.
-	meta := tryReadBackupMeta(reader)
-
-	// Best-effort cache write — a failure here just means the next listing
-	// pays the assembly cost again.
-	if err := saveSnapshotTreeCache(cacheKey, result, meta); err != nil {
-		writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", err))
 	}
 
 	return result, nil
@@ -311,27 +341,28 @@ func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta
 	writeBackupLog(fmt.Sprintf("Snapshot meta: downloading archive for backupID=%s snapshot=%s",
 		opts.BackupID, opts.SnapshotTime.Format(time.RFC3339)))
 
-	pxarData, err := assembleSnapshotPXAR(opts, "backup.pxar.didx", "Meta")
+	var meta *BackupMeta
+	err := withSnapshotReader(opts, "backup.pxar.didx", "Meta", nil, func(reader *pbscommon.PXARReader) error {
+		meta = tryReadBackupMeta(reader)
+
+		// While we have the archive on disk, parse the tree too and refresh the
+		// cache so a later list call avoids the same download.
+		entries, lerr := reader.ListEntries()
+		if lerr == nil {
+			result := make([]SnapshotEntry, 0, len(entries))
+			for _, e := range entries {
+				result = append(result, SnapshotEntry{
+					Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime,
+				})
+			}
+			if werr := saveSnapshotTreeCache(cacheKey, result, meta); werr != nil {
+				writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", werr))
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	reader := pbscommon.NewPXARReader(pxarData)
-	meta := tryReadBackupMeta(reader)
-
-	// While we have the archive in memory, parse the tree too and refresh the
-	// cache so a later list call avoids the same download.
-	entries, err := reader.ListEntries()
-	if err == nil {
-		result := make([]SnapshotEntry, 0, len(entries))
-		for _, e := range entries {
-			result = append(result, SnapshotEntry{
-				Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime,
-			})
-		}
-		if werr := saveSnapshotTreeCache(cacheKey, result, meta); werr != nil {
-			writeBackupLog(fmt.Sprintf("Restore cache write failed: %v", werr))
-		}
 	}
 
 	return meta, nil
@@ -545,61 +576,40 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 		writeBackupLog(fmt.Sprintf("In-place target: %s (host=%s, os=%s)", meta.OriginalPath, meta.Hostname, meta.OS))
 	}
 
-	progress(0.05, "Connecting to PBS...")
+	progress(0.05, "Preparing restore...")
 
-	client := &pbscommon.PBSClient{
-		BaseURL:          opts.BaseURL,
-		CertFingerPrint:  opts.CertFingerprint,
-		AuthID:           opts.AuthID,
-		Secret:           opts.Secret,
-		Datastore:        opts.Datastore,
-		Namespace:        opts.Namespace,
-		Insecure:         opts.CertFingerprint != "",
-		CompressionLevel: pbscommon.CompressionFastest,
-		Manifest: pbscommon.BackupManifest{
-			BackupID:   opts.BackupID,
-			BackupTime: opts.SnapshotTime.Unix(),
-		},
+	// Build the rewriter before downloading so a misconfiguration (missing
+	// dest, cross-host refusal) fails fast. For alternate modes meta is unused;
+	// for in-place, meta was read above before download.
+	rewriter, err := buildPathRewriter(opts, meta)
+	if err != nil {
+		return err
 	}
 
-	client.Connect(true, "host")
-	// Always release the H2 connection so PBS frees the snapshot lock without
-	// waiting for TCP keepalive.
-	defer client.Close()
-	progress(0.10, "Connected to PBS")
-
 	progress(0.20, "Downloading backup archive...")
-	// AssembleDIDX downloads the .didx index and reassembles the actual PXAR
-	// stream by fetching each referenced chunk. DownloadToBytes alone returns
-	// only the index, which would crash the PXAR parser.
-	pxarData, err := client.AssembleDIDX("backup.pxar.didx", 8, func(done, total int) {
+	// AssembleDIDXToFile downloads the .didx index and reassembles the actual
+	// PXAR stream chunk-by-chunk into a temp file (bounded memory), then we walk
+	// it from disk and stream each file payload to its destination.
+	var extracted []pbscommon.PXARExtractedFile
+	err = withSnapshotReader(opts, "backup.pxar.didx", "Restore", func(done, total int) {
 		// Map chunk progress to the 0.20–0.80 portion of the overall bar.
 		if total == 0 {
 			return
 		}
 		pct := 0.20 + 0.60*(float64(done)/float64(total))
 		progress(pct, fmt.Sprintf("Downloading archive (%d/%d chunks)", done, total))
+	}, func(reader *pbscommon.PXARReader) error {
+		progress(0.85, "Extracting files...")
+		var eerr error
+		extracted, eerr = reader.ExtractWithRewriter(rewriter, opts.IncludePaths, opts.Overwrite)
+		if eerr != nil {
+			writeBackupLog(fmt.Sprintf("PXAR extraction failed: %v", eerr))
+			return fmt.Errorf("failed to extract archive: %v", eerr)
+		}
+		return nil
 	})
 	if err != nil {
-		writeBackupLog(fmt.Sprintf("Failed to assemble PXAR: %v", err))
-		return fmt.Errorf("failed to assemble backup archive: %v", err)
-	}
-	writeBackupLog(fmt.Sprintf("Assembled %d bytes", len(pxarData)))
-	progress(0.80, "Archive assembled")
-
-	progress(0.85, "Extracting files...")
-
-	reader := pbscommon.NewPXARReader(pxarData)
-	// For alternate modes, meta is unused so we don't pay an extra parse.
-	// For in-place, meta was read above before download.
-	rewriter, err := buildPathRewriter(opts, meta)
-	if err != nil {
 		return err
-	}
-	extracted, err := reader.ExtractWithRewriter(rewriter, opts.IncludePaths, opts.Overwrite)
-	if err != nil {
-		writeBackupLog(fmt.Sprintf("PXAR extraction failed: %v", err))
-		return fmt.Errorf("failed to extract archive: %v", err)
 	}
 
 	successCount := 0

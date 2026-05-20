@@ -15,8 +15,14 @@ import (
 // PXARReader reads and extracts PXAR archives.
 // Supports nested directories, selective extraction, and content listing.
 // Symlinks, ACLs, xattrs and devices are still skipped (read past) for now.
+//
+// The reader is backed by an io.ReaderAt rather than a single in-memory slice,
+// so a multi-GB archive assembled to a temp file can be walked without ever
+// loading the whole stream into RAM. File payloads are exposed to callers as
+// section readers and streamed straight to disk during extraction.
 type PXARReader struct {
-	data   []byte
+	ra     io.ReaderAt
+	size   int64
 	offset int64
 }
 
@@ -48,43 +54,61 @@ type PXARExtractedFile struct {
 	SkipReason string
 }
 
-// NewPXARReader creates a new PXAR reader from raw data.
+// NewPXARReader creates a new PXAR reader from an in-memory byte slice. Kept for
+// callers that already hold the whole archive in RAM (small archives, tests).
+// Large archives should use NewPXARReaderAt with a file-backed reader.
 func NewPXARReader(data []byte) *PXARReader {
-	return &PXARReader{data: data, offset: 0}
+	return &PXARReader{ra: bytes.NewReader(data), size: int64(len(data))}
+}
+
+// NewPXARReaderAt creates a PXAR reader over an arbitrary io.ReaderAt (e.g. an
+// *os.File holding an assembled archive). size is the total archive length in
+// bytes. The reader never buffers more than one entry header / payload window
+// at a time, so memory stays bounded regardless of archive size.
+func NewPXARReaderAt(ra io.ReaderAt, size int64) *PXARReader {
+	return &PXARReader{ra: ra, size: size}
 }
 
 func (pr *PXARReader) readHeader() (*PXARHeader, error) {
-	if pr.offset+16 > int64(len(pr.data)) {
+	if pr.offset+16 > pr.size {
 		return nil, io.EOF
 	}
-	h := &PXARHeader{}
-	buf := bytes.NewReader(pr.data[pr.offset : pr.offset+16])
-	if err := binary.Read(buf, binary.LittleEndian, &h.Type); err != nil {
+	var raw [16]byte
+	if _, err := pr.ra.ReadAt(raw[:], pr.offset); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &h.Size); err != nil {
-		return nil, err
-	}
-	return h, nil
+	return &PXARHeader{
+		Type: binary.LittleEndian.Uint64(raw[0:8]),
+		Size: binary.LittleEndian.Uint64(raw[8:16]),
+	}, nil
 }
 
 func (pr *PXARReader) skip(n int64) { pr.offset += n }
 
+// read returns the next n bytes and advances the cursor. Intended for small
+// fixed-size sections (headers, filenames, entry structs). Payloads are NOT
+// read this way — they are exposed as section readers to avoid buffering whole
+// files in memory.
 func (pr *PXARReader) read(n int64) ([]byte, error) {
-	if pr.offset+n > int64(len(pr.data)) {
+	if pr.offset+n > pr.size {
 		return nil, io.EOF
 	}
-	data := pr.data[pr.offset : pr.offset+n]
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(io.NewSectionReader(pr.ra, pr.offset, n), buf); err != nil {
+		return nil, err
+	}
 	pr.offset += n
-	return data, nil
+	return buf, nil
 }
 
 // reset rewinds the reader to the beginning so the same archive can be walked again.
 func (pr *PXARReader) reset() { pr.offset = 0 }
 
 // walkCallback is invoked for each file or directory entry encountered.
-// payload is non-nil only for files (it carries the raw file content).
-type walkCallback func(entry PXARTreeEntry, payload []byte) error
+// payload is non-nil only for files — it is a section reader over the file's
+// raw content. The callback may read it (e.g. to stream the file to disk) or
+// ignore it; the walker advances past the payload either way.
+type walkCallback func(entry PXARTreeEntry, payload *io.SectionReader) error
 
 // walk iterates the entire PXAR archive, invoking cb for each entry.
 // Correctly tracks the directory stack via PXAR_GOODBYE markers, so nested
@@ -167,24 +191,25 @@ func (pr *PXARReader) walk(cb walkCallback) error {
 
 		case PXAR_PAYLOAD:
 			pr.skip(16)
-			data, err := pr.read(contentSize)
-			if err != nil {
-				return fmt.Errorf("read payload: %w", err)
+			if pr.offset+contentSize > pr.size {
+				return fmt.Errorf("read payload: %w", io.EOF)
 			}
 			if hasPendingFile {
 				path := joinArchivePath(currentPath, pendingName)
+				payload := io.NewSectionReader(pr.ra, pr.offset, contentSize)
 				if err := cb(PXARTreeEntry{
 					Path:    path,
 					IsDir:   false,
-					Size:    uint64(len(data)),
+					Size:    uint64(contentSize),
 					Mode:    uint32(pendingFileMode),
 					ModTime: int64(pendingFileMtime),
-				}, data); err != nil {
+				}, payload); err != nil {
 					return err
 				}
 				hasPendingFile = false
 				pendingName = ""
 			}
+			pr.skip(contentSize)
 
 		case PXAR_GOODBYE:
 			pr.skip(int64(header.Size))
@@ -223,10 +248,11 @@ func joinArchivePath(parent, child string) string {
 //
 // Only root-level entries are considered — nested files of the same name are
 // ignored. This matches how the writer injects sidecar files (always at root).
+// Sidecar files are small, so reading the payload fully into memory is fine.
 func (pr *PXARReader) ReadVirtualFile(name string) ([]byte, error) {
 	var found []byte
 	stopErr := errors.New("pxar: virtual file found")
-	err := pr.walk(func(e PXARTreeEntry, payload []byte) error {
+	err := pr.walk(func(e PXARTreeEntry, payload *io.SectionReader) error {
 		if e.IsDir {
 			return nil
 		}
@@ -235,7 +261,11 @@ func (pr *PXARReader) ReadVirtualFile(name string) ([]byte, error) {
 			return nil
 		}
 		if e.Path == name {
-			found = append([]byte(nil), payload...)
+			data, rerr := io.ReadAll(payload)
+			if rerr != nil {
+				return rerr
+			}
+			found = data
 			return stopErr
 		}
 		return nil
@@ -253,7 +283,7 @@ func (pr *PXARReader) ReadVirtualFile(name string) ([]byte, error) {
 // any payload. Useful for displaying a navigable tree before restore.
 func (pr *PXARReader) ListEntries() ([]PXARTreeEntry, error) {
 	entries := make([]PXARTreeEntry, 0, 256)
-	err := pr.walk(func(e PXARTreeEntry, _ []byte) error {
+	err := pr.walk(func(e PXARTreeEntry, _ *io.SectionReader) error {
 		entries = append(entries, e)
 		return nil
 	})
@@ -288,6 +318,9 @@ func (pr *PXARReader) ExtractFiltered(destDir string, includePaths []string, ove
 // each matching entry asks the rewriter where to write it on disk. A rewriter
 // returning "" tells the walker to drop that entry without recording a skip.
 //
+// File payloads are streamed straight from the archive to the destination file
+// (io.Copy), so even multi-GB files restore with bounded memory.
+//
 // All filesystem decisions (mkdir parent, overwrite, mode bits, mtime) are
 // centralized here so each restore mode only has to express its path policy.
 func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []string, overwrite bool) ([]PXARExtractedFile, error) {
@@ -297,7 +330,7 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 	includes := NormalizeIncludes(includePaths)
 	extracted := make([]PXARExtractedFile, 0, 64)
 
-	err := pr.walk(func(e PXARTreeEntry, payload []byte) error {
+	err := pr.walk(func(e PXARTreeEntry, payload *io.SectionReader) error {
 		if !pathMatches(e.Path, includes) {
 			return nil
 		}
@@ -344,10 +377,27 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 			}
 		}
 
-		if err := os.WriteFile(fullPath, payload, os.FileMode(e.Mode&0777)); err != nil {
+		out, err := os.OpenFile(fullPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(e.Mode&0777))
+		if err != nil {
 			extracted = append(extracted, PXARExtractedFile{
 				Path: fullPath, Size: e.Size,
-				Skipped: true, SkipReason: fmt.Sprintf("write: %v", err),
+				Skipped: true, SkipReason: fmt.Sprintf("open: %v", err),
+			})
+			return nil
+		}
+		_, copyErr := io.Copy(out, payload)
+		closeErr := out.Close()
+		if copyErr != nil {
+			extracted = append(extracted, PXARExtractedFile{
+				Path: fullPath, Size: e.Size,
+				Skipped: true, SkipReason: fmt.Sprintf("write: %v", copyErr),
+			})
+			return nil
+		}
+		if closeErr != nil {
+			extracted = append(extracted, PXARExtractedFile{
+				Path: fullPath, Size: e.Size,
+				Skipped: true, SkipReason: fmt.Sprintf("close: %v", closeErr),
 			})
 			return nil
 		}
