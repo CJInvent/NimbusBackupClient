@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"sort"
@@ -633,8 +634,16 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	}
 	binary.Write(&a.buffer, binary.LittleEndian, entry)
 
+	// The PXAR stream is a flat byte sequence: the next entry's header begins
+	// immediately after exactly declaredSize payload bytes. We commit declaredSize
+	// in the header here, so we MUST emit exactly that many bytes regardless of how
+	// many the file actually yields. A file changing size between the Lstat above
+	// and the read below (common for files in use WITHOUT VSS: logs, .pst, SQL .mdf)
+	// would otherwise desynchronise the whole archive and corrupt every entry that
+	// follows. So we cap reads at declaredSize and zero-pad any shortfall.
 	binary.Write(&a.buffer, binary.LittleEndian, PXAR_PAYLOAD)
-	filesize := uint64(fileInfo.Size()) + 16 //File size + header size
+	declaredSize := uint64(fileInfo.Size())
+	filesize := declaredSize + 16 //Payload size + header size
 	binary.Write(&a.buffer, binary.LittleEndian, filesize)
 
 	if err := a.Flush(); err != nil {
@@ -642,18 +651,46 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	}
 
 	readbuffer := make([]byte, 1024*64)
+	var written uint64
 
-	for {
-		nread, err := file.Read(readbuffer)
-		if nread <= 0 {
+	for written < declaredSize {
+		toRead := uint64(len(readbuffer))
+		if remaining := declaredSize - written; remaining < toRead {
+			toRead = remaining
+		}
+		nread, err := file.Read(readbuffer[:toRead])
+		if nread > 0 {
+			a.buffer.Write(readbuffer[:nread])
+			written += uint64(nread)
+			if ferr := a.Flush(); ferr != nil {
+				return CatalogFile{}, ferr
+			}
+		}
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return CatalogFile{}, fmt.Errorf("failed to read from %s: %w", path, err)
 		}
-		a.buffer.Write(readbuffer[:nread])
-		if err := a.Flush(); err != nil {
-			return CatalogFile{}, err
+	}
+
+	// File shrank since Lstat (or read short): pad with zeros so the emitted
+	// payload matches the declared length and the stream stays aligned. Flag it
+	// so the run report surfaces a possibly-inconsistent file rather than failing.
+	if written < declaredSize {
+		a.SkippedFiles = append(a.SkippedFiles,
+			fmt.Sprintf("File changed during backup, zero-padded to declared size (content may be inconsistent): %s", path))
+		pad := make([]byte, 1024*64)
+		for written < declaredSize {
+			n := uint64(len(pad))
+			if remaining := declaredSize - written; remaining < n {
+				n = remaining
+			}
+			a.buffer.Write(pad[:n])
+			written += n
+			if ferr := a.Flush(); ferr != nil {
+				return CatalogFile{}, ferr
+			}
 		}
 	}
 
