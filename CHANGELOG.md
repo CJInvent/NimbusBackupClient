@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.100] - 2026-05-22
+
+Finitions audit v2 (2 correctifs, 1 release).
+
+### Fixed
+- **Catalogue PXAR : plus d'entrées fantômes sur skip (M-06)** — un fichier/sous-dossier ignoré (illisible, junction) faisait quand même ajouter une entrée `CatalogFile{}`/`CatalogDir{}` à zéro + un item goodbye de longueur nulle. La boucle n'ajoute désormais l'entrée que si quelque chose a réellement été écrit (`a.pos` a avancé) ; un dossier vide légitime avance `a.pos` et reste enregistré.
+- **Restore : fichier temporaire aléatoire et exclusif (v2-H-08)** — l'extraction écrivait dans un `<fichier>.nimbus-part` prévisible ouvert en `O_TRUNC` (un process local pouvait le pré-créer/deviner). Elle utilise désormais `os.CreateTemp` (nom aléatoire, `O_EXCL`) dans le dossier de destination, puis renommage atomique. *(Le confinement d'un symlink/reparse point dans la chaîne parente de la destination reste un durcissement Windows séparé, noté dans le code.)*
+
+### Notes
+- M-02 (toggles ACL/ADS de restauration « fantômes ») : vérifié — déjà traité dans l'UI (les deux cases sont désactivées + « coming soon », jamais envoyées à `true`).
+
 ## [0.2.99] - 2026-05-22
 
 ### Fixed
