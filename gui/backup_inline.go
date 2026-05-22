@@ -454,10 +454,27 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 	writeBackupLog(fmt.Sprintf("==== starting version %s - user %s - %s/%s ====",
 		appVersion, userName, runtime.GOOS, runtime.GOARCH))
 
-	// Validate options
-	writeBackupLog("[DEBUG] Validating backup options")
+	// Validate options. Log the resolved target (secret presence only, never the
+	// secret) so a misconfiguration is diagnosable from the backup log alone — a
+	// prod report showed only "Validating backup options" then nothing because an
+	// empty multi-PBS resolution failed here silently.
+	writeBackupLog(fmt.Sprintf("[DEBUG] Validating backup options: target=%q datastore=%q ns=%q authid=%q secret=%v dirs=%d backupID=%q",
+		opts.BaseURL, opts.Datastore, opts.Namespace, opts.AuthID, opts.Secret != "", len(opts.BackupDirs), opts.BackupID))
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
-		return fmt.Errorf("PBS connection parameters required")
+		var missing []string
+		if opts.BaseURL == "" {
+			missing = append(missing, "BaseURL")
+		}
+		if opts.AuthID == "" {
+			missing = append(missing, "AuthID")
+		}
+		if opts.Secret == "" {
+			missing = append(missing, "Secret")
+		}
+		errMsg := fmt.Sprintf("PBS connection parameters required (missing: %s) — check the selected/default PBS server in the config",
+			strings.Join(missing, ", "))
+		writeBackupLog("[ERROR] " + errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 	writeBackupLog("[DEBUG] Options validated")
 
@@ -960,6 +977,12 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		SkippedReadError: skippedToIssues(allReadErrors),
 		Message:          completionMsg,
 	}
+
+	// One machine-greppable result line for support (pairs with the start-of-run
+	// target log): outcome label + the structured counters behind completionMsg.
+	writeBackupLog(fmt.Sprintf("[RESULT] outcome=%s dirs_ok=%d/%d new=%d reused=%d failed=%d read_errors=%d excluded=%d bytes=%d duration=%s",
+		status.Outcome, successfulDirs, len(opts.BackupDirs), status.NewChunks, status.ReusedChunks,
+		status.FailedChunks, len(status.SkippedReadError), len(status.ExcludedByPolicy), status.TotalBytes, duration))
 
 	// Additive (choice A): OnComplete keeps its (success, message) contract for
 	// existing consumers; OnResult carries the full structured status for the
