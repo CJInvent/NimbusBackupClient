@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.93] - 2026-05-22
+
+Restauration par lecture paresseuse — prérequis du splitting configurable (Groupe 2).
+
+### Changed
+- **Restauration sans staging complet en %TEMP%** — la restauration téléchargeait et réassemblait l'archive PXAR **entière** dans un fichier temporaire (espace libre requis = taille de l'archive) avant d'extraire quoi que ce soit. Elle lit désormais via un `io.ReaderAt` paresseux adossé aux chunks (`DIDXReaderAt`) qui récupère les chunks **à la demande**, avec un cache LRU (le cache est indispensable : la walk PXAR fait quantité de petites lectures d'en-têtes dans un même chunk) et vérification SHA-256 de chaque chunk. Deux conséquences : (1) plus besoin de %TEMP% = taille d'archive — débloque la sauvegarde de gros disques sans découpage ; (2) la restauration **sélective** ne télécharge plus les chunks ne contenant que le payload de fichiers non sélectionnés (gain majeur pour restaurer quelques fichiers parmi de gros fichiers). Navigation, métadonnées, recherche et restauration passent toutes par ce lecteur.
+
+### Notes
+- L'accès réellement aléatoire (ne lire QUE les chunks du fichier ciblé via les tables GOODBYE du PXAR) reste un raffinement à venir : aujourd'hui la walk lit encore tous les **en-têtes**, donc une archive de très nombreux petits fichiers récupère encore la plupart des chunks.
+
 ## [0.2.92] - 2026-05-22
 
 Exclusions utilisateur (audit H-04) + sidecar de statut, et correctif du build cassé en 0.2.91.
