@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.90] - 2026-05-22
+
+Issues de l'audit complet des flux VSS, des interactions inter-process (GUI ↔ service), du protocole PBS et de la restauration.
+
+### Security
+- **Path traversal à la restauration (zip-slip — critique)** — les noms d'entrées de l'archive PXAR étaient utilisés tels quels : `filepath.Join(dest, archivePath)` nettoie mais ne *contient* pas `..`, donc une archive piégée (ou corrompue) pouvait écrire **hors du dossier de destination** (`../../…`, chemin absolu, lettre de lecteur, UNC). `ExtractWithRewriter` refuse désormais toute entrée non contenue (`isUnsafeArchivePath`), ce qui protège uniformément les trois modes de restauration.
+- **Secret PBS écrit en clair dans les logs** — le dump de la requête d'upgrade (`pbsapi.go`) journalisait `Authorization: PBSAPIToken=<id>:<secret>` via `fmt.Printf`. Le secret est désormais masqué (`:<redacted>`) dans la trace.
+
+### Fixed
+- **Backup avec chunks échoués marqué « réussi » (intégrité — critique)** — un échec d'upload de chunk incrémentait `failedchunk` mais le digest restait indexé, l'index était fermé et `Finish()` committait le snapshot, tandis que `success := !partial` **ignorait `failed`**. Un snapshot référençant des chunks jamais uploadés (donc non restaurable) était rapporté comme réussi. Désormais `success := !partial && failed == 0` : tout chunk échoué fait échouer le backup. *(NB : le correctif complet — ne pas indexer/committer les chunks échoués et ne pas déduire la dédup d'un index non vérifié — reste à faire.)*
+- **Restauration sans vérification d'intégrité** — `AssembleDIDXToFile` ne validait que la *taille* décompressée des chunks. Chaque chunk est maintenant vérifié par SHA-256 contre son digest d'index ; un chunk corrompu/altéré fait échouer la restauration au lieu d'écrire des données silencieusement fausses.
+- **Panic à la restauration sur réponse de chunk tronquée** — `GetChunkData` faisait `ret[:8]`/`ret[12:]` sans contrôle de longueur (panic sur un corps d'erreur court : proxy 502, coupure réseau). Garde `len(ret) < 12` ajoutée.
+- **Écriture non atomique à la restauration** — l'extraction ouvrait directement le fichier cible en `O_TRUNC` ; un échec en cours de copie laissait le fichier **tronqué** (catastrophique en mode in-place où l'original venait d'être détruit). L'extraction écrit désormais dans un fichier temporaire voisin puis fait un `os.Rename` atomique ; l'original reste intact tant que le nouveau contenu n'est pas complet.
+- **`AssignFixedChunks` ignorait le statut HTTP** — un échec d'assignation (4xx/5xx) était silencieusement avalé (index potentiellement corrompu). Contrôle de statut ajouté, aligné sur la variante dynamique.
+- **Collision de jobID à la seconde** — `jobID = "backup-<unix_seconds>"` entrait en collision pour deux backups démarrés dans la même seconde (fréquent avec le split on-demand), les faisant partager une seule entrée de progression. Un compteur atomique garantit désormais l'unicité.
+- **Goroutine de polling qui fuyait** — `pollBackupProgress` bouclait indéfiniment toutes les 3 s si le statut renvoyait une erreur (job évincé/collision, redémarrage du service). Abandon après 20 échecs consécutifs (~60 s) avec événement d'échec.
+- **`fmt.Errorf` sans verbe de format** (`CreateFixedIndex`) corrigé ; message « encrypted chunks not supported » conforme ST1005.
+- **Détection de fenêtre single-instance périmée** — la liste de titres versionnés était figée à `v0.1.9x` ; elle dérive désormais de `appVersion`.
+
 ## [0.2.89] - 2026-05-22
 
 ### Fixed
