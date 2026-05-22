@@ -267,10 +267,12 @@ func (a *App) shutdown(ctx context.Context) {
 	pbscommon.CloseAllActive()
 }
 
-// GetConfig returns the current configuration
+// GetConfig returns the current configuration with secrets stripped (M-04). It is
+// Wails-bound, so it must never expose tokens to the frontend; internal callers
+// use a.config directly.
 func (a *App) GetConfig() *Config {
 	writeDebugLog("GetConfig() called from frontend")
-	return a.config
+	return a.config.sanitized()
 }
 
 // GetHostname returns the system hostname
@@ -320,14 +322,18 @@ func (a *App) ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 // GetConfigWithHostname returns config with hostname pre-filled
 func (a *App) GetConfigWithHostname() map[string]interface{} {
 	hostname := a.GetHostname()
-	cfg := a.GetConfig()
+	cfg := a.config
 
 	// Return config as map with hostname
 	result := map[string]interface{}{
 		"baseurl":         cfg.BaseURL,
 		"certfingerprint": cfg.CertFingerprint,
 		"authid":          cfg.AuthID,
-		"secret":          cfg.Secret,
+		// M-04: never hand the PBS token to the webview/frontend. Expose only
+		// whether one is stored; SaveConfig keeps the existing secret when the
+		// frontend submits an empty value, and TestConnection falls back to it.
+		"secret":          "",
+		"secret_set":      cfg.Secret != "",
 		"datastore":       cfg.Datastore,
 		"namespace":       cfg.Namespace,
 		"backupdir":       cfg.BackupDir,
@@ -346,7 +352,7 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 
 // DiagnoseConfig returns config validation status for debugging
 func (a *App) DiagnoseConfig() map[string]interface{} {
-	cfg := a.GetConfig()
+	cfg := a.config
 
 	var validationError string
 	if err := cfg.Validate(); err != nil {
@@ -369,6 +375,18 @@ func (a *App) DiagnoseConfig() map[string]interface{} {
 
 // SaveConfig saves the configuration
 func (a *App) SaveConfig(config *Config) error {
+	// M-04: the frontend never receives the stored secrets (GetConfigWithHostname
+	// returns "" + a *_set marker), so an empty value here means "keep the existing
+	// one", not "clear it". Only overwrite when the user supplied a new value.
+	if a.config != nil {
+		if config.Secret == "" {
+			config.Secret = a.config.Secret
+		}
+		if config.SMTPPassword == "" {
+			config.SMTPPassword = a.config.SMTPPassword
+		}
+	}
+
 	// Log sanitized config (no secrets)
 	writeDebugLog(fmt.Sprintf("SaveConfig() called: URL=%s, AuthID=%s, Datastore=%s, BackupID=%s",
 		security.SanitizeURL(config.BaseURL),
@@ -402,6 +420,12 @@ func (a *App) TestConnection(config *Config) error {
 	testConfig := config
 	if testConfig == nil {
 		testConfig = a.config
+	}
+
+	// M-04: the frontend no longer holds the secret, so an empty secret in the
+	// submitted config means "use the stored one" (test the existing connection).
+	if testConfig != nil && testConfig.Secret == "" && a.config != nil {
+		testConfig.Secret = a.config.Secret
 	}
 
 	// Validate config first
@@ -458,14 +482,24 @@ func (a *App) ReloadConfig() {
 
 // ListPBSServers returns all configured PBS servers
 func (a *App) ListPBSServers() []*PBSServer {
-	writeDebugLog(fmt.Sprintf("ListPBSServers() returned %d servers", len(a.config.PBSServers)))
-	return a.config.ListPBSServers()
+	servers := a.config.ListPBSServers()
+	writeDebugLog(fmt.Sprintf("ListPBSServers() returned %d servers", len(servers)))
+	// M-04: never hand PBS tokens to the frontend — return sanitized copies.
+	out := make([]*PBSServer, 0, len(servers))
+	for _, s := range servers {
+		out = append(out, s.sanitized())
+	}
+	return out
 }
 
-// GetPBSServer returns a single PBS server by ID
+// GetPBSServer returns a single PBS server by ID (secret stripped — M-04).
 func (a *App) GetPBSServer(id string) (*PBSServer, error) {
 	writeDebugLog(fmt.Sprintf("GetPBSServer(%s) called", id))
-	return a.config.GetPBSServer(id)
+	s, err := a.config.GetPBSServer(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.sanitized(), nil
 }
 
 // AddPBSServer adds a new PBS server to the configuration
@@ -477,6 +511,13 @@ func (a *App) AddPBSServer(pbs *PBSServer) error {
 // UpdatePBSServer updates an existing PBS server
 func (a *App) UpdatePBSServer(pbs *PBSServer) error {
 	writeDebugLog(fmt.Sprintf("UpdatePBSServer(%s) called", pbs.ID))
+	// M-04: the frontend never receives the token (sanitized), so an empty secret
+	// on update means "keep the stored one", not "clear it".
+	if pbs.Secret == "" {
+		if existing, err := a.config.GetPBSServer(pbs.ID); err == nil && existing != nil {
+			pbs.Secret = existing.Secret
+		}
+	}
 	return a.config.UpdatePBSServer(pbs)
 }
 

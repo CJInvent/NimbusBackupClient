@@ -1349,7 +1349,7 @@ function App() {
                 type="password"
                 value={serverFormData.secret}
                 onChange={(e) => setServerFormData({...serverFormData, secret: e.target.value})}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                placeholder={serverFormData.secret_set ? '•••••••• (laisser vide pour conserver le token actuel)' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'}
               />
             </div>
 
@@ -1528,7 +1528,7 @@ function App() {
                     type="password"
                     value={serverFormData.secret}
                     onChange={(e) => setServerFormData({...serverFormData, secret: e.target.value})}
-                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    placeholder={serverFormData.secret_set ? '•••••••• (laisser vide pour conserver le token actuel)' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'}
                   />
                 </div>
 

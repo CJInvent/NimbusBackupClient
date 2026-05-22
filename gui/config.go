@@ -46,6 +46,22 @@ type Config struct {
 	EmailTo      string `json:"email_to,omitempty"`
 }
 
+// sanitized returns a copy of the config with all secrets stripped (legacy PBS
+// token, SMTP password, and every PBSServer token), for any path that hands the
+// config to the frontend (M-04). Internal callers must use the real *Config.
+func (c *Config) sanitized() *Config {
+	cp := *c
+	cp.Secret = ""
+	cp.SMTPPassword = ""
+	if c.PBSServers != nil {
+		cp.PBSServers = make(map[string]*PBSServer, len(c.PBSServers))
+		for k, v := range c.PBSServers {
+			cp.PBSServers[k] = v.sanitized()
+		}
+	}
+	return &cp
+}
+
 // SplitSizeBytes returns the configured auto-split threshold / per-bin target in
 // bytes, falling back to DefaultSplitSizeGB when SplitSizeGB is unset (<= 0).
 func (c *Config) SplitSizeBytes() uint64 {

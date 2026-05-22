@@ -17,6 +17,16 @@ type PBSServer struct {
 	Namespace       string `json:"namespace"`
 	Description     string `json:"description,omitempty"` // Optional description
 	IsOnline        bool   `json:"is_online,omitempty"`   // Connection status (updated by GUI)
+	SecretSet       bool   `json:"secret_set,omitempty"`  // M-04: set on sanitized copies so the UI knows a token exists without receiving it
+}
+
+// sanitized returns a copy with the secret stripped and SecretSet set, for
+// handing PBS server records to the frontend without leaking the token (M-04).
+func (p *PBSServer) sanitized() *PBSServer {
+	c := *p
+	c.SecretSet = p.Secret != ""
+	c.Secret = ""
+	return &c
 }
 
 // Validate checks if the PBS server configuration is valid
