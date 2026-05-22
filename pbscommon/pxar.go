@@ -560,6 +560,11 @@ func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (Cata
 			if err != nil {
 				return CatalogDir{}, err
 			}
+			if a.pos == startpos {
+				// WriteDir skipped this subdirectory (junction/unreadable): nothing
+				// written, so don't add a phantom zero-value catalog/goodbye entry (M-06).
+				continue
+			}
 			catalog_dirs = append(catalog_dirs, D)
 			goodbyteitems = append(goodbyteitems, GoodByeItem{
 				offset: startpos,
@@ -577,6 +582,11 @@ func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (Cata
 			F, err := a.WriteFile(filepath.Join(path, file.Name()), file.Name())
 			if err != nil {
 				return CatalogDir{}, err
+			}
+			if a.pos == startpos {
+				// WriteFile skipped this entry (unreadable/junction): nothing was
+				// written, so don't add a phantom zero-value catalog/goodbye entry (M-06).
+				continue
 			}
 
 			catalog_files = append(catalog_files, F)
