@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.91] - 2026-05-22
+
+Contrat de résultat de backup honnête (audit H-03) et avancement structuré dans la GUI.
+
+### Fixed
+- **Backup partiel/échoué rapporté « réussi » en mode service (H-03 — critique)** — `runBackupInlineInternal` calculait le succès puis renvoyait `nil` ; le stub service ne propageait pas le statut et l'API concluait `Success=true` sur retour nil. Le moteur construit désormais un `BackupStatus` (outcome `success`/`partial`/`failed`) et **renvoie une erreur non-nil sur partiel ou échoué**, propagée jusqu'au fallback de l'API et à l'historique du scheduler en mode service. Un chunk échoué (index corrompu, non restaurable) compte comme `failed`, pas comme succès.
+
+### Added
+- **Statut de backup structuré** (`BackupStatus`) — source unique de vérité (outcome, compteurs, résultat par dossier, fichiers ignorés), exposée via le nouveau callback `OnResult` (additif : `OnComplete` est conservé). Servira de base au sidecar de statut persisté à venir.
+- **Avancement structuré dans la GUI** — événement `backup:stats` (Mo traités/total, chunks new/reused/failed, dossier courant) affiché en direct pendant le backup, au lieu d'un simple pourcentage + message brut.
+
+### Notes
+- Restent à faire (unification service/GUI) : l'attente synchrone du résultat par le scheduler en mode GUI-standalone, et le pont de statistiques live en mode service.
+
 ## [0.2.90] - 2026-05-22
 
 Issues de l'audit complet des flux VSS, des interactions inter-process (GUI ↔ service), du protocole PBS et de la restauration.
