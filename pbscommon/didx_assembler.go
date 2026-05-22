@@ -2,6 +2,7 @@ package pbscommon
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -149,6 +150,16 @@ func (pbs *PBSClient) AssembleDIDXToFile(archiveName string, maxParallel int, pr
 			if len(chunk) != expected {
 				firstErr.CompareAndSwap(nil, fmt.Errorf("chunk %s (index %d): decompressed size %d != expected %d",
 					idx.digests[idxNum], idxNum, len(chunk), expected))
+				return
+			}
+			// Verify the chunk content against its index digest. PBS dynamic-index
+			// digests are the SHA-256 of the chunk plaintext, so a mismatch means a
+			// corrupted or tampered chunk — fail the restore rather than silently
+			// writing wrong data.
+			sum := sha256.Sum256(chunk)
+			if hex.EncodeToString(sum[:]) != idx.digests[idxNum] {
+				firstErr.CompareAndSwap(nil, fmt.Errorf("chunk %s (index %d): content hash mismatch",
+					idx.digests[idxNum], idxNum))
 				return
 			}
 			// Concurrent WriteAt at non-overlapping offsets is safe on *os.File.

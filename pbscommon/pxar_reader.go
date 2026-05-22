@@ -335,6 +335,18 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 			return nil
 		}
 
+		// Zip-slip guard: refuse any entry whose name could escape the restore
+		// root once joined (absolute, drive-rooted, UNC, or containing "..").
+		// rewriter(root + cleanRelative) cannot escape root, so validating the
+		// entry path here protects all restore modes uniformly.
+		if isUnsafeArchivePath(e.Path) {
+			extracted = append(extracted, PXARExtractedFile{
+				Path: e.Path, IsDir: e.IsDir,
+				Skipped: true, SkipReason: "unsafe archive path refused (possible traversal)",
+			})
+			return nil
+		}
+
 		fullPath := rewriter(e.Path)
 		if fullPath == "" {
 			// Rewriter chose to drop this entry (e.g. ancestor of the flat
@@ -377,7 +389,13 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 			}
 		}
 
-		out, err := os.OpenFile(fullPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(e.Mode&0777))
+		// Write to a sibling temp file then atomically rename into place. The
+		// existing target stays intact until the new content is fully written —
+		// critical for in-place restore, where a mid-copy failure must not leave
+		// the original truncated. os.Rename replaces the target on both Unix and
+		// Windows (MOVEFILE_REPLACE_EXISTING).
+		tmpPath := fullPath + ".nimbus-part"
+		out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(e.Mode&0777))
 		if err != nil {
 			extracted = append(extracted, PXARExtractedFile{
 				Path: fullPath, Size: e.Size,
@@ -388,6 +406,7 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 		_, copyErr := io.Copy(out, payload)
 		closeErr := out.Close()
 		if copyErr != nil {
+			_ = os.Remove(tmpPath)
 			extracted = append(extracted, PXARExtractedFile{
 				Path: fullPath, Size: e.Size,
 				Skipped: true, SkipReason: fmt.Sprintf("write: %v", copyErr),
@@ -395,9 +414,18 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 			return nil
 		}
 		if closeErr != nil {
+			_ = os.Remove(tmpPath)
 			extracted = append(extracted, PXARExtractedFile{
 				Path: fullPath, Size: e.Size,
 				Skipped: true, SkipReason: fmt.Sprintf("close: %v", closeErr),
+			})
+			return nil
+		}
+		if renErr := os.Rename(tmpPath, fullPath); renErr != nil {
+			_ = os.Remove(tmpPath)
+			extracted = append(extracted, PXARExtractedFile{
+				Path: fullPath, Size: e.Size,
+				Skipped: true, SkipReason: fmt.Sprintf("rename: %v", renErr),
 			})
 			return nil
 		}
@@ -412,6 +440,30 @@ func (pr *PXARReader) ExtractWithRewriter(rewriter PathRewriter, includePaths []
 		return nil
 	})
 	return extracted, err
+}
+
+// isUnsafeArchivePath reports whether a PXAR entry path could escape the restore
+// destination (zip-slip). Archive paths are normalised forward-slash relative
+// paths; anything absolute (unix root, UNC \\server), a Windows drive (C:/...),
+// or containing a ".." segment is refused so rewriter(root + path) stays inside
+// root.
+func isUnsafeArchivePath(p string) bool {
+	if p == "" {
+		return false
+	}
+	q := strings.ReplaceAll(p, "\\", "/")
+	if strings.HasPrefix(q, "/") {
+		return true // unix-absolute, or UNC \\server\share
+	}
+	if len(q) >= 2 && q[1] == ':' {
+		return true // windows drive-absolute, e.g. C:/...
+	}
+	for _, seg := range strings.Split(q, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeIncludes converts user-supplied include paths to the archive form
