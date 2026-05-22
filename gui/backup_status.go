@@ -89,6 +89,45 @@ func (s *BackupStatus) Success() bool {
 	return s != nil && (s.Outcome == OutcomeVerifiedSuccess || s.Outcome == OutcomeSuccessWithExclusions)
 }
 
+// outcomeRank orders outcomes worst-to-best (failed=0 … verified=3).
+func outcomeRank(o BackupOutcome) int {
+	switch o {
+	case OutcomeFailed:
+		return 0
+	case OutcomePartial:
+		return 1
+	case OutcomeSuccessWithExclusions:
+		return 2
+	default: // OutcomeVerifiedSuccess
+		return 3
+	}
+}
+
+// worstOutcome returns the worse (lower-ranked) of two outcomes.
+func worstOutcome(a, b BackupOutcome) BackupOutcome {
+	if outcomeRank(a) <= outcomeRank(b) {
+		return a
+	}
+	return b
+}
+
+// merge folds a child run's counts, file buckets and worst outcome into agg.
+// Used to build one aggregate result for multi-folder and auto-split runs.
+func (agg *BackupStatus) merge(child *BackupStatus) {
+	if child == nil {
+		return
+	}
+	agg.Outcome = worstOutcome(agg.Outcome, child.Outcome)
+	agg.NewChunks += child.NewChunks
+	agg.ReusedChunks += child.ReusedChunks
+	agg.FailedChunks += child.FailedChunks
+	agg.TotalBytes += child.TotalBytes
+	agg.Directories = append(agg.Directories, child.Directories...)
+	agg.ExcludedByPolicy = append(agg.ExcludedByPolicy, child.ExcludedByPolicy...)
+	agg.SkippedReadError = append(agg.SkippedReadError, child.SkippedReadError...)
+	agg.Corrupted = append(agg.Corrupted, child.Corrupted...)
+}
+
 // skippedToIssues wraps the engine's free-form SkippedFiles descriptions into the
 // FileIssue bucket. The descriptions already embed the reason; Group 1 will record
 // these with a clean path/reason split at the source (pxar.go).

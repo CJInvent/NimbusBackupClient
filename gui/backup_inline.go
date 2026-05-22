@@ -499,15 +499,23 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 			splitJobs := CreateSplitJobs(analysis, baseBackupID, hostname, splitThreshold)
 			writeBackupLog(fmt.Sprintf("[Auto-Split] Splitting into %d jobs", len(splitJobs)))
 
-			// Execute each split job sequentially
+			// Execute each split job, suppressing per-split terminal callbacks and
+			// aggregating ONE final result (like the multi-folder path). Continue
+			// independent splits on failure instead of aborting at the first (v2-H-03).
+			aggStart := time.Now()
+			agg := &BackupStatus{Outcome: OutcomeVerifiedSuccess, BackupID: baseBackupID, BackupTime: aggStart.Unix()}
+			var jobErrors []string
+
 			for _, job := range splitJobs {
 				writeBackupLog(fmt.Sprintf("[Auto-Split] Starting job %d/%d: %s (%s, %d folders)",
 					job.Index, job.TotalJobs, job.BackupID, FormatSize(job.TotalSize), len(job.Folders)))
 
-				// Create options for this split job
 				splitOpts := opts
 				splitOpts.BackupDirs = job.Folders
 				splitOpts.BackupID = job.BackupID
+				splitOpts.OnComplete = nil // suppress per-split terminal callback; aggregated below
+				var jobStatus *BackupStatus
+				splitOpts.OnResult = func(s *BackupStatus) { jobStatus = s }
 				// Merge the user's exclusions with the job's own (a root remainder job
 				// excludes the subfolders already covered by other jobs — v2-H-01).
 				if len(job.ExcludeList) > 0 {
@@ -517,23 +525,41 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 					splitOpts.ExcludeList = merged
 				}
 
-				// Recursive call for each split (will acquire lock individually)
-				if err := runBackupInlineInternal(splitOpts); err != nil {
-					// Log error but CONTINUE with remaining jobs
-					errMsg := fmt.Sprintf("[Auto-Split] Job %d/%d failed: %v", job.Index, job.TotalJobs, err)
+				derr := runBackupInlineInternal(splitOpts)
+				if jobStatus != nil {
+					agg.merge(jobStatus)
+				} else if derr != nil {
+					agg.Outcome = OutcomeFailed
+				}
+				if derr != nil {
+					errMsg := fmt.Sprintf("[Auto-Split] Job %d/%d failed: %v", job.Index, job.TotalJobs, derr)
 					writeBackupLog(errMsg)
-					// Return error so the whole backup is marked as failed
-					return fmt.Errorf("%s", errMsg)
+					jobErrors = append(jobErrors, errMsg)
+					// Continue with the remaining (independent) split jobs.
 				} else {
 					writeBackupLog(fmt.Sprintf("[Auto-Split] Job %d/%d completed successfully", job.Index, job.TotalJobs))
 				}
 			}
 
-			// All split jobs done
 			duration := time.Since(startTime)
-			writeBackupLog(fmt.Sprintf("[Auto-Split] All %d jobs completed in %s", len(splitJobs), formatDuration(duration)))
+			agg.DurationSec = duration.Seconds()
+			if len(jobErrors) > 0 {
+				agg.Message = fmt.Sprintf("%d/%d split jobs failed in %s:\n%s",
+					len(jobErrors), len(splitJobs), formatDuration(duration), strings.Join(jobErrors, "\n"))
+			} else {
+				agg.Message = fmt.Sprintf("Backup completed (%d split jobs) in %s", len(splitJobs), formatDuration(duration))
+			}
+			writeBackupLog(agg.Message)
+
+			// One terminal callback for the whole auto-split run, only after the last job.
 			if opts.OnComplete != nil {
-				opts.OnComplete(true, fmt.Sprintf("Backup completed (%d split jobs) in %s", len(splitJobs), formatDuration(duration)))
+				opts.OnComplete(agg.Success(), agg.Message)
+			}
+			if opts.OnResult != nil {
+				opts.OnResult(agg)
+			}
+			if len(jobErrors) > 0 {
+				return fmt.Errorf("%s", agg.Message)
 			}
 			return nil
 		}
@@ -555,25 +581,6 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 	// finalize (and, in API mode, tear down) the job before the rest ran — losing
 	// later folders' status and breaking the honest-result contract. Live progress
 	// (OnProgress/OnStats) still flows per folder.
-	rank := func(o BackupOutcome) int {
-		switch o {
-		case OutcomeFailed:
-			return 0
-		case OutcomePartial:
-			return 1
-		case OutcomeSuccessWithExclusions:
-			return 2
-		default: // OutcomeVerifiedSuccess
-			return 3
-		}
-	}
-	worst := func(a, b BackupOutcome) BackupOutcome {
-		if rank(a) <= rank(b) {
-			return a
-		}
-		return b
-	}
-
 	aggStart := time.Now()
 	agg := &BackupStatus{Outcome: OutcomeVerifiedSuccess, BackupID: opts.BackupID, BackupTime: aggStart.Unix()}
 	var perDirErrors []string
@@ -599,14 +606,7 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 		derr := runBackupInlineInternal(dirOpts)
 
 		if dirStatus != nil {
-			agg.Outcome = worst(agg.Outcome, dirStatus.Outcome)
-			agg.NewChunks += dirStatus.NewChunks
-			agg.ReusedChunks += dirStatus.ReusedChunks
-			agg.FailedChunks += dirStatus.FailedChunks
-			agg.TotalBytes += dirStatus.TotalBytes
-			agg.Directories = append(agg.Directories, dirStatus.Directories...)
-			agg.ExcludedByPolicy = append(agg.ExcludedByPolicy, dirStatus.ExcludedByPolicy...)
-			agg.SkippedReadError = append(agg.SkippedReadError, dirStatus.SkippedReadError...)
+			agg.merge(dirStatus)
 		} else if derr != nil {
 			agg.Outcome = OutcomeFailed
 		}
