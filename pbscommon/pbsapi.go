@@ -348,6 +348,20 @@ func (pbs *PBSClient) CloseFixedIndex(writerid uint64, checksum string, totalsiz
 	return nil
 }
 
+// redactedHeaders returns a copy of h with the Authorization value masked, so
+// request headers can be logged without leaking the PBS API token (audit L-01).
+func redactedHeaders(h http.Header) http.Header {
+	out := make(http.Header, len(h))
+	for k, v := range h {
+		if k == "Authorization" {
+			out[k] = []string{"PBSAPIToken=<redacted>"}
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func (pbs *PBSClient) CreateDynamicIndex(name string) (uint64, error) {
 	fmt.Printf("=== CreateDynamicIndex START ===\n")
 	fmt.Printf("Archive name: %s\n", name)
@@ -371,7 +385,7 @@ func (pbs *PBSClient) CreateDynamicIndex(name string) (uint64, error) {
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 
 	fmt.Printf("Sending POST request to: %s\n", req.URL.String())
-	fmt.Printf("Headers: %+v\n", req.Header)
+	fmt.Printf("Headers: %+v\n", redactedHeaders(req.Header))
 
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
