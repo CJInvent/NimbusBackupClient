@@ -251,7 +251,7 @@ func (pbs *PBSClient) CreateFixedIndex(fic FixedIndexCreateReq) (uint64, error) 
 	if resp2.StatusCode != http.StatusOK {
 		resp1, _ := io.ReadAll(resp2.Body)
 		fmt.Println("Error making request:", string(resp1), string(resp2.Proto))
-		return 0, fmt.Errorf("Error making request:", string(resp1), string(resp2.Proto))
+		return 0, fmt.Errorf("request failed: %s %s", string(resp1), resp2.Proto)
 	}
 
 	resp1, err := io.ReadAll(resp2.Body)
@@ -301,6 +301,12 @@ func (pbs *PBSClient) AssignFixedChunks(writerid uint64, digests []string, offse
 		return err
 	}
 	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp2.Body)
+		return fmt.Errorf("PBS assign fixed chunks failed: HTTP %d - %s", resp2.StatusCode, string(bodyBytes))
+	}
+
 	return nil
 }
 
@@ -831,7 +837,12 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 				requestLines = append(requestLines, "Connection: Upgrade")
 
 				fullRequest := strings.Join(requestLines, "\r\n") + "\r\n\r\n"
-				fmt.Printf("=== SENDING HTTP REQUEST TO PBS ===\n%s=== END REQUEST ===\n", fullRequest)
+				// Redact the API token secret before logging the raw request —
+				// fullRequest carries "Authorization: PBSAPIToken=<id>:<secret>".
+				redactedRequest := strings.Replace(fullRequest,
+					fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret),
+					fmt.Sprintf("PBSAPIToken=%s:<redacted>", pbs.AuthID), 1)
+				fmt.Printf("=== SENDING HTTP REQUEST TO PBS ===\n%s=== END REQUEST ===\n", redactedRequest)
 
 				// Send the request
 				conn.Write([]byte(fullRequest))
@@ -1044,6 +1055,12 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 		return nil, err
 	}
 
+	// Guard against a truncated/error body (proxy 502, reset mid-restore): the
+	// blob magic + CRC header is 12 bytes, so ret[:8]/ret[12:] would panic.
+	if len(ret) < 12 {
+		return nil, fmt.Errorf("short chunk response for %s: %d bytes", digest, len(ret))
+	}
+
 	if slices.Equal(ret[:8], blobUncompressedMagic) {
 		return ret[12:], nil
 	} else if slices.Equal(ret[:8], blobCompressedMagic) {
@@ -1061,7 +1078,7 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 		}
 		return ret2, nil
 	} else {
-		return nil, fmt.Errorf("Encrypted chunks not supported!")
+		return nil, fmt.Errorf("encrypted chunks not supported")
 	}
 
 }
