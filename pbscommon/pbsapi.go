@@ -190,17 +190,47 @@ type SnapshotsResp struct {
 	Data []BackupManifest `json:"data"`
 }
 
+// buildTLSConfig returns the TLS config used by ALL PBS HTTP clients. When a
+// fingerprint is configured (pbs.CertFingerPrint != ""), CA validation is skipped but the peer
+// certificate's SHA-256 is pinned to CertFingerPrint; otherwise normal CA
+// validation applies. Factored so every client that sends the auth token pins
+// identically (audit H-02) — ListSnapshots/TestConnection previously skipped the
+// pin (InsecureSkipVerify with no fingerprint check), accepting any certificate.
+func (pbs *PBSClient) buildTLSConfig() *tls.Config {
+	// Pinning is keyed on whether a fingerprint is configured, NOT on pbs.Insecure:
+	// some callers (e.g. nbd) set Insecure with no fingerprint and must keep working
+	// (skip verification), and a fingerprint-less pin would compare against "" and
+	// fail every connection.
+	if pbs.CertFingerPrint == "" {
+		// No fingerprint: trust the system CA, unless explicitly insecure.
+		return &tls.Config{InsecureSkipVerify: pbs.Insecure}
+	}
+	// Fingerprint configured: skip CA validation but pin the peer cert's SHA-256.
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("no certificates presented by the peer")
+			}
+			peerCert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("failed to parse certificate: %v", err)
+			}
+			expectedFingerprint := strings.ReplaceAll(pbs.CertFingerPrint, ":", "")
+			sum := sha256.Sum256(peerCert.Raw)
+			calculatedFingerprint := hex.EncodeToString(sum[:])
+			if !strings.EqualFold(calculatedFingerprint, expectedFingerprint) {
+				return fmt.Errorf("certificate fingerprint does not match (expected %s, got %s)", expectedFingerprint, calculatedFingerprint)
+			}
+			return nil
+		},
+	}
+}
+
 func (pbs *PBSClient) ListSnapshots() ([]BackupManifest, error) {
 	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	if pbs.Insecure {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		}
-		client.Transport = tr
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: pbs.buildTLSConfig()},
 	}
 
 	ret := make([]BackupManifest, 0)
@@ -676,16 +706,13 @@ func (pbs *PBSClient) Finish() error {
 // TestConnection performs a real HTTP request to verify PBS connectivity
 // Returns error if hostname unreachable, credentials invalid, or datastore inaccessible
 func (pbs *PBSClient) TestConnection() error {
-	// Create TLS config for the test
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: pbs.Insecure || pbs.CertFingerPrint == "",
-	}
-
-	// Create HTTP client with timeout
+	// Same TLS policy as the backup session: pin the fingerprint when configured,
+	// otherwise CA-validate. The old `|| CertFingerPrint == ""` skipped verification
+	// entirely when no fingerprint was set, accepting any certificate (audit H-02).
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
+			TLSClientConfig: pbs.buildTLSConfig(),
 		},
 	}
 
@@ -729,39 +756,9 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 	// previous Connect() calls leak into the next session's manifest, causing PBS
 	// to reject the manifest (files reference UUIDs from abandoned sessions).
 	pbs.Manifest.Files = nil
-	pbs.TLSConfig = tls.Config{
-		InsecureSkipVerify: pbs.Insecure,
-	}
-	if pbs.Insecure {
-		pbs.TLSConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-			// Extract the peer certificate
-			if len(rawCerts) == 0 {
-				return fmt.Errorf("no certificates presented by the peer")
-			}
-			peerCert, err := x509.ParseCertificate(rawCerts[0])
-			if err != nil {
-				return fmt.Errorf("failed to parse certificate: %v", err)
-			}
-
-			// Calculate the SHA-256 fingerprint of the certificate
-			expectedFingerprint := strings.ReplaceAll(pbs.CertFingerPrint, ":", "")
-			sum := sha256.Sum256(peerCert.Raw)
-			calculatedFingerprint := hex.EncodeToString(sum[:])
-
-			// Enforce the pin. This callback only runs when a fingerprint is
-			// configured (pbs.Insecure), and InsecureSkipVerify already disabled
-			// CA validation, so a fingerprint mismatch MUST be a hard failure —
-			// it is the only thing standing between us and accepting any cert.
-			// The previous `&& !pbs.Insecure` guard was always false here, which
-			// silently disabled the check and accepted ANY certificate (MITM).
-			if !strings.EqualFold(calculatedFingerprint, expectedFingerprint) {
-				return fmt.Errorf("certificate fingerprint does not match (expected %s, got %s)", expectedFingerprint, calculatedFingerprint)
-			}
-
-			// If the fingerprint matches, the certificate is considered valid
-			return nil
-		}
-	}
+	// Same pinning policy as ListSnapshots/TestConnection (audit H-02), factored
+	// into buildTLSConfig so all PBS clients verify the certificate identically.
+	pbs.TLSConfig = *pbs.buildTLSConfig()
 	if !reader {
 		pbs.Manifest.BackupTime = time.Now().Unix()
 	}
