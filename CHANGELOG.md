@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.96] - 2026-05-22
+
+Correctifs suite à la revue Codex des commits du jour.
+
+### Fixed
+- **Backup-id custom non retrouvable en multi-dossiers (régression 0.2.94)** — le fix de grouping remplaçait le backup-id custom par un id dérivé du chemin, donc un `backup-id` configuré (ex. `client-prod`) ne retrouvait plus ses snapshots (la recherche restore filtre par sous-chaîne). Les ids enfants sont désormais dérivés du base id (`client-prod_C_Users`…), donc le base reste une sous-chaîne et le restore les retrouve.
+- **Sidecar de statut : chemins VSS** — sous VSS, le sidecar et les listes exclus/ignorés affichaient des chemins de shadow copy (`\\?\GLOBALROOT\…`). Ils sont désormais ramenés au chemin logique d'origine.
+
+### Tests
+- Tests unitaires du matcher d'exclusion (`isExcluded` / `relExcludePath`).
+
+### Notes
+- Connu (pré-existant, correctif architectural à venir) : dans le chemin auto-split, un bin regroupant plusieurs dossiers crée encore plusieurs snapshots dans un même groupe PBS — la rétention par groupe reste imparfaite pour ces bins. Correctif visé : un snapshot multi-archives par bin.
+
 ## [0.2.95] - 2026-05-22
 
 Auto-split configurable (Groupe 3, tranche 2).
