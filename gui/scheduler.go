@@ -127,7 +127,7 @@ func (a *App) SaveScheduledJob(job ScheduledJob) error {
 		return fmt.Errorf("failed to marshal jobs: %w", err)
 	}
 
-	if err := os.WriteFile(jobsPath, data, 0600); err != nil {
+	if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write jobs file: %w", err)
 	}
 
@@ -229,7 +229,7 @@ func (a *App) UpdateScheduledJob(job ScheduledJob) error {
 		return fmt.Errorf("failed to marshal jobs: %w", err)
 	}
 
-	if err := os.WriteFile(jobsPath, data, 0600); err != nil {
+	if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write jobs file: %w", err)
 	}
 
@@ -265,7 +265,7 @@ func (a *App) DeleteScheduledJob(jobID string) error {
 		return err
 	}
 
-	return os.WriteFile(jobsPath, data, 0600)
+	return atomicWriteFile(jobsPath, data, 0600)
 }
 
 // GetJobHistory returns job history
@@ -317,7 +317,7 @@ func (a *App) AddJobHistory(entry JobHistory) error {
 		return err
 	}
 
-	return os.WriteFile(historyPath, data, 0600)
+	return atomicWriteFile(historyPath, data, 0600)
 }
 
 // calculateNextRun calculates the next run time based on schedule time (HH:MM)
@@ -393,7 +393,7 @@ func (a *App) RecalculateNextRuns() {
 			return
 		}
 
-		if err := os.WriteFile(jobsPath, data, 0600); err != nil {
+		if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
 			writeDebugLog(fmt.Sprintf("Error saving recalculated jobs: %v", err))
 		} else {
 			writeDebugLog("Successfully recalculated stale nextRun values")
@@ -462,7 +462,7 @@ func (a *App) CleanupAbandonedJobs() {
 			return
 		}
 
-		if err := os.WriteFile(historyPath, data, 0600); err != nil {
+		if err := atomicWriteFile(historyPath, data, 0600); err != nil {
 			writeDebugLog(fmt.Sprintf("Error saving updated history: %v", err))
 		} else {
 			writeDebugLog("Successfully cleaned up abandoned jobs")
@@ -639,7 +639,7 @@ func (a *App) executeScheduledJob(job ScheduledJob) {
 	// Save updated jobs
 	jobsPath, _ := getScheduledJobsPath()
 	data, _ := json.MarshalIndent(jobs, "", "  ")
-	if err := os.WriteFile(jobsPath, data, 0600); err != nil {
+	if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
 		writeDebugLog(fmt.Sprintf("Warning: Failed to save updated jobs: %v", err))
 	}
 }

@@ -72,6 +72,36 @@ func (c *Config) SplitSizeBytes() uint64 {
 	return uint64(gb) * 1024 * 1024 * 1024
 }
 
+// atomicWriteFile writes data to path crash-safely: it writes a temp file in the
+// same directory, fsyncs+closes it, then atomically renames it over path. A crash
+// mid-write leaves the original intact instead of a truncated/half-written JSON
+// (audit M-03). NOTE: this does NOT serialize concurrent GUI+service writers — a
+// cross-process lock / single-writer is a separate fix for lost updates.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 // getAPITokenPath is the shared local-API auth token file (H-01), placed next to
 // config.json so the GUI and the privileged service resolve the same path.
 func getAPITokenPath() string {
@@ -189,7 +219,7 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0600)
+	return atomicWriteFile(configPath, data, 0600)
 }
 
 func (c *Config) Validate() error {
