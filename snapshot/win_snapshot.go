@@ -9,10 +9,26 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/st-matskevich/go-vss"
 )
+
+// shadowIDRe matches a bare VSS shadow-copy GUID (8-4-4-4-12 hex).
+var shadowIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// normalizeShadowID strips optional braces and validates a VSS shadow ID,
+// returning the bare GUID or "" if the name is not shadow-id-shaped.
+func normalizeShadowID(name string) string {
+	s := strings.TrimSpace(name)
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	if !shadowIDRe.MatchString(s) {
+		return ""
+	}
+	return s
+}
 
 func SymlinkSnapshot(symlinkPath string, id string, deviceObjectPath string) (string, error) {
 
@@ -152,36 +168,57 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 
 }
 
-// VSSCleanup removes all orphaned VSS snapshots and resets the VSS service
-// state. This prevents shadow copies from accumulating after crashes or abnormal
-// terminations, and clears any "shadow copy creation already in progress" lock
-// held by a stuck IVssBackupComponents context from a previous run.
+// VSSCleanup removes orphaned VSS snapshots left by a previously crashed Nimbus
+// run. It deletes ONLY shadow copies Nimbus created — recorded as the subfolder
+// names of the <appData>/VSS symlink directory — never `vssadmin delete shadows
+// /all`, which destroyed EVERY shadow copy on the host (other backup tools, DCs,
+// SQL/Exchange) on each service start (audit v2-H-05).
+//
+// Best-effort by design: the worst case here is that an orphan remains until a
+// later run, which is far safer than wiping other applications' shadow copies.
+//
+// WINDOWS-VERIFY: the exact `vssadmin delete shadows /shadow={id}` form may
+// require `/for=<volume>` on some Windows versions; we do not persist the source
+// volume. The robust long-term path is the VSS API DeleteSnapshots(by ID). If the
+// invocation is rejected, the orphan simply remains (no collateral damage).
 func VSSCleanup() error {
-	// List all shadows first to check if cleanup is needed
-	listCmd := exec.Command("vssadmin", "list", "shadows")
-	output, err := listCmd.CombinedOutput()
+	appData, err := getAppDataFolder()
 	if err != nil {
-		// If vssadmin fails, log but don't block service startup
-		fmt.Printf("Warning: Failed to list VSS shadows: %v\n", err)
+		fmt.Printf("VSS Cleanup: cannot resolve app data folder: %v\n", err)
+		return nil
+	}
+	vssDir := filepath.Join(appData, "VSS")
+	entries, err := os.ReadDir(vssDir)
+	if err != nil {
+		// No VSS symlink directory ⇒ no Nimbus-created shadows to clean.
 		return nil
 	}
 
-	// Only delete if there are actually shadows present
-	if len(output) > 0 && !strings.Contains(string(output), "No items found") {
-		fmt.Println("VSS Cleanup: Removing orphaned shadow copies...")
-
-		// Delete all shadow copies
-		// Note: This is safe because Nimbus creates snapshots only during backup
-		// and releases them immediately after. Any remaining snapshots are orphans.
-		deleteCmd := exec.Command("vssadmin", "delete", "shadows", "/all", "/quiet")
-		deleteOutput, err := deleteCmd.CombinedOutput()
-		if err != nil {
-			fmt.Printf("Warning: VSS cleanup failed: %v - %s\n", err, string(deleteOutput))
-		} else {
-			fmt.Println("VSS Cleanup: Successfully removed orphaned snapshots")
+	for _, e := range entries {
+		id := normalizeShadowID(e.Name())
+		if id == "" {
+			continue // not a shadow-id-shaped entry
 		}
-	} else {
-		fmt.Println("VSS Cleanup: No orphaned snapshots found")
+		marker := filepath.Join(vssDir, e.Name())
+
+		// If the symlink no longer resolves, the shadow was already released (a
+		// normal-backup leftover, not a live orphan): just drop the stale marker so
+		// these don't accumulate and slow every startup.
+		if _, statErr := os.Stat(marker); statErr != nil {
+			_ = os.Remove(marker)
+			continue
+		}
+
+		// Live symlink ⇒ the shadow still exists ⇒ a genuine orphan from a crash.
+		fmt.Printf("VSS Cleanup: removing orphaned Nimbus shadow %s...\n", id)
+		deleteCmd := exec.Command("vssadmin", "delete", "shadows", "/shadow={"+id+"}", "/quiet")
+		if out, derr := deleteCmd.CombinedOutput(); derr != nil {
+			// Keep the marker so a later run retries; never fall back to /all.
+			fmt.Printf("VSS Cleanup: could not delete shadow %s (best-effort, will retry): %v - %s\n", id, derr, string(out))
+			continue
+		}
+		fmt.Printf("VSS Cleanup: removed Nimbus shadow %s\n", id)
+		_ = os.Remove(marker)
 	}
 
 	// NOTE: we deliberately do NOT bounce the Windows VSS service here.
@@ -215,6 +252,14 @@ func isShadowAlreadyInProgress(err error) bool {
 // attempt returns "already in progress". It deletes orphan shadows then
 // bounces the VSS service so the next CreateSnapshot starts from a clean
 // state.
+//
+// DELIBERATE /all here (unlike startup VSSCleanup which is now scoped): this runs
+// ONLY when our own CreateSnapshot is already blocked by a stuck VSS context, not
+// on every service start — a much smaller blast radius. The "in progress" state is
+// an in-flight requester/provider sequence, not a completed shadow we can target
+// by ID, so clearing it needs the service bounce below. WINDOWS-VERIFY: tighten
+// this (and the error classifier above; the in-progress code may be 0x80042316,
+// not 0x8004230f) before relying on it.
 func vssForceReset() error {
 	deleteCmd := exec.Command("vssadmin", "delete", "shadows", "/all", "/quiet")
 	if out, err := deleteCmd.CombinedOutput(); err != nil {
