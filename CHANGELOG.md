@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.98] - 2026-05-22
+
+Couverture backup honnête + preuve de restore (audit Codex v2 — 6 correctifs, 1 release).
+
+### Fixed
+- **Chunk/index fail-closed (C3 / v2-H-04 — critique)** — un échec d'upload de chunk indexait quand même le digest et fermait l'index → snapshot référençant un chunk absent (non restaurable), tout en s'auto-signalant échec *après coup*. Désormais : un chunk n'est marqué connu et indexé qu'**après upload confirmé**, et tout échec d'upload **abandonne le writer avant** `CloseDynamicIndex`/`Finish` — aucun snapshot corrompu n'est committé, et seeder le dedup depuis l'index précédent (toujours vérifié) redevient sûr.
+- **Auto-split n'oublie plus les fichiers racine (v2-H-01 — perte silencieuse)** — quand un dossier sélectionné dépassait le seuil via ses sous-dossiers, les fichiers posés **directement à la racine** n'entraient dans aucun snapshot, run « réussi ». Un job « reste racine » sauvegarde désormais la racine en excluant les sous-dossiers déjà couverts ; `AnalyzeBackupDirs` honore les exclusions (pas de re-split/double-couverture).
+- **Agrégation auto-split + continuité (v2-H-03)** — le chemin auto-split émettait des callbacks de complétion intermédiaires et s'arrêtait au 1er split en échec. Il agrège désormais un résultat unique (helpers partagés avec le multi-dossiers), **continue les splits indépendants**, et n'émet la complétion qu'après le dernier.
+- **VSS : plus de `delete shadows /all` au démarrage (v2-H-05)** — détruisait **toutes** les shadow copies de l'hôte (autres outils, DC, SQL/Exchange). Le nettoyage ne cible plus que les shadows créées par Nimbus (via le dossier symlink VSS), en best-effort par ID ; le `/all` ne subsiste que dans la reprise d'urgence mid-backup. *(À vérifier sous Windows : la forme exacte `vssadmin /shadow=` ; pire cas si rejetée = l'orphelin reste, aucun dégât collatéral.)*
+- **Restore unitaire prouvé (v2-H-09)** — une restauration sélective qui ne matchait aucun chemin demandé renvoyait « terminé » avec 0 fichier. Elle échoue désormais si aucun chemin demandé (exact ou descendant) n'a été matché dans le snapshot (les dossiers ancêtres auto-créés ne comptent pas).
+
+### Changed
+- **Contrat de résultat à 4 niveaux (v2-H-02 / F-01)** — `verified_success` / `success_with_policy_exclusions` / `partial` / `failed`. Un fichier illisible ou **modifié pendant la lecture** (rétréci→zéro-paddé, ou **grossi→tronqué silencieusement**, désormais détecté) fait passer en `partial`, plus jamais « réussi ». Les auto-exclusions système attendues (pagefile, junctions) ne dégradent pas l'outcome. Les listes d'erreurs sont agrégées au niveau du run (plus de perte entre dossiers d'un bin — M-01).
+
+### Notes
+- Restent ouverts (audit v2) : durcissement destination restore (symlink parent / temp prévisible, v2-H-08), `RestoreReport` par chemin (F-03), politique d'erreurs configurable (F-05) ; et la vérification Windows du nettoyage VSS scopé.
+
 ## [0.2.97] - 2026-05-22
 
 Durcissement sécurité (Groupe 4 — 5 correctifs, 1 release).
