@@ -552,6 +552,37 @@ func (a *App) TestPBSConnection(pbsID string) error {
 	return a.TestConnection(legacyConfig)
 }
 
+// GetServerFingerprint connects to baseURL and returns the server certificate's
+// SHA-256 fingerprint (AA:BB:... uppercase) so the UI can offer trust-on-first-use
+// pinning when a self-signed PBS rejects CA validation (audit H-02). Discovery
+// only: no token is sent.
+func (a *App) GetServerFingerprint(baseURL string) (string, error) {
+	writeDebugLog(fmt.Sprintf("GetServerFingerprint(%s) called", security.SanitizeURL(baseURL)))
+	fp, err := pbscommon.FetchServerFingerprint(baseURL)
+	if err != nil {
+		writeDebugLog(fmt.Sprintf("GetServerFingerprint failed: %v", err))
+		return "", err
+	}
+	writeDebugLog(fmt.Sprintf("GetServerFingerprint discovered: %s", fp))
+	return fp, nil
+}
+
+// PinPBSServerFingerprint stores fingerprint on the PBS server identified by id,
+// resolving the secret server-side so the frontend (which never holds the token,
+// M-04) can pin a discovered fingerprint without round-tripping credentials.
+func (a *App) PinPBSServerFingerprint(id, fingerprint string) error {
+	writeDebugLog(fmt.Sprintf("PinPBSServerFingerprint(%s) called", id))
+	if err := security.ValidateFingerprint(fingerprint); err != nil {
+		return fmt.Errorf("empreinte certificat invalide: %w", err)
+	}
+	pbs, err := a.config.GetPBSServer(id)
+	if err != nil {
+		return err
+	}
+	pbs.CertFingerprint = fingerprint
+	return a.config.UpdatePBSServer(pbs)
+}
+
 // ==================== END MULTI-PBS MANAGEMENT ====================
 
 // StartBackup starts a backup operation (routes to service or direct based on mode)

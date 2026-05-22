@@ -7,6 +7,7 @@ let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshot
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
+let GetServerFingerprint, PinPBSServerFingerprint
 
 // Check if we're running in Wails
 if (window.go) {
@@ -39,6 +40,8 @@ if (window.go) {
   SetDefaultPBSServer = window.go.main.App.SetDefaultPBSServer
   GetDefaultPBSID = window.go.main.App.GetDefaultPBSID
   TestPBSConnection = window.go.main.App.TestPBSConnection
+  GetServerFingerprint = window.go.main.App.GetServerFingerprint
+  PinPBSServerFingerprint = window.go.main.App.PinPBSServerFingerprint
 }
 
 // Wails events
@@ -533,6 +536,11 @@ function App() {
     }
   }
 
+  // True when a connection failure is an unverified-certificate error (self-signed
+  // PBS with no fingerprint pinned). These are recoverable via trust-on-first-use.
+  const isCertError = (err) =>
+    /certificate signed by unknown authority|failed to verify certificate|x509/i.test(String(err))
+
   const handleTestPBSConnection = async (id) => {
     if (!TestPBSConnection) {
       showStatus('❌ Wails runtime non disponible', 'error')
@@ -545,6 +553,26 @@ function App() {
       setServerStatus(prev => ({ ...prev, [id]: 'online' }))
       showStatus(`✅ ${t('statusConnectionSuccess').replace('{id}', id)}`, 'success')
     } catch (err) {
+      const server = pbsServers.find(s => s.id === id)
+      // Self-signed cert + no fingerprint yet: offer to discover and pin it (TOFU).
+      if (isCertError(err) && server && !(server.certfingerprint || '').trim() &&
+          GetServerFingerprint && PinPBSServerFingerprint) {
+        try {
+          const fp = await GetServerFingerprint(server.baseurl)
+          if (window.confirm(t('tofuConfirm').replace('{host}', server.baseurl).replace('{fp}', fp))) {
+            await PinPBSServerFingerprint(id, fp)
+            await loadPBSServers()
+            await TestPBSConnection(id)
+            setServerStatus(prev => ({ ...prev, [id]: 'online' }))
+            showStatus(`✅ ${t('statusFingerprintPinned')}`, 'success')
+            return
+          }
+        } catch (fpErr) {
+          showStatus(`❌ ${t('statusFingerprintFailed')} ${fpErr}`, 'error')
+          setServerStatus(prev => ({ ...prev, [id]: 'offline' }))
+          return
+        }
+      }
       setServerStatus(prev => ({ ...prev, [id]: 'offline' }))
       showStatus(`❌ ${t('statusConnectionFailed')} ${err}`, 'error')
     }
@@ -605,22 +633,41 @@ function App() {
       return
     }
 
+    // Test with current form values (no need to save first). Declared outside the
+    // try so the TOFU retest in catch can reuse these already-normalized fields.
+    const testConfig = {
+      baseurl: (config.baseurl || '').trim(),
+      certfingerprint: (config.certfingerprint || '').trim(),
+      authid: (config.authid || '').trim(),
+      secret: (config.secret || '').trim(),
+      datastore: (config.datastore || '').trim(),
+      namespace: (config.namespace || '').trim(),
+      backupdir: (config.backupdir || '').trim(),
+      'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
+      usevss: config.usevss !== undefined ? config.usevss : true
+    }
+
     try {
-      // Test with current form values (no need to save first)
-      const testConfig = {
-        baseurl: (config.baseurl || '').trim(),
-        certfingerprint: (config.certfingerprint || '').trim(),
-        authid: (config.authid || '').trim(),
-        secret: (config.secret || '').trim(),
-        datastore: (config.datastore || '').trim(),
-        namespace: (config.namespace || '').trim(),
-        backupdir: (config.backupdir || '').trim(),
-        'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
-        usevss: config.usevss !== undefined ? config.usevss : true
-      }
       await TestConnection(testConfig)
       showStatus(`✅ ${t('statusConnectionOK')}`, 'success')
     } catch (err) {
+      // Self-signed cert + no fingerprint yet: discover, re-test pinned, fill the
+      // form so a Save persists it (legacy single-server config).
+      if (isCertError(err) && !(config.certfingerprint || '').trim() && GetServerFingerprint) {
+        try {
+          const fp = await GetServerFingerprint((config.baseurl || '').trim())
+          if (window.confirm(t('tofuConfirm').replace('{host}', config.baseurl).replace('{fp}', fp))) {
+            // Reuse the already-normalized testConfig (trimmed fields) for the pinned retest.
+            await TestConnection({ ...testConfig, certfingerprint: fp })
+            setConfig(prev => ({ ...prev, certfingerprint: fp }))
+            showStatus(`✅ ${t('statusFingerprintPinnedSave')}`, 'success')
+            return
+          }
+        } catch (fpErr) {
+          showStatus(`❌ ${t('statusFingerprintFailed')} ${fpErr}`, 'error')
+          return
+        }
+      }
       showStatus(`❌ ${err}`, 'error')
     }
   }

@@ -228,6 +228,43 @@ func (pbs *PBSClient) buildTLSConfig() *tls.Config {
 	}
 }
 
+// FetchServerFingerprint dials baseURL over TLS without verifying the chain and
+// returns the leaf certificate's SHA-256 fingerprint as colon-separated uppercase
+// hex pairs (AA:BB:...), the format PBS displays and ValidateFingerprint accepts.
+// Used for trust-on-first-use pinning when a server presents a self-signed
+// certificate and no fingerprint is configured yet (audit H-02 made CA validation
+// strict, so such servers now fail TestConnection with x509 unknown-authority).
+// It performs no authentication and sends no token — it only inspects the
+// certificate the server presents.
+func FetchServerFingerprint(baseURL string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	host := u.Host
+	if u.Port() == "" {
+		host = net.JoinHostPort(u.Hostname(), "8007")
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	// #nosec G402 -- intentionally unverified: we only read the presented cert to
+	// compute its fingerprint for the user to pin (TOFU); no data is exchanged.
+	conn, err := tls.DialWithDialer(dialer, "tcp", host, &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to reach server: %w", err)
+	}
+	defer conn.Close()
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "", fmt.Errorf("server presented no certificate")
+	}
+	sum := sha256.Sum256(certs[0].Raw)
+	pairs := make([]string, len(sum))
+	for i, b := range sum {
+		pairs[i] = fmt.Sprintf("%02X", b)
+	}
+	return strings.Join(pairs, ":"), nil
+}
+
 func (pbs *PBSClient) ListSnapshots() ([]BackupManifest, error) {
 	client := &http.Client{
 		Timeout:   10 * time.Second,
