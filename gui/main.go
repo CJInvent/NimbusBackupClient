@@ -695,6 +695,8 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		UseVSS:          useVSS,
 		Compression:     compression,
 		ExcludeList:     excludeList,
+		DisableSplit:    a.config.DisableSplit,
+		SplitSizeBytes:  a.config.SplitSizeBytes(),
 		OnProgress: func(percent float64, message string) {
 			writeDebugLog(fmt.Sprintf("Progress: %.1f%% - %s", percent*100, message))
 

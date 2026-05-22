@@ -72,6 +72,8 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		UseVSS:          useVSS,
 		Compression:     compression,
 		ExcludeList:     excludeList,
+		DisableSplit:    a.config.DisableSplit,
+		SplitSizeBytes:  a.config.SplitSizeBytes(),
 		OnProgress: func(percent float64, message string) {
 			writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", percent, message))
 		},

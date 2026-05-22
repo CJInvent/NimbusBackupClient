@@ -31,6 +31,11 @@ type Config struct {
 	BackupID       string   `json:"backup-id,omitempty"`
 	UseVSS         bool     `json:"usevss"`
 	LastBackupDirs []string `json:"last_backup_dirs,omitempty"` // Remember last used directories
+	// Auto-split settings. DisableSplit defaults to false (zero value) so existing
+	// configs keep auto-splitting. SplitSizeGB is both the split threshold and the
+	// per-bin target size; 0 means the default (DefaultSplitSizeGB).
+	DisableSplit bool `json:"disable_split,omitempty"`
+	SplitSizeGB  int  `json:"split_size_gb,omitempty"`
 
 	// ==================== EMAIL NOTIFICATIONS ====================
 	SMTPHost     string `json:"smtp_host,omitempty"`
@@ -39,6 +44,16 @@ type Config struct {
 	SMTPPassword string `json:"smtp_password,omitempty"`
 	EmailFrom    string `json:"email_from,omitempty"`
 	EmailTo      string `json:"email_to,omitempty"`
+}
+
+// SplitSizeBytes returns the configured auto-split threshold / per-bin target in
+// bytes, falling back to DefaultSplitSizeGB when SplitSizeGB is unset (<= 0).
+func (c *Config) SplitSizeBytes() uint64 {
+	gb := c.SplitSizeGB
+	if gb <= 0 {
+		gb = DefaultSplitSizeGB
+	}
+	return uint64(gb) * 1024 * 1024 * 1024
 }
 
 // getConfigDir returns the application's data directory, creating it if needed.

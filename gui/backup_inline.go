@@ -39,6 +39,8 @@ type BackupOptions struct {
 	UseVSS          bool
 	Compression     string   // Compression level: "fastest", "default", "better", "best"
 	ExcludeList     []string // User-configured exclusion patterns applied by the PXAR writer (H-04)
+	DisableSplit    bool     // When true, never auto-split regardless of size
+	SplitSizeBytes  uint64   // Auto-split threshold and per-bin target; 0 = default (SplitThreshold)
 	OnProgress      func(percent float64, message string)
 	OnComplete      func(success bool, message string)
 	// OnResult delivers the full structured result (Group 0 contract). It is
@@ -473,6 +475,14 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 	if err != nil {
 		writeBackupLog(fmt.Sprintf("[Auto-Split] Analysis failed: %v - continuing without split", err))
 	} else {
+		// Resolve the configured split threshold (also used as the per-bin target);
+		// 0 means the default. DisableSplit forces a single (non-split) backup.
+		splitThreshold := opts.SplitSizeBytes
+		if splitThreshold == 0 {
+			splitThreshold = SplitThreshold
+		}
+		analysis.ShouldSplit = !opts.DisableSplit && analysis.TotalSize > splitThreshold
+
 		writeBackupLog(fmt.Sprintf("[Auto-Split] Total size: %s, Should split: %v", FormatSize(analysis.TotalSize), analysis.ShouldSplit))
 
 		// Generate base backup-id (used for checking existing backups and creating splits)
@@ -483,7 +493,7 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 
 		if analysis.ShouldSplit {
 			// Create split jobs using bin-packing (groups small folders into ~100GB bins)
-			splitJobs := CreateSplitJobs(analysis, baseBackupID, hostname)
+			splitJobs := CreateSplitJobs(analysis, baseBackupID, hostname, splitThreshold)
 			writeBackupLog(fmt.Sprintf("[Auto-Split] Splitting into %d jobs", len(splitJobs)))
 
 			// Execute each split job sequentially

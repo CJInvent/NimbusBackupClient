@@ -11,11 +11,15 @@ import (
 )
 
 const (
-	// SplitThreshold: If total backup size > 100GB, split into bins
-	SplitThreshold = 100 * 1024 * 1024 * 1024 // 100 GB
+	// DefaultSplitSizeGB is the default auto-split threshold and per-bin target,
+	// in GB, used when the config does not override SplitSizeGB.
+	DefaultSplitSizeGB = 150
 
-	// BinTargetSize: Target size per bin for bin-packing (~100GB)
-	BinTargetSize = 100 * 1024 * 1024 * 1024 // 100 GB
+	// SplitThreshold: default total-size threshold above which a backup is split.
+	SplitThreshold = DefaultSplitSizeGB * 1024 * 1024 * 1024 // 150 GB
+
+	// BinTargetSize: default target size per bin for bin-packing.
+	BinTargetSize = DefaultSplitSizeGB * 1024 * 1024 * 1024 // 150 GB
 )
 
 // GenerateBackupID creates a backup-id from hostname and path
@@ -158,7 +162,10 @@ type SplitJob struct {
 //   - Remaining folders are packed into bins of ~BinTargetSize
 //   - Folders sorted largest-first for better packing
 //   - Bin IDs are stable (hash of folder names) for PBS dedup across runs
-func CreateSplitJobs(analysis *BackupAnalysis, baseBackupID string, hostname string) []SplitJob {
+func CreateSplitJobs(analysis *BackupAnalysis, baseBackupID string, hostname string, binSize uint64) []SplitJob {
+	if binSize == 0 {
+		binSize = BinTargetSize
+	}
 	if !analysis.ShouldSplit {
 		allFolders := make([]string, len(analysis.Folders))
 		for i, f := range analysis.Folders {
@@ -185,7 +192,7 @@ func CreateSplitJobs(analysis *BackupAnalysis, baseBackupID string, hostname str
 	var packable []FolderInfo
 
 	for _, folder := range analysis.Folders {
-		if folder.Size > BinTargetSize || folder.AccessDenied {
+		if folder.Size > binSize || folder.AccessDenied {
 			soloFolders = append(soloFolders, folder)
 		} else {
 			packable = append(packable, folder)
@@ -225,7 +232,7 @@ func CreateSplitJobs(analysis *BackupAnalysis, baseBackupID string, hostname str
 	}
 
 	// Bin-pack remaining folders (first-fit decreasing, already sorted largest first)
-	bins := binPackFolders(packable, BinTargetSize)
+	bins := binPackFolders(packable, binSize)
 
 	for i, bin := range bins {
 		folders := make([]string, len(bin))

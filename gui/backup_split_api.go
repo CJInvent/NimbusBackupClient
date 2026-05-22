@@ -5,6 +5,29 @@ import (
 	"os"
 )
 
+// applyConfiguredSplit overrides analysis.ShouldSplit / SuggestedJobs using the
+// configured policy (SplitSizeGB threshold + DisableSplit) — the SAME policy
+// RunBackupInline applies — so the split preview/plan matches what a real backup
+// will do. Returns the effective bin size for CreateSplitJobs.
+func (a *App) applyConfiguredSplit(analysis *BackupAnalysis) uint64 {
+	binSize := uint64(DefaultSplitSizeGB) * 1024 * 1024 * 1024
+	disable := false
+	if a.config != nil {
+		binSize = a.config.SplitSizeBytes()
+		disable = a.config.DisableSplit
+	}
+	analysis.ShouldSplit = !disable && analysis.TotalSize > binSize
+	if analysis.ShouldSplit {
+		analysis.SuggestedJobs = int((analysis.TotalSize + binSize - 1) / binSize)
+		if analysis.SuggestedJobs < 2 {
+			analysis.SuggestedJobs = 2
+		}
+	} else {
+		analysis.SuggestedJobs = 1
+	}
+	return binSize
+}
+
 // AnalyzeBackup analyzes backup directories and determines if split is needed
 // Returns analysis with total size, folder breakdown, and split recommendation
 func (a *App) AnalyzeBackup(backupDirs []string) (map[string]interface{}, error) {
@@ -15,6 +38,7 @@ func (a *App) AnalyzeBackup(backupDirs []string) (map[string]interface{}, error)
 		writeBackupLog(fmt.Sprintf("AnalyzeBackup failed: %v", err))
 		return nil, err
 	}
+	binSize := a.applyConfiguredSplit(analysis)
 
 	// Convert to map for JSON serialization to frontend
 	result := map[string]interface{}{
@@ -22,7 +46,7 @@ func (a *App) AnalyzeBackup(backupDirs []string) (map[string]interface{}, error)
 		"total_size_fmt":  FormatSize(analysis.TotalSize),
 		"should_split":    analysis.ShouldSplit,
 		"suggested_jobs":  analysis.SuggestedJobs,
-		"split_threshold": SplitThreshold,
+		"split_threshold": binSize,
 		"folders":         make([]map[string]interface{}, len(analysis.Folders)),
 	}
 
@@ -55,7 +79,8 @@ func (a *App) CreateBackupSplitPlan(backupDirs []string, backupID string) ([]map
 	if hostname == "" {
 		hostname = "unknown"
 	}
-	splitJobs := CreateSplitJobs(analysis, backupID, hostname)
+	binSize := a.applyConfiguredSplit(analysis)
+	splitJobs := CreateSplitJobs(analysis, backupID, hostname, binSize)
 
 	// Convert to map array for JSON
 	result := make([]map[string]interface{}, len(splitJobs))
