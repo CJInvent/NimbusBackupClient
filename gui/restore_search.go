@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"pbscommon"
 )
 
 // maxSearchHits caps how many matches we collect before stopping, so a loose
@@ -228,25 +226,16 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 			fromCache = true
 			result.SnapshotsSearched++
 		} else if opts.AssembleMissing {
-			werr := withSnapshotReader(ropts, "", "Search", nil, func(reader *pbscommon.PXARReader) error {
-				es, lerr := reader.ListEntries()
-				if lerr != nil {
-					return lerr
-				}
-				entries = make([]SnapshotEntry, 0, len(es))
-				for _, e := range es {
-					entries = append(entries, SnapshotEntry{Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime})
-				}
-				meta = tryReadBackupMeta(reader)
-				if serr := saveSnapshotTreeCache(cacheKey, entries, meta); serr != nil {
-					writeBackupLog(fmt.Sprintf("Search: cache write failed for %s: %v", tg.backupID, serr))
-				}
-				return nil
-			})
-			if werr != nil {
-				writeBackupLog(fmt.Sprintf("Search: assemble %s@%d failed: %v", tg.backupID, tg.at.Unix(), werr))
+			es, m, aerr := assembleSnapshotTree(ropts, "backup.pxar.didx", "Search")
+			if aerr != nil {
+				writeBackupLog(fmt.Sprintf("Search: assemble %s@%d failed: %v", tg.backupID, tg.at.Unix(), aerr))
 				result.SnapshotsSkipped++
 				continue
+			}
+			entries = es
+			meta = m
+			if serr := saveSnapshotTreeCache(cacheKey, entries, meta); serr != nil {
+				writeBackupLog(fmt.Sprintf("Search: cache write failed for %s: %v", tg.backupID, serr))
 			}
 			result.SnapshotsSearched++
 			result.SnapshotsAssembled++
