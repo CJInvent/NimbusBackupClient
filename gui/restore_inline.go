@@ -616,6 +616,36 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 
 	progress(1.0, "Restore completed")
 
+	// v2-H-09: a selective restore is a success only if at least one REQUESTED path
+	// (the include itself or a descendant) was actually present in the snapshot.
+	// Ancestor directories are auto-created for context and must NOT count, otherwise
+	// a stale/mis-cased leaf under existing folders would falsely report success with
+	// the file never materialized. We map each include to its destination via the
+	// same rewriter used for extraction and look for an exact or descendant hit among
+	// the extracted entries (skipped-but-present entries count — the path existed).
+	// A full per-path RestoreReport is the F-03 follow-up.
+	if includes := pbscommon.NormalizeIncludes(opts.IncludePaths); len(includes) > 0 {
+		matched := false
+		for _, inc := range includes {
+			want := rewriter(inc)
+			if want == "" {
+				continue
+			}
+			for _, f := range extracted {
+				if f.Path == want || strings.HasPrefix(f.Path, want+string(os.PathSeparator)) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("restore matched no files for the requested path(s): %s",
+				strings.Join(opts.IncludePaths, ", "))
+		}
+	}
 	if skipCount > 0 {
 		return fmt.Errorf("restore completed with %d skipped files (see logs)", skipCount)
 	}
