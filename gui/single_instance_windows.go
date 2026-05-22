@@ -84,8 +84,10 @@ func activateExistingWindow() bool {
 	)
 
 	if hwnd == 0 {
-		// Try with version suffix (e.g., "Nimbus Backup v0.1.95")
-		for _, suffix := range []string{" v0.1.95", " v0.1.94", " v0.1.93"} {
+		// Try with the current version suffix (Wails titles the window
+		// "Nimbus Backup v<appVersion>"). Derived from appVersion so it never
+		// goes stale across releases.
+		for _, suffix := range []string{" v" + appVersion} {
 			titleWithVersion := windowName + suffix
 			titlePtr, _ := syscall.UTF16PtrFromString(titleWithVersion)
 			hwnd, _, _ = procFindWindow.Call(

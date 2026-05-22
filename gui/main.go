@@ -582,12 +582,30 @@ func (a *App) pollBackupProgress(jobID string) {
 	ticker := time.NewTicker(3 * time.Second) // Poll every 3 seconds
 	defer ticker.Stop()
 
+	// Without a bound, a permanently-404ing job (evicted/collided entry, or a
+	// service restart that dropped the progress map) would poll forever. Give up
+	// after a run of consecutive failures so the goroutine can't leak.
+	consecutiveErrors := 0
+	const maxConsecutiveErrors = 20 // ~60s at 3s interval
+
 	for range ticker.C {
 		progress, err := a.apiClient.GetBackupStatus(jobID)
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("[Service Mode] Failed to get progress: %v", err))
+			consecutiveErrors++
+			writeDebugLog(fmt.Sprintf("[Service Mode] Failed to get progress (%d/%d): %v", consecutiveErrors, maxConsecutiveErrors, err))
+			if consecutiveErrors >= maxConsecutiveErrors {
+				writeDebugLog("[Service Mode] Giving up polling after repeated failures")
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "backup:complete", map[string]interface{}{
+						"success": false,
+						"message": "Lost contact with backup service (status unavailable)",
+					})
+				}
+				return
+			}
 			continue
 		}
+		consecutiveErrors = 0
 
 		// Emit progress event to GUI
 		if a.ctx != nil && progress.Running {

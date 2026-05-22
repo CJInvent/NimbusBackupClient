@@ -7,8 +7,14 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// jobIDSeq guarantees unique job IDs even when two backups start in the same
+// second — time.Now().Unix() alone collides (especially on Windows' coarse
+// clock), which would make two jobs share one progress entry.
+var jobIDSeq atomic.Uint64
 
 // Server handles HTTP API requests from the GUI
 type Server struct {
@@ -103,7 +109,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start backup asynchronously (don't block HTTP request)
-	jobID := fmt.Sprintf("backup-%d", time.Now().Unix())
+	jobID := fmt.Sprintf("backup-%d-%d", time.Now().Unix(), jobIDSeq.Add(1))
 
 	// Initialize progress tracking
 	s.progressMutex.Lock()
