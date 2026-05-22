@@ -596,13 +596,20 @@ func (a *App) executeScheduledJob(job ScheduledJob) {
 		compression,
 	)
 
-	// Add history entry
+	// Add history entry derived from the REAL outcome. In service mode StartBackup
+	// runs synchronously (app_service_stubs.go returns RunBackupInline's error), so
+	// err here reflects the finished backup: nil = success, non-nil = partial/failed.
+	// NOTE: in GUI-standalone mode StartBackup is still fire-and-forget (the backup
+	// runs in a goroutine and its error is not awaited here), so err is nil at this
+	// point; the honest standalone history is recorded by startBackupDirect's
+	// OnComplete instead. Making the standalone path awaitable belongs to the
+	// service/GUI unification (Group 5).
 	historyEntry := JobHistory{
 		ID:         fmt.Sprintf("%d", startTime.Unix()),
 		Name:       job.Name,
 		Timestamp:  time.Now().Format(time.RFC3339),
 		Status:     "success",
-		Message:    "Backup started",
+		Message:    "Backup terminé",
 		BackupDirs: job.BackupDirs,
 		BackupID:   job.BackupID,
 		UseVSS:     job.UseVSS,

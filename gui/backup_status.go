@@ -1,0 +1,90 @@
+package main
+
+// Backup result + live-progress types shared across the backup engine, the GUI,
+// the local API and the scheduler. BackupStatus is the single source of truth for
+// "what happened in a backup run": it is (a) returned by the engine, (b) carried to
+// the OnResult callback, and (c) (Group 1) serialized into the sidecar blob/manifest.
+//
+// Keeping one struct here avoids designing it twice for the result contract and the
+// sidecar. The ExcludedByPolicy and Corrupted buckets are defined now but stay empty
+// until Group 1 (user exclusions H-04 and mode-B corruption) fills them.
+
+// BackupOutcome is the three-state result of a backup run.
+type BackupOutcome string
+
+const (
+	// OutcomeSuccess means every selected directory committed and no chunk failed.
+	OutcomeSuccess BackupOutcome = "success"
+	// OutcomePartial means at least one directory committed but at least one
+	// directory failed (the snapshot set is usable but incomplete).
+	OutcomePartial BackupOutcome = "partial"
+	// OutcomeFailed means nothing usable was produced (fatal error, no directory
+	// committed, or a chunk upload failure that makes a committed index corrupt).
+	OutcomeFailed BackupOutcome = "failed"
+)
+
+// FileIssue records one file that was excluded, skipped or corrupted, with the reason.
+type FileIssue struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// DirResult records the outcome of one selected backup directory.
+type DirResult struct {
+	Path  string `json:"path"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// BackupStatus is the authoritative description of a finished backup run.
+type BackupStatus struct {
+	Outcome      BackupOutcome `json:"outcome"`
+	BackupID     string        `json:"backup_id"`
+	BackupTime   int64         `json:"backup_time"`
+	DurationSec  float64       `json:"duration_sec"`
+	TotalBytes   uint64        `json:"total_bytes"`
+	NewChunks    uint64        `json:"new_chunks"`
+	ReusedChunks uint64        `json:"reused_chunks"`
+	FailedChunks uint64        `json:"failed_chunks"`
+	Directories  []DirResult   `json:"directories"`
+
+	// Three buckets of files that did not make it into the backup intact.
+	// ExcludedByPolicy and Corrupted are populated in Group 1; SkippedReadError
+	// comes from the existing PBSClient.SkippedFiles list today.
+	ExcludedByPolicy []FileIssue `json:"excluded_by_policy,omitempty"`
+	SkippedReadError []FileIssue `json:"skipped_read_error,omitempty"`
+	Corrupted        []FileIssue `json:"corrupted,omitempty"`
+
+	// Message is the human-readable summary already shown in logs and the UI.
+	Message string `json:"message"`
+}
+
+// Success reports whether the run fully succeeded.
+func (s *BackupStatus) Success() bool { return s != nil && s.Outcome == OutcomeSuccess }
+
+// skippedToIssues wraps the engine's free-form SkippedFiles descriptions into the
+// FileIssue bucket. The descriptions already embed the reason; Group 1 will record
+// these with a clean path/reason split at the source (pxar.go).
+func skippedToIssues(skipped []string) []FileIssue {
+	if len(skipped) == 0 {
+		return nil
+	}
+	issues := make([]FileIssue, 0, len(skipped))
+	for _, s := range skipped {
+		issues = append(issues, FileIssue{Reason: s})
+	}
+	return issues
+}
+
+// BackupProgressStats is a structured snapshot of in-flight backup progress so the
+// GUI can render real statistics instead of parsing them out of a log string.
+type BackupProgressStats struct {
+	Percent      float64 `json:"percent"` // 0.0 - 1.0
+	BytesDone    uint64  `json:"bytes_done"`
+	BytesTotal   uint64  `json:"bytes_total"` // 0 when the background size scan has not finished
+	NewChunks    uint64  `json:"new_chunks"`
+	ReusedChunks uint64  `json:"reused_chunks"`
+	FailedChunks uint64  `json:"failed_chunks"`
+	CurrentDir   string  `json:"current_dir,omitempty"`
+	Message      string  `json:"message"`
+}

@@ -39,6 +39,13 @@ type BackupOptions struct {
 	Compression     string   // Compression level: "fastest", "default", "better", "best"
 	OnProgress      func(percent float64, message string)
 	OnComplete      func(success bool, message string)
+	// OnResult delivers the full structured result (Group 0 contract). It is
+	// additive: OnComplete keeps firing with the success bool for existing
+	// consumers. OnResult is the source the sidecar (Group 1) and rich history read.
+	OnResult func(*BackupStatus)
+	// OnStats delivers structured live progress so the GUI can show real
+	// statistics instead of parsing them out of the progress message string.
+	OnStats func(*BackupProgressStats)
 }
 
 var didxMagic = []byte{28, 145, 78, 165, 25, 186, 179, 205}
@@ -124,6 +131,8 @@ type ChunkState struct {
 	failedchunk         *atomic.Uint64     // Track failed chunk uploads
 	knownChunks         *hashmap.Map[string, bool]
 	onProgress          func(float64, string)
+	onStats             func(*BackupProgressStats) // Structured live stats for the GUI (nil for the catalog stream)
+	currentDir          string                     // Directory currently being archived, for the stats payload
 	lastProgressReport  uint64
 	lastProgressPercent float64            // Track last reported percentage to prevent backwards progress
 	totalSize           *atomic.Uint64     // Total size, updated by background scan
@@ -136,7 +145,7 @@ type DidxEntry struct {
 	digest []byte
 }
 
-func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, failedchunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool], onProgress func(float64, string), totalSize *atomic.Uint64) {
+func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, failedchunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool], onProgress func(float64, string), totalSize *atomic.Uint64, onStats func(*BackupProgressStats), currentDir string) {
 	c.assignments = make([]string, 0)
 	c.assignmentsOffset = make([]uint64, 0)
 	c.pos = 0
@@ -153,6 +162,8 @@ func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, fa
 	c.failedchunk = failedchunk
 	c.knownChunks = knownChunks
 	c.onProgress = onProgress
+	c.onStats = onStats
+	c.currentDir = currentDir
 	c.lastProgressReport = 0
 	c.lastProgressPercent = 0.0
 	c.totalSize = totalSize
@@ -271,6 +282,20 @@ func (c *ChunkState) HandleData(b []byte, client *pbscommon.PBSClient) error {
 				c.lastProgressPercent = progress
 
 				c.onProgress(progress, msg)
+
+				// Structured live stats for the GUI (same cadence as the message).
+				if c.onStats != nil {
+					c.onStats(&BackupProgressStats{
+						Percent:      progress,
+						BytesDone:    c.pos,
+						BytesTotal:   totalSize,
+						NewChunks:    c.newchunk.Load(),
+						ReusedChunks: c.reusechunk.Load(),
+						FailedChunks: failed,
+						CurrentDir:   c.currentDir,
+						Message:      msg,
+					})
+				}
 			}
 
 			c.currentChunk = make([]byte, 0)
@@ -568,6 +593,14 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			if opts.OnComplete != nil {
 				opts.OnComplete(false, errMsg)
 			}
+			if opts.OnResult != nil {
+				opts.OnResult(&BackupStatus{
+					Outcome:     OutcomeFailed,
+					BackupID:    opts.BackupID,
+					DurationSec: time.Since(startTime).Seconds(),
+					Message:     errMsg,
+				})
+			}
 			return fmt.Errorf("%s", errMsg)
 		}
 	}
@@ -613,6 +646,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	var failedchunk atomic.Uint64
 	var totalSize atomic.Uint64
 	var dirErrors []string
+	var dirResults []DirResult
 	successfulDirs := 0
 
 	// Retry policy for session-lost failures: PBS keeps the BackupGroup lock until
@@ -630,7 +664,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		// PBS dedupes chunks, so retrying is cheap for the already-uploaded data.
 		var err error
 		for attempt := 1; attempt <= maxDirAttempts; attempt++ {
-			err = backupDirectory(client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress)
+			err = backupDirectory(client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats)
 			if err == nil {
 				break
 			}
@@ -666,6 +700,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			errMsg := fmt.Sprintf("Backup failed for %s: %v", dir, err)
 			writeBackupLog(errMsg)
 			dirErrors = append(dirErrors, errMsg)
+			dirResults = append(dirResults, DirResult{Path: dir, OK: false, Error: err.Error()})
 			continue // Don't abort — try remaining directories
 		}
 
@@ -681,9 +716,11 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			errMsg := fmt.Sprintf("Failed to finalize backup for %s: %v", dir, finishErr)
 			writeBackupLog(errMsg)
 			dirErrors = append(dirErrors, errMsg)
+			dirResults = append(dirResults, DirResult{Path: dir, OK: false, Error: finishErr.Error()})
 			continue
 		}
 		writeBackupLog(fmt.Sprintf("Directory %d/%d finalized: %s", idx+1, len(opts.BackupDirs), dir))
+		dirResults = append(dirResults, DirResult{Path: dir, OK: true})
 		successfulDirs++
 	}
 
@@ -691,8 +728,24 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	if successfulDirs == 0 {
 		errMsg := fmt.Sprintf("All %d directories failed:\n%s", len(opts.BackupDirs), strings.Join(dirErrors, "\n"))
 		writeBackupLog(errMsg)
+		status := &BackupStatus{
+			Outcome:          OutcomeFailed,
+			BackupID:         opts.BackupID,
+			BackupTime:       client.Manifest.BackupTime,
+			DurationSec:      time.Since(startTime).Seconds(),
+			TotalBytes:       totalSize.Load(),
+			NewChunks:        newchunk.Load(),
+			ReusedChunks:     reusechunk.Load(),
+			FailedChunks:     failedchunk.Load(),
+			Directories:      dirResults,
+			SkippedReadError: skippedToIssues(client.SkippedFiles),
+			Message:          errMsg,
+		}
 		if opts.OnComplete != nil {
 			opts.OnComplete(false, errMsg)
+		}
+		if opts.OnResult != nil {
+			opts.OnResult(status)
 		}
 		return fmt.Errorf("%s", errMsg)
 	}
@@ -742,19 +795,53 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 
 	writeBackupLog(completionMsg)
 
-	// Report failure if any directory failed (partial) OR any chunk upload failed.
-	// A snapshot that references chunks which never uploaded is corrupt and
-	// unrestorable, so it must NOT be reported as a successful backup. The
-	// completionMsg carries both the successes and the failures for the UI.
-	success := !partial && failed == 0
-	if opts.OnComplete != nil {
-		opts.OnComplete(success, completionMsg)
+	// Determine the authoritative outcome. A failed chunk upload makes a committed
+	// index reference a chunk that never uploaded → corrupt/unrestorable, so it is
+	// "failed" (worse than partial). Partial = some directories committed and some
+	// failed. The completionMsg carries the human-readable detail for the UI.
+	var outcome BackupOutcome
+	switch {
+	case failed > 0:
+		outcome = OutcomeFailed
+	case partial:
+		outcome = OutcomePartial
+	default:
+		outcome = OutcomeSuccess
 	}
 
+	status := &BackupStatus{
+		Outcome:          outcome,
+		BackupID:         opts.BackupID,
+		BackupTime:       client.Manifest.BackupTime,
+		DurationSec:      duration.Seconds(),
+		TotalBytes:       totalSize.Load(),
+		NewChunks:        newchunk.Load(),
+		ReusedChunks:     reusechunk.Load(),
+		FailedChunks:     failed,
+		Directories:      dirResults,
+		SkippedReadError: skippedToIssues(client.SkippedFiles),
+		Message:          completionMsg,
+	}
+
+	// Additive (choice A): OnComplete keeps its (success, message) contract for
+	// existing consumers; OnResult carries the full structured status for the
+	// sidecar (Group 1) and rich history.
+	if opts.OnComplete != nil {
+		opts.OnComplete(status.Success(), completionMsg)
+	}
+	if opts.OnResult != nil {
+		opts.OnResult(status)
+	}
+
+	// Contract (Group 0 / audit H-03): a partial or failed backup must NOT return a
+	// nil error, otherwise the API fallback and the scheduler record it as success.
+	if outcome != OutcomeSuccess {
+		return fmt.Errorf("%s", completionMsg)
+	}
 	return nil
 }
 
-func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string)) error {
+func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats)) error {
 	writeBackupLog(fmt.Sprintf("Starting backup of %s", backupdir))
 	originalPath := backupdir
 
@@ -844,10 +931,10 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 	writeBackupLog(fmt.Sprintf("Known chunks: %d", knownChunks.Len()))
 
 	pxarChunk := ChunkState{}
-	pxarChunk.Init(newchunk, reusechunk, failedchunk, knownChunks, progress, totalSize)
+	pxarChunk.Init(newchunk, reusechunk, failedchunk, knownChunks, progress, totalSize, onStats, backupdir)
 
 	pcat1Chunk := ChunkState{}
-	pcat1Chunk.Init(newchunk, reusechunk, failedchunk, knownChunks, nil, totalSize)
+	pcat1Chunk.Init(newchunk, reusechunk, failedchunk, knownChunks, nil, totalSize, nil, "")
 
 	pxarChunk.wrid, err = client.CreateDynamicIndex(archive.ArchiveName)
 	if err != nil {

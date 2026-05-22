@@ -101,7 +101,14 @@ function App() {
     lastUpdate: null,
     lastPercent: 0,
     speed: 0,
-    eta: null
+    eta: null,
+    // Structured live stats (from the backup:stats event)
+    bytesDone: 0,
+    bytesTotal: 0,
+    newChunks: 0,
+    reusedChunks: 0,
+    failedChunks: 0,
+    currentDir: ''
   })
   const [status, setStatus] = useState({ message: '', type: '', visible: false })
 
@@ -214,6 +221,7 @@ function App() {
         }
 
         return {
+          ...prev, // preserve structured stats (bytes/chunks) set by backup:stats
           startTime,
           lastUpdate: now,
           lastPercent: percent,
@@ -223,9 +231,22 @@ function App() {
       })
     })
 
+    // Structured live statistics (bytes + chunk counts) emitted alongside progress.
+    const unsubStats = EventsOn('backup:stats', (data) => {
+      setBackupStats(prev => ({
+        ...prev,
+        bytesDone: data.bytesDone || 0,
+        bytesTotal: data.bytesTotal || 0,
+        newChunks: data.newChunks || 0,
+        reusedChunks: data.reusedChunks || 0,
+        failedChunks: data.failedChunks || 0,
+        currentDir: data.currentDir || ''
+      }))
+    })
+
     const unsubComplete = EventsOn('backup:complete', (data) => {
       setProgress(data.success ? 100 : 0)
-      setBackupStats({ startTime: null, lastUpdate: null, lastPercent: 0, speed: 0, eta: null })
+      setBackupStats({ startTime: null, lastUpdate: null, lastPercent: 0, speed: 0, eta: null, bytesDone: 0, bytesTotal: 0, newChunks: 0, reusedChunks: 0, failedChunks: 0, currentDir: '' })
       showStatus(data.success ? '✅ ' + data.message : '❌ ' + data.message, data.success ? 'success' : 'error')
 
       // Add to job history
@@ -244,6 +265,7 @@ function App() {
 
     return () => {
       if (unsubProgress) unsubProgress()
+      if (unsubStats) unsubStats()
       if (unsubComplete) unsubComplete()
     }
   }, [])
@@ -1792,6 +1814,25 @@ function App() {
                 {backupStats.startTime && (
                   <div style={{fontSize: '13px', color: '#495057'}}>
                     ⏰ <strong>{t('elapsedTime')}</strong> {Math.floor((Date.now() - backupStats.startTime) / 1000)}s
+                  </div>
+                )}
+                {backupStats.bytesDone > 0 && (
+                  <div style={{fontSize: '13px', color: '#495057'}}>
+                    📦 <strong>Données :</strong> {Math.round(backupStats.bytesDone / 1048576)}
+                    {backupStats.bytesTotal > 0 ? ` / ${Math.round(backupStats.bytesTotal / 1048576)}` : ''} MB
+                  </div>
+                )}
+                {(backupStats.newChunks > 0 || backupStats.reusedChunks > 0) && (
+                  <div style={{fontSize: '13px', color: '#495057'}}>
+                    🧩 <strong>Chunks :</strong> {backupStats.newChunks} new · {backupStats.reusedChunks} reused
+                    {backupStats.failedChunks > 0 ? (
+                      <span style={{color: '#c0392b', fontWeight: 'bold'}}> · {backupStats.failedChunks} échoués</span>
+                    ) : ''}
+                  </div>
+                )}
+                {backupStats.currentDir && (
+                  <div style={{fontSize: '13px', color: '#495057', gridColumn: '1 / -1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                    📁 <strong>Dossier :</strong> {backupStats.currentDir}
                   </div>
                 )}
               </div>

@@ -794,6 +794,39 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		},
 	}
 
+	// Structured live stats + final structured result for the GUI (standalone mode).
+	// In the service process there is no Wails runtime, and the service-mode stats
+	// bridge is a separate backlog item (service-mode progress), so we only emit here.
+	opts.OnStats = func(stats *BackupProgressStats) {
+		if a.isServiceProcess || a.ctx == nil {
+			return
+		}
+		runtime.EventsEmit(a.ctx, "backup:stats", map[string]interface{}{
+			"percent":      stats.Percent * 100,
+			"bytesDone":    stats.BytesDone,
+			"bytesTotal":   stats.BytesTotal,
+			"newChunks":    stats.NewChunks,
+			"reusedChunks": stats.ReusedChunks,
+			"failedChunks": stats.FailedChunks,
+			"currentDir":   stats.CurrentDir,
+			"message":      stats.Message,
+		})
+	}
+	opts.OnResult = func(status *BackupStatus) {
+		if a.isServiceProcess || a.ctx == nil {
+			return
+		}
+		runtime.EventsEmit(a.ctx, "backup:result", map[string]interface{}{
+			"outcome":      string(status.Outcome),
+			"newChunks":    status.NewChunks,
+			"reusedChunks": status.ReusedChunks,
+			"failedChunks": status.FailedChunks,
+			"totalBytes":   status.TotalBytes,
+			"durationSec":  status.DurationSec,
+			"skippedCount": len(status.SkippedReadError),
+		})
+	}
+
 	// Run backup inline (in background goroutine to not block UI)
 	go func() {
 		// Machine backup disabled for now - Windows Defender flags it
