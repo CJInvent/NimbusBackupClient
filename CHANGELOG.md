@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.102] - 2026-05-22
+
+### Fixed
+- **Écritures d'état atomiques (M-03)** — `scheduled_jobs.json` / `job_history.json` / `config.json` étaient écrits par un `os.WriteFile` (truncate+write) : un crash ou une coupure en cours d'écriture laissait un fichier tronqué/à moitié écrit, illisible au démarrage suivant (perte des jobs/de l'historique). Désormais via fichier temporaire + `fsync` + `rename` atomique. *(La sérialisation des écritures concurrentes GUI+service — lost-update — reste un correctif séparé.)*
+
+### Added
+- **Logs de diagnostic backup** — suite à un rapport client où le log s'arrêtait à « Validating backup options » sans raison : la validation logue maintenant la cible PBS résolue (hôte/datastore/namespace/authid, **présence** du secret seulement — jamais le secret) et **nomme le(s) paramètre(s) manquant(s)** en cas d'échec ; une ligne `[RESULT] outcome=… dirs_ok=… new/reused/failed … read_errors/excluded … bytes …` clôt chaque run (greppable par le support).
+
 ## [0.2.101] - 2026-05-22
 
 ### Fixed
