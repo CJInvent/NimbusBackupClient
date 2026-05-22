@@ -723,11 +723,17 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 
 			// Calculate the SHA-256 fingerprint of the certificate
 			expectedFingerprint := strings.ReplaceAll(pbs.CertFingerPrint, ":", "")
-			calculatedFingerprint := sha256.Sum256(peerCert.Raw)
+			sum := sha256.Sum256(peerCert.Raw)
+			calculatedFingerprint := hex.EncodeToString(sum[:])
 
-			// Compare the calculated fingerprint with the expected one
-			if hex.EncodeToString(calculatedFingerprint[:]) != expectedFingerprint && !pbs.Insecure {
-				return fmt.Errorf("certificate fingerprint does not match (%s,%s)", expectedFingerprint, hex.EncodeToString(calculatedFingerprint[:]))
+			// Enforce the pin. This callback only runs when a fingerprint is
+			// configured (pbs.Insecure), and InsecureSkipVerify already disabled
+			// CA validation, so a fingerprint mismatch MUST be a hard failure —
+			// it is the only thing standing between us and accepting any cert.
+			// The previous `&& !pbs.Insecure` guard was always false here, which
+			// silently disabled the check and accepted ANY certificate (MITM).
+			if !strings.EqualFold(calculatedFingerprint, expectedFingerprint) {
+				return fmt.Errorf("certificate fingerprint does not match (expected %s, got %s)", expectedFingerprint, calculatedFingerprint)
 			}
 
 			// If the fingerprint matches, the certificate is considered valid
