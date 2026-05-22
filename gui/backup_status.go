@@ -33,13 +33,17 @@ type BackupSidecar struct {
 type BackupOutcome string
 
 const (
-	// OutcomeSuccess means every selected directory committed and no chunk failed.
-	OutcomeSuccess BackupOutcome = "success"
-	// OutcomePartial means at least one directory committed but at least one
-	// directory failed (the snapshot set is usable but incomplete).
+	// OutcomeVerifiedSuccess: every selected directory committed, no chunk failed,
+	// and no file was unreadable / changed during read / excluded — fully complete.
+	OutcomeVerifiedSuccess BackupOutcome = "verified_success"
+	// OutcomeSuccessWithExclusions: complete except for files the user deliberately
+	// excluded by policy. Still a success (the absences are expected).
+	OutcomeSuccessWithExclusions BackupOutcome = "success_with_policy_exclusions"
+	// OutcomePartial: usable but incomplete — at least one directory failed, or some
+	// files could not be read / changed during read (NOT verified, not policy-excluded).
 	OutcomePartial BackupOutcome = "partial"
-	// OutcomeFailed means nothing usable was produced (fatal error, no directory
-	// committed, or a chunk upload failure that makes a committed index corrupt).
+	// OutcomeFailed: nothing usable was produced (fatal error, no directory
+	// committed, or a chunk upload failure that would make a committed index corrupt).
 	OutcomeFailed BackupOutcome = "failed"
 )
 
@@ -79,8 +83,11 @@ type BackupStatus struct {
 	Message string `json:"message"`
 }
 
-// Success reports whether the run fully succeeded.
-func (s *BackupStatus) Success() bool { return s != nil && s.Outcome == OutcomeSuccess }
+// Success reports whether the run reached a success level — fully verified, or
+// complete except for deliberate policy exclusions. Partial and failed are not.
+func (s *BackupStatus) Success() bool {
+	return s != nil && (s.Outcome == OutcomeVerifiedSuccess || s.Outcome == OutcomeSuccessWithExclusions)
+}
 
 // skippedToIssues wraps the engine's free-form SkippedFiles descriptions into the
 // FileIssue bucket. The descriptions already embed the reason; Group 1 will record

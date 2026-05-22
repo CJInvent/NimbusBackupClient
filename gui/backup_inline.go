@@ -555,18 +555,27 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 	// finalize (and, in API mode, tear down) the job before the rest ran — losing
 	// later folders' status and breaking the honest-result contract. Live progress
 	// (OnProgress/OnStats) still flows per folder.
+	rank := func(o BackupOutcome) int {
+		switch o {
+		case OutcomeFailed:
+			return 0
+		case OutcomePartial:
+			return 1
+		case OutcomeSuccessWithExclusions:
+			return 2
+		default: // OutcomeVerifiedSuccess
+			return 3
+		}
+	}
 	worst := func(a, b BackupOutcome) BackupOutcome {
-		if a == OutcomeFailed || b == OutcomeFailed {
-			return OutcomeFailed
+		if rank(a) <= rank(b) {
+			return a
 		}
-		if a == OutcomePartial || b == OutcomePartial {
-			return OutcomePartial
-		}
-		return OutcomeSuccess
+		return b
 	}
 
 	aggStart := time.Now()
-	agg := &BackupStatus{Outcome: OutcomeSuccess, BackupID: opts.BackupID, BackupTime: aggStart.Unix()}
+	agg := &BackupStatus{Outcome: OutcomeVerifiedSuccess, BackupID: opts.BackupID, BackupTime: aggStart.Unix()}
 	var perDirErrors []string
 
 	// Each folder gets a distinct backup-id DERIVED FROM the base id (the caller's
@@ -755,6 +764,12 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	var totalSize atomic.Uint64
 	var dirErrors []string
 	var dirResults []DirResult
+	// Run-level accumulators: client.{ReadErrors,SkippedFiles,ExcludedFiles} are
+	// reset by each directory's Connect(), so we capture them per directory before
+	// the next one wipes them — otherwise a read error in an earlier folder of a
+	// multi-folder run / split bin is lost and the run can falsely report
+	// verified_success (v2-H-02 / M-01).
+	var allReadErrors, allSkipped, allExcluded []string
 	successfulDirs := 0
 
 	// Retry policy for session-lost failures: PBS keeps the BackupGroup lock until
@@ -804,6 +819,12 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			}
 		}
 
+		// Capture this directory's lists before the next directory's Connect() resets
+		// them on the shared client (v2-H-02 / M-01).
+		allReadErrors = append(allReadErrors, client.ReadErrors...)
+		allSkipped = append(allSkipped, client.SkippedFiles...)
+		allExcluded = append(allExcluded, client.ExcludedFiles...)
+
 		if err != nil {
 			errMsg := fmt.Sprintf("Backup failed for %s: %v", dir, err)
 			writeBackupLog(errMsg)
@@ -846,8 +867,8 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			ReusedChunks:     reusechunk.Load(),
 			FailedChunks:     failedchunk.Load(),
 			Directories:      dirResults,
-			ExcludedByPolicy: excludedToIssues(client.ExcludedFiles),
-			SkippedReadError: skippedToIssues(client.SkippedFiles),
+			ExcludedByPolicy: excludedToIssues(allExcluded),
+			SkippedReadError: skippedToIssues(allReadErrors),
 			Message:          errMsg,
 		}
 		if opts.OnComplete != nil {
@@ -884,38 +905,45 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 
 	progress(1.0, progressMsg)
 
-	if len(client.SkippedFiles) > 0 {
-		completionMsg += fmt.Sprintf("\n⚠️  %d fichiers/dossiers ignorés (accès refusé ou junction points)", len(client.SkippedFiles))
-		writeBackupLog(fmt.Sprintf("=== SKIPPED FILES/DIRECTORIES (%d) ===", len(client.SkippedFiles)))
+	if len(allSkipped) > 0 {
+		completionMsg += fmt.Sprintf("\n⚠️  %d fichiers/dossiers ignorés (accès refusé ou junction points)", len(allSkipped))
+		writeBackupLog(fmt.Sprintf("=== SKIPPED FILES/DIRECTORIES (%d) ===", len(allSkipped)))
 
 		// Log first 50 skipped files in detail
 		maxLog := 50
-		if len(client.SkippedFiles) < maxLog {
-			maxLog = len(client.SkippedFiles)
+		if len(allSkipped) < maxLog {
+			maxLog = len(allSkipped)
 		}
 		for i := 0; i < maxLog; i++ {
-			writeBackupLog(fmt.Sprintf("  [%d] %s", i+1, client.SkippedFiles[i]))
+			writeBackupLog(fmt.Sprintf("  [%d] %s", i+1, allSkipped[i]))
 		}
-		if len(client.SkippedFiles) > 50 {
-			writeBackupLog(fmt.Sprintf("  ... and %d more (see full list in GUI)", len(client.SkippedFiles)-50))
+		if len(allSkipped) > 50 {
+			writeBackupLog(fmt.Sprintf("  ... and %d more (see full list in GUI)", len(allSkipped)-50))
 		}
 		writeBackupLog("=== END SKIPPED FILES ===")
 	}
 
 	writeBackupLog(completionMsg)
 
-	// Determine the authoritative outcome. A failed chunk upload makes a committed
-	// index reference a chunk that never uploaded → corrupt/unrestorable, so it is
-	// "failed" (worse than partial). Partial = some directories committed and some
-	// failed. The completionMsg carries the human-readable detail for the UI.
+	// Determine the authoritative 4-level outcome (v2-H-02 / F-01):
+	//   failed  — a chunk upload failed (would corrupt the index) or no dir committed
+	//   partial — some directories failed, OR files were unreadable / changed during
+	//             read (genuine read errors, not expected system auto-excludes)
+	//   success_with_policy_exclusions — complete except files the user excluded
+	//   verified_success — fully complete
+	hasReadIssues := len(allReadErrors) > 0
 	var outcome BackupOutcome
 	switch {
 	case failed > 0:
 		outcome = OutcomeFailed
 	case partial:
 		outcome = OutcomePartial
+	case hasReadIssues:
+		outcome = OutcomePartial
+	case len(allExcluded) > 0:
+		outcome = OutcomeSuccessWithExclusions
 	default:
-		outcome = OutcomeSuccess
+		outcome = OutcomeVerifiedSuccess
 	}
 
 	status := &BackupStatus{
@@ -928,8 +956,8 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		ReusedChunks:     reusechunk.Load(),
 		FailedChunks:     failed,
 		Directories:      dirResults,
-		ExcludedByPolicy: excludedToIssues(client.ExcludedFiles),
-		SkippedReadError: skippedToIssues(client.SkippedFiles),
+		ExcludedByPolicy: excludedToIssues(allExcluded),
+		SkippedReadError: skippedToIssues(allReadErrors),
 		Message:          completionMsg,
 	}
 
@@ -945,7 +973,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 
 	// Contract (Group 0 / audit H-03): a partial or failed backup must NOT return a
 	// nil error, otherwise the API fallback and the scheduler record it as success.
-	if outcome != OutcomeSuccess {
+	if !status.Success() {
 		return fmt.Errorf("%s", completionMsg)
 	}
 	return nil
@@ -1074,11 +1102,17 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 	// backupdir == originalPath). Reused for both the aggregate status and sidecar.
 	logicalSkipped := toLogicalPaths(archive.SkippedFiles, backupdir, originalPath)
 	logicalExcluded := toLogicalPaths(archive.ExcludedFiles, backupdir, originalPath)
+	logicalReadErrors := toLogicalPaths(archive.ReadErrors, backupdir, originalPath)
 
 	// Collect skipped files from archive
 	if len(logicalSkipped) > 0 {
 		writeBackupLog(fmt.Sprintf("Backup completed with %d skipped files/directories", len(logicalSkipped)))
 		client.SkippedFiles = append(client.SkippedFiles, logicalSkipped...)
+	}
+
+	// Genuine read errors / content instability drive the outcome (v2-H-02).
+	if len(logicalReadErrors) > 0 {
+		client.ReadErrors = append(client.ReadErrors, logicalReadErrors...)
 	}
 
 	// Collect files excluded by user policy (H-04), kept distinct from errors.
@@ -1124,7 +1158,7 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 		Directory:        originalPath,
 		GeneratedAt:      time.Now().Unix(),
 		ExcludedByPolicy: excludedToIssues(logicalExcluded),
-		SkippedReadError: skippedToIssues(logicalSkipped),
+		SkippedReadError: skippedToIssues(logicalReadErrors),
 	}
 	if sidecarBytes, sErr := json.Marshal(sidecar); sErr != nil {
 		writeBackupLog(fmt.Sprintf("WARNING: failed to serialize status sidecar: %v", sErr))

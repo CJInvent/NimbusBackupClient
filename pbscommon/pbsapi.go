@@ -133,8 +133,9 @@ type PBSClient struct {
 	TLSConfig tls.Config
 
 	WritersManifest  map[uint64]int
-	SkippedFiles     []string         // Track files/dirs skipped during backup (errors)
+	SkippedFiles     []string         // ALL skips (errors + system auto-excludes + junctions) — for display
 	ExcludedFiles    []string         // Track files/dirs excluded by user policy (H-04)
+	ReadErrors       []string         // Outcome-affecting read failures + content instability (v2-H-02)
 	CompressionLevel CompressionLevel // Zstd compression level (default: fastest)
 
 	// activeConn is the raw TLS socket underlying the HTTP/2 transport for
@@ -752,6 +753,7 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 	pbs.WritersManifest = make(map[uint64]int)
 	pbs.SkippedFiles = []string{}  // Reset skipped files for new backup
 	pbs.ExcludedFiles = []string{} // Reset excluded files for new backup
+	pbs.ReadErrors = []string{}    // Reset read errors for new backup
 	// CRITICAL: Reset Manifest.Files for each new session. Otherwise files from
 	// previous Connect() calls leak into the next session's manifest, causing PBS
 	// to reject the manifest (files reference UUIDs from abandoned sessions).

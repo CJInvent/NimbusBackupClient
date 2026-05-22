@@ -285,7 +285,12 @@ type PXARArchive struct {
 	ArchiveName    string
 
 	catalog_pos  uint64
-	SkippedFiles []string // Track files/directories skipped due to access errors
+	SkippedFiles []string // ALL skips (read errors, junctions, system auto-excludes) — for logging/sidecar display
+	// ReadErrors is the OUTCOME-affecting subset of SkippedFiles: genuine read
+	// failures (cannot stat/read/open) and content instability (file shrank or grew
+	// during read). Expected skips (system auto-excludes, junctions) are NOT here,
+	// so they don't downgrade a backup from verified_success (v2-H-02).
+	ReadErrors []string
 
 	// ExcludeList holds user-configured exclusion patterns (H-04). Patterns are
 	// matched against each child entry; matches are pruned from the archive and
@@ -399,6 +404,14 @@ func append_u64_7bit(a []byte, v uint64) []byte {
 
 */
 
+// addReadError records a genuine read failure or content instability: it is added
+// to both SkippedFiles (display) and ReadErrors (which downgrades the backup
+// outcome below verified_success). Expected skips append to SkippedFiles directly.
+func (a *PXARArchive) addReadError(msg string) {
+	a.SkippedFiles = append(a.SkippedFiles, msg)
+	a.ReadErrors = append(a.ReadErrors, msg)
+}
+
 func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (CatalogDir, error) {
 	//fmt.Printf("Write dir %s at %d\n", path, a.pos)
 
@@ -417,7 +430,7 @@ func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (Cata
 		}
 		// Sub-directories: skip and continue backup
 		skipMsg := fmt.Sprintf("Cannot stat directory: %s (Error: %v)", path, err)
-		a.SkippedFiles = append(a.SkippedFiles, skipMsg)
+		a.addReadError(skipMsg)
 		return CatalogDir{}, nil
 	}
 
@@ -436,7 +449,7 @@ func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (Cata
 		}
 		// Sub-directories: skip and continue backup
 		skipMsg := fmt.Sprintf("Cannot read directory: %s (Error: %v)", path, err)
-		a.SkippedFiles = append(a.SkippedFiles, skipMsg)
+		a.addReadError(skipMsg)
 		return CatalogDir{}, nil
 	}
 
@@ -692,7 +705,7 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	if err != nil {
 		// Log stat errors but continue backup - don't fail on inaccessible files
 		skipMsg := fmt.Sprintf("Cannot stat file: %s (Error: %v)", path, err)
-		a.SkippedFiles = append(a.SkippedFiles, skipMsg)
+		a.addReadError(skipMsg)
 		return CatalogFile{}, nil
 	}
 
@@ -708,7 +721,7 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	if err != nil {
 		// Log file open errors but continue backup - don't fail on locked/system files
 		skipMsg := fmt.Sprintf("Cannot open file: %s (Error: %v)", path, err)
-		a.SkippedFiles = append(a.SkippedFiles, skipMsg)
+		a.addReadError(skipMsg)
 		return CatalogFile{}, nil
 	}
 
@@ -788,11 +801,12 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	}
 
 	// File shrank since Lstat (or read short): pad with zeros so the emitted
-	// payload matches the declared length and the stream stays aligned. Flag it
-	// so the run report surfaces a possibly-inconsistent file rather than failing.
+	// payload matches the declared length and the stream stays aligned. Flag it as
+	// a content-instability read error so the backup is not reported as fully
+	// verified (v2-H-02) rather than silently passing.
 	if written < declaredSize {
-		a.SkippedFiles = append(a.SkippedFiles,
-			fmt.Sprintf("File changed during backup, zero-padded to declared size (content may be inconsistent): %s", path))
+		a.addReadError(
+			fmt.Sprintf("File shrank during backup, zero-padded to declared size (content inconsistent): %s", path))
 		pad := make([]byte, 1024*64)
 		for written < declaredSize {
 			n := uint64(len(pad))
@@ -804,6 +818,16 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 			if ferr := a.Flush(); ferr != nil {
 				return CatalogFile{}, ferr
 			}
+		}
+	} else {
+		// File grew after Lstat: we emitted only declaredSize bytes, so the appended
+		// tail is NOT in the snapshot. The read loop stopped exactly at declaredSize
+		// (capped), so probe one more byte to detect the growth and flag it — this
+		// silent truncation otherwise passed as success (v2-H-02).
+		var probe [1]byte
+		if n, _ := file.Read(probe[:]); n > 0 {
+			a.addReadError(
+				fmt.Sprintf("File grew during backup, tail past %d bytes not captured (content incomplete): %s", declaredSize, path))
 		}
 	}
 
