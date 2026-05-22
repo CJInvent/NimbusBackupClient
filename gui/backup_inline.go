@@ -190,7 +190,7 @@ func (c *ChunkState) HandleData(b []byte, client *pbscommon.PBSClient) error {
 			bindigest := h.Sum(nil)
 			shahash := hex.EncodeToString(bindigest)
 
-			if _, ok := c.knownChunks.GetOrInsert(shahash, true); !ok {
+			if _, known := c.knownChunks.Get(shahash); !known {
 				writeBackupLog(fmt.Sprintf("New chunk[%s] %d bytes", shahash, len(c.currentChunk)))
 
 				// Retry chunk upload with exponential backoff
@@ -213,15 +213,17 @@ func (c *ChunkState) HandleData(b []byte, client *pbscommon.PBSClient) error {
 					c.uploadErrors = append(c.uploadErrors, errMsg)
 					c.errorsMutex.Unlock()
 
-					// FATAL errors: session is dead, all subsequent uploads will fail too.
-					// Abort this directory immediately instead of wasting time on chunks that cannot upload.
-					if isFatalSessionError(err) {
-						return fmt.Errorf("session lost mid-backup: %w", err)
-					}
-					// Non-fatal errors: continue with next chunk
-				} else {
-					c.newchunk.Add(1)
+					// C3 fail-closed: a chunk we could not upload must NOT be indexed.
+					// Indexing it would close a dynamic index referencing a digest that
+					// is absent from the datastore — an unrestorable snapshot. Abort the
+					// writer now (whether the error is fatal or transient); WriteDir's EOF,
+					// CloseDynamicIndex, manifest and Finish are never reached for this dir.
+					return fmt.Errorf("chunk upload failed, aborting to avoid committing a corrupt snapshot: %w", err)
 				}
+				// Mark the chunk known ONLY after a confirmed upload, so a failed chunk
+				// can never make a later identical chunk be skipped as "reused".
+				c.knownChunks.Set(shahash, true)
+				c.newchunk.Add(1)
 			} else {
 				writeBackupLog(fmt.Sprintf("Reuse chunk[%s] %d bytes", shahash, len(c.currentChunk)))
 				c.reusechunk.Add(1)
@@ -326,7 +328,7 @@ func (c *ChunkState) EOF(client *pbscommon.PBSClient) error {
 			return fmt.Errorf("failed to write final chunk digest: %w", err)
 		}
 
-		if _, ok := c.knownChunks.GetOrInsert(shahash, true); !ok {
+		if _, known := c.knownChunks.Get(shahash); !known {
 			writeBackupLog(fmt.Sprintf("New chunk[%s] %d bytes", shahash, len(c.currentChunk)))
 
 			// Retry final chunk upload with exponential backoff
@@ -348,12 +350,13 @@ func (c *ChunkState) EOF(client *pbscommon.PBSClient) error {
 				c.uploadErrors = append(c.uploadErrors, errMsg)
 				c.errorsMutex.Unlock()
 
-				if isFatalSessionError(err) {
-					return fmt.Errorf("session lost mid-backup (final chunk): %w", err)
-				}
-			} else {
-				c.newchunk.Add(1)
+				// C3 fail-closed (see HandleData): never index an unconfirmed chunk —
+				// abort before the chunk is appended to the index and before EOF closes it.
+				return fmt.Errorf("final chunk upload failed, aborting to avoid committing a corrupt snapshot: %w", err)
 			}
+			// Mark known only after a confirmed upload.
+			c.knownChunks.Set(shahash, true)
+			c.newchunk.Add(1)
 		} else {
 			writeBackupLog(fmt.Sprintf("Reuse chunk[%s] %d bytes", shahash, len(c.currentChunk)))
 			c.reusechunk.Add(1)
