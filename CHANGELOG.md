@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.95] - 2026-05-22
+
+Auto-split configurable (Groupe 3, tranche 2).
+
+### Added
+- **`disable_split` + `split_size_gb` (config.json)** — le découpage automatique était figé à 100 Go. Il est désormais configurable : `split_size_gb` fixe à la fois le seuil de déclenchement et la taille cible par bin (**défaut 150 Go**) ; `disable_split: true` désactive complètement le découpage (un seul backup quelle que soit la taille — pertinent maintenant que la restauration ne nécessite plus de %TEMP% = taille d'archive). La preview de découpage (GUI : `AnalyzeBackup`/`CreateBackupSplitPlan`) applique exactement la même politique que le backup réel, donc l'estimation correspond au résultat.
+
+### Notes
+- UI de réglage à venir ; les options se règlent pour l'instant dans `config.json`.
+
 ## [0.2.94] - 2026-05-22
 
 Grouping par dossier (Groupe 3, tranche 1) : rétention PBS correcte pour les backups multi-dossiers.
