@@ -742,9 +742,11 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 
 	writeBackupLog(completionMsg)
 
-	// Partial success is reported as failure so the UI surfaces the errors.
-	// The completionMsg contains both the successes and the failures.
-	success := !partial
+	// Report failure if any directory failed (partial) OR any chunk upload failed.
+	// A snapshot that references chunks which never uploaded is corrupt and
+	// unrestorable, so it must NOT be reported as a successful backup. The
+	// completionMsg carries both the successes and the failures for the UI.
+	success := !partial && failed == 0
 	if opts.OnComplete != nil {
 		opts.OnComplete(success, completionMsg)
 	}
