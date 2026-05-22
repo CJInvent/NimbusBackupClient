@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.94] - 2026-05-22
+
+Grouping par dossier (Groupe 3, tranche 1) : rétention PBS correcte pour les backups multi-dossiers.
+
+### Fixed
+- **Backup multi-dossiers entassé dans un seul groupe PBS (rétention cassée)** — quand plusieurs dossiers étaient sélectionnés sans découpage par taille, ils partageaient tous un seul backup-id (dérivé du premier) et atterrissaient comme snapshots successifs d'un même groupe. La prune par groupe (keep-last/keep-daily) traitait alors des dossiers différents comme des versions du même objet → elle pouvait conserver N snapshots d'un dossier et **perdre les autres**. Désormais **chaque dossier sélectionné est sauvegardé dans son propre groupe** (backup-id dérivé de son chemin), donc la rétention s'applique correctement par dossier. Un dossier unique conserve le backup-id fourni (ex. job planifié). Les callbacks de complétion par dossier sont agrégés en **un seul** résultat honnête pour tout le run, préservant le contrat de statut du Groupe 0.
+
+### Notes
+- Changement de layout : les nouveaux backups multi-dossiers créent des groupes par dossier ; les anciens groupes « lumpés » restent en place (pas cassant, mais nouveaux groupes).
+
 ## [0.2.93] - 2026-05-22
 
 Restauration par lecture paresseuse — prérequis du splitting configurable (Groupe 2).
