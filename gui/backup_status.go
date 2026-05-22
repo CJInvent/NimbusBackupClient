@@ -113,19 +113,19 @@ func worstOutcome(a, b BackupOutcome) BackupOutcome {
 
 // merge folds a child run's counts, file buckets and worst outcome into agg.
 // Used to build one aggregate result for multi-folder and auto-split runs.
-func (agg *BackupStatus) merge(child *BackupStatus) {
+func (s *BackupStatus) merge(child *BackupStatus) {
 	if child == nil {
 		return
 	}
-	agg.Outcome = worstOutcome(agg.Outcome, child.Outcome)
-	agg.NewChunks += child.NewChunks
-	agg.ReusedChunks += child.ReusedChunks
-	agg.FailedChunks += child.FailedChunks
-	agg.TotalBytes += child.TotalBytes
-	agg.Directories = append(agg.Directories, child.Directories...)
-	agg.ExcludedByPolicy = append(agg.ExcludedByPolicy, child.ExcludedByPolicy...)
-	agg.SkippedReadError = append(agg.SkippedReadError, child.SkippedReadError...)
-	agg.Corrupted = append(agg.Corrupted, child.Corrupted...)
+	s.Outcome = worstOutcome(s.Outcome, child.Outcome)
+	s.NewChunks += child.NewChunks
+	s.ReusedChunks += child.ReusedChunks
+	s.FailedChunks += child.FailedChunks
+	s.TotalBytes += child.TotalBytes
+	s.Directories = append(s.Directories, child.Directories...)
+	s.ExcludedByPolicy = append(s.ExcludedByPolicy, child.ExcludedByPolicy...)
+	s.SkippedReadError = append(s.SkippedReadError, child.SkippedReadError...)
+	s.Corrupted = append(s.Corrupted, child.Corrupted...)
 }
 
 // skippedToIssues wraps the engine's free-form SkippedFiles descriptions into the

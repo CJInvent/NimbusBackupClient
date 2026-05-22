@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.99] - 2026-05-22
+
+### Fixed
+- **Lint rouge (staticcheck ST1016)** — noms de receiver rendus cohérents : `PBSServer.sanitized` (`p`→`pbs`) et `BackupStatus.merge` (`agg`→`s`), pour matcher les autres méthodes de ces types. La CI golangci-lint échouait sur 0.2.97/0.2.98 (aucun changement de comportement).
+
 ## [0.2.98] - 2026-05-22
 
 Couverture backup honnête + preuve de restore (audit Codex v2 — 6 correctifs, 1 release).

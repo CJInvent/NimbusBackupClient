@@ -22,9 +22,9 @@ type PBSServer struct {
 
 // sanitized returns a copy with the secret stripped and SecretSet set, for
 // handing PBS server records to the frontend without leaking the token (M-04).
-func (p *PBSServer) sanitized() *PBSServer {
-	c := *p
-	c.SecretSet = p.Secret != ""
+func (pbs *PBSServer) sanitized() *PBSServer {
+	c := *pbs
+	c.SecretSet = pbs.Secret != ""
 	c.Secret = ""
 	return &c
 }
