@@ -58,22 +58,28 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		allDirs = driveLetters
 	}
 
+	// Resolve the EFFECTIVE PBS config: a multi-PBS-only config keeps the legacy
+	// BaseURL/AuthID/Secret/Datastore fields empty, so building options from those
+	// directly yielded "PBS connection parameters required" in service mode (the GUI
+	// standalone path already used EffectivePBS — audit M-01/M-04, reported in prod).
+	pbsCfg := a.config.EffectivePBS()
+
 	// Prepare backup options
 	opts := BackupOptions{
-		BaseURL:         a.config.BaseURL,
-		AuthID:          a.config.AuthID,
-		Secret:          a.config.Secret,
-		Datastore:       a.config.Datastore,
-		Namespace:       a.config.Namespace,
-		CertFingerprint: a.config.CertFingerprint,
+		BaseURL:         pbsCfg.BaseURL,
+		AuthID:          pbsCfg.AuthID,
+		Secret:          pbsCfg.Secret,
+		Datastore:       pbsCfg.Datastore,
+		Namespace:       pbsCfg.Namespace,
+		CertFingerprint: pbsCfg.CertFingerprint,
 		BackupDirs:      allDirs,
 		BackupID:        backupID,
 		BackupType:      backupType,
 		UseVSS:          useVSS,
 		Compression:     compression,
 		ExcludeList:     excludeList,
-		DisableSplit:    a.config.DisableSplit,
-		SplitSizeBytes:  a.config.SplitSizeBytes(),
+		DisableSplit:    pbsCfg.DisableSplit,
+		SplitSizeBytes:  pbsCfg.SplitSizeBytes(),
 		OnProgress: func(percent float64, message string) {
 			writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", percent, message))
 		},
