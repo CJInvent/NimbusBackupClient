@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.104] - 2026-05-22
+
+### Fixed
+- **Reconnexion des serveurs PBS en certificat auto-signé (régression H-02) via épinglage à la première connexion (TOFU)** — depuis le durcissement TLS H-02 (post-0.2.97), un serveur PBS sans empreinte configurée passe en validation CA stricte ; un certificat auto-signé (qui fonctionnait en 0.2.88) est alors rejeté avec `x509: certificate signed by unknown authority` et le serveur apparaît « offline » dans la GUI, sans moyen de s'en sortir depuis l'application (rapport client Clear C2, 0.2.88 → 0.2.102). Le test de connexion détecte désormais ce cas : il récupère l'empreinte SHA-256 du certificat présenté (`pbscommon.FetchServerFingerprint`, lecture seule via une connexion non vérifiée), l'affiche dans une boîte de confirmation pour que l'utilisateur la vérifie côté PBS, puis l'épingle (`App.PinPBSServerFingerprint`, persistance côté serveur — le secret ne transite jamais, M-04) et relance le test. La lecture non vérifiée ne sert qu'à *afficher* le certificat ; l'épinglage exige une confirmation explicite, donc H-02 n'est pas régressé.
+
 ## [0.2.103] - 2026-05-22
 
 ### Fixed
