@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.105] - 2026-05-26
+
+### Fixed
+- **Recherche de fichiers qui « patine » sans fin sur une partie de split de données (rapport testeur, blocage à ~96 %, appli à tuer)** — sur une recherche avec « assembler aussi les snapshots non consultés », le listing via catalogue était instantané, mais la lecture du sidecar meta (`readSnapshotMetaCheap` → `ReadVirtualFile`) parcourait l'archive de données jusqu'à *trouver* le fichier racine `.nimbus_backup_meta.json`. Sur une partie de split de données (ex. `*_D_DATA_*`), ce sidecar n'existe pas (il n'est injecté que dans l'archive de tête) : le parcours allait donc jusqu'au bout, retéléchargeant les chunks d'en-têtes répartis sur toute l'archive multi-Go, sans progression affichée — d'où l'impression de gel. La lecture du sidecar n'est désormais tentée que si le catalogue le liste réellement à la racine ; le catalogue étant construit à partir du même arbre, sa présence fait foi. Absence ⇒ meta nil, aucun parcours.
+- **Bouton « Annuler » de la recherche sans effet (appli à tuer)** — l'indicateur d'annulation n'était relu qu'entre deux snapshots, jamais pendant le téléchargement d'un snapshot en cours. Une recherche bloquée sur un gros snapshot ignorait donc « Annuler ». Le lecteur d'archive à la demande (`DIDXReaderAt`) accepte maintenant un prédicat d'annulation, vérifié à chaque lecture / récupération de chunk ; l'annulation interrompt le snapshot en cours et s'affiche comme annulation utilisateur (et non comme erreur). Restauration et listing ne sont pas affectés.
+- **Bouton « Parcourir » de la destination de restauration qui plante l'application en mode service** — le sélecteur de dossier natif Windows (IFileDialog) provoquait un crash COM natif (SEH/access violation) que `recover()` ne peut pas intercepter ; le durcissement précédent (recover + dossier par défaut valide) était donc insuffisant. En mode service, le sélecteur natif n'est plus ouvert : le champ de saisie du chemin de destination (déjà présent) reste le moyen fiable, et un message d'aide explicite est affiché.
+
 ## [0.2.104] - 2026-05-22
 
 ### Fixed
