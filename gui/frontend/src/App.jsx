@@ -948,7 +948,9 @@ function App() {
       const dir = await OpenRestoreDestDialog()
       if (dir) setRestoreDestPath(dir)
     } catch (err) {
-      showStatus(`❌ ${err}`, 'error')
+      // In service mode the native picker is unavailable by design — guide the
+      // user to the manual path field instead of flagging it as a failure.
+      showStatus(`ℹ️ ${err}`, 'info')
     }
   }
 

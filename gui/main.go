@@ -1163,6 +1163,15 @@ func (a *App) OpenRestoreDestDialog() (dir string, err error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("runtime non disponible")
 	}
+	// In service mode the native Windows folder picker (IFileDialog) has crashed
+	// the whole process for production deployments — a native COM fault that
+	// recover() cannot catch, so hardening the call is not enough. Don't open it
+	// there at all; the destination path field lets the user type/paste a path,
+	// which is the reliable mechanism in this mode.
+	if a.mode == api.ModeService {
+		writeDebugLog("OpenRestoreDestDialog: native picker skipped in service mode — use manual path entry")
+		return "", fmt.Errorf("sélecteur de dossier indisponible en mode service — saisissez le chemin de destination manuellement")
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("folder picker panic: %v", r)
