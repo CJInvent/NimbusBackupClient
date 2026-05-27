@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **File search now honours wildcards** — a query like `Prix*` was matched as a literal substring (asterisk included), so it never hit anything. Queries containing `*` or `?` are now treated as case-insensitive globs in the "file name" and "path" search modes; plain queries keep their substring behaviour.
+- **Folder picker available in the GUI when a service is installed** — "Browse" for the restore destination was disabled whenever a service was present, not only in the headless service process. The interactive GUI now opens the native picker and hands the chosen path to the service; only the real session-0 service process (where the picker crashes) falls back to manual entry.
+- **Destination path placeholder** now shows `C:\Restore` instead of `C:\\Restore` (the doubled backslash was a JSX literal artefact and led users to type escaped paths).
+
+### Added
+- **Search hint when the period is empty** — when no snapshot falls within the chosen From/To dates, the search now tells the user to widen the date range instead of silently returning zero results.
+
 ## [0.2.107] - 2026-05-27
 
 > Release d'outillage : déterminisme du build et nettoyage des notes de release. Aucun changement de comportement de l'application.

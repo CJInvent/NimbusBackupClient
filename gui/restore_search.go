@@ -82,6 +82,7 @@ type SearchHit struct {
 // scanned, so the UI can warn when results may be incomplete.
 type SearchResult struct {
 	Hits               []SearchHit `json:"hits"`
+	SnapshotsInRange   int         `json:"snapshots_in_range"` // snapshots within the From/To period; 0 => widen the dates
 	SnapshotsSearched  int         `json:"snapshots_searched"`
 	SnapshotsSkipped   int         `json:"snapshots_skipped"` // uncached and AssembleMissing=false, or failed to assemble
 	SnapshotsAssembled int         `json:"snapshots_assembled"`
@@ -95,6 +96,31 @@ func CancelFileSearch() { searchCancelled.Store(true) }
 
 // entryMatcher reports whether an archive entry matches the query.
 type entryMatcher func(path string) bool
+
+// hasGlob reports whether q uses shell-style wildcards (* or ?). Users coming
+// from Windows naturally type patterns like "Prix*"; without this the asterisk
+// was matched as a literal character and never hit anything.
+func hasGlob(q string) bool { return strings.ContainsAny(q, "*?") }
+
+// compileGlob turns a shell-style glob (* and ?) into a case-insensitive,
+// anchored regexp. Every other character is escaped so it matches literally —
+// the user is typing a filename pattern, not a regex.
+func compileGlob(glob string) (*regexp.Regexp, error) {
+	var b strings.Builder
+	b.WriteString("(?i)^")
+	for _, r := range glob {
+		switch r {
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteString(".")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	b.WriteString("$")
+	return regexp.Compile(b.String())
+}
 
 func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
 	baseName := func(path string) string {
@@ -113,10 +139,24 @@ func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
 		return func(path string) bool { return re.MatchString(baseName(path)) }, nil
 
 	case SearchModePath:
+		if hasGlob(query) {
+			re, err := compileGlob(query)
+			if err != nil {
+				return nil, fmt.Errorf("motif de recherche invalide: %v", err)
+			}
+			return func(path string) bool { return re.MatchString(path) }, nil
+		}
 		q := strings.ToLower(query)
 		return func(path string) bool { return strings.Contains(strings.ToLower(path), q) }, nil
 
 	case SearchModeName, "":
+		if hasGlob(query) {
+			re, err := compileGlob(query)
+			if err != nil {
+				return nil, fmt.Errorf("motif de recherche invalide: %v", err)
+			}
+			return func(path string) bool { return re.MatchString(baseName(path)) }, nil
+		}
 		q := strings.ToLower(query)
 		return func(path string) bool { return strings.Contains(strings.ToLower(baseName(path)), q) }, nil
 
@@ -190,7 +230,7 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 	writeBackupLog(fmt.Sprintf("Search: prefix=%q query=%q mode=%s period=[%s..%s] assembleMissing=%v -> %d snapshot(s) in range",
 		opts.HostPrefix, opts.Query, opts.Mode, fmtTime(opts.From), fmtTime(opts.To), opts.AssembleMissing, len(targets)))
 
-	result := &SearchResult{Hits: make([]SearchHit, 0, 64)}
+	result := &SearchResult{Hits: make([]SearchHit, 0, 64), SnapshotsInRange: len(targets)}
 	denom := len(targets)
 	if denom == 0 {
 		denom = 1

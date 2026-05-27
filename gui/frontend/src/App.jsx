@@ -2190,6 +2190,11 @@ function App() {
                     {searchResult.truncated ? ` ⚠️ ${t('searchTruncated').replace('{max}', 5000)}` : ''}
                     {searchResult.cancelled ? ` ⚠️ ${t('searchCancelled')}` : ''}
                   </p>
+                  {searchResult.snapshots_in_range === 0 && (
+                    <p style={{fontSize: '12px', color: '#b45309', margin: '0 0 8px 0'}}>
+                      💡 {t('searchNoSnapshotsInRange')}
+                    </p>
+                  )}
                   {(searchResult.snapshots_skipped > 0 && !searchAssembleMissing) && (
                     <p style={{fontSize: '12px', color: '#b45309', margin: '0 0 8px 0'}}>
                       ⚠️ {t('searchSkippedWarning').replace('{n}', searchResult.snapshots_skipped)}
@@ -2438,7 +2443,7 @@ function App() {
                           type="text"
                           value={restoreDestPath}
                           onChange={(e) => setRestoreDestPath(e.target.value)}
-                          placeholder="C:\\Restore"
+                          placeholder="C:\Restore"
                           style={{flex: 1}}
                         />
                         <button className="btn" onClick={handleBrowseRestoreDest} type="button">
