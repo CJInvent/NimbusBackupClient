@@ -158,11 +158,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Wails
-        # The build CLI must track @latest: older CLI tags (e.g. v2.8.0) fail
-        # to compile under the Go 1.25 toolchain used here. Reproducibility is
-        # anchored by the pinned *library* github.com/wailsapp/wails/v2 v2.8.0
-        # in gui/go.mod, which is what determines the built output.
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        # Pinned to v2.12.0 — the exact version @latest resolved to in the
+        # green v0.2.106 build, so we ship identical bytes while keeping a
+        # DETERMINISTIC build toolchain (the CLI orchestrates frontend bundling
+        # + asset embedding before `go build`, so a floating CLI would make
+        # even the .exe non-reproducible). Do NOT pin to the library version in
+        # gui/go.mod (v2.8.0): that CLI tag fails to build under Go 1.25.
+        # Bumping the library to match is a separate, tested task.
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: Install Frontend Dependencies
         working-directory: gui/frontend
