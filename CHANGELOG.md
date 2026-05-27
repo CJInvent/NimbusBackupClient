@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.108] - 2026-05-27
+
+> Restore fixes from a tester's field report on v0.2.107 (service+GUI mode): wildcard search, folder picker, and path display.
+
 ### Fixed
 - **File search now honours wildcards** — a query like `Prix*` was matched as a literal substring (asterisk included), so it never hit anything. Queries containing `*` or `?` are now treated as case-insensitive globs in the "file name" and "path" search modes; plain queries keep their substring behaviour.
 - **Folder picker available in the GUI when a service is installed** — "Browse" for the restore destination was disabled whenever a service was present, not only in the headless service process. The interactive GUI now opens the native picker and hands the chosen path to the service; only the real session-0 service process (where the picker crashes) falls back to manual entry.
