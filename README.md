@@ -22,12 +22,25 @@ Don't want to self-host PBS? Use our managed service:
 
 👉 **[Download Latest Release](https://github.com/rdemsystems/NimbusBackupClient/releases)**
 
-Windows binaries are code-signed by [SignPath Foundation](https://signpath.org).
-
-> ⚠️ **Windows says "virus detected" or shows a SmartScreen warning?**
+> ⚠️ **Windows says "virus detected" (e.g. `Trojan:Win32/Sabsik.FL.A!ml`) or shows a SmartScreen warning?**
 > This is a known **false positive** for Go/Wails applications — it is *not* a virus.
+> The `!ml` suffix means it comes from a machine-learning model that flags
+> *unsigned, low-prevalence* executables; no engine on VirusTotal flags these files.
 > Read [why this happens and how to verify the download is safe](https://nimbus.rdem-systems.com/en/antivirus-false-positive)
 > ([🇫🇷 version française](https://nimbus.rdem-systems.com/faux-positif-antivirus)).
+
+**Verify any download** — every release ships SHA-256 checksums and a signed
+build-provenance attestation (cryptographic proof the binary was built by this
+repo's CI from this commit):
+
+```powershell
+Get-FileHash .\NimbusBackup.exe -Algorithm SHA256   # compare against SHA256SUMS.txt
+gh attestation verify .\NimbusBackup.exe --repo rdemsystems/NimbusBackupClient
+```
+
+> ℹ️ **Code signing:** Windows binaries are **not yet Authenticode-signed**
+> (an OSS certificate via [SignPath Foundation](https://signpath.org) is pending).
+> Until then, provenance is established via the attestation and checksums above.
 
 ## 📚 Documentation
 

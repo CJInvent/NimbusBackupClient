@@ -122,6 +122,15 @@
       <ComponentRef Id="AutoStartRegistry" />
     </Feature>
 
+    <!-- Add/Remove Programs metadata: publisher trust signals shown in
+         "Programs and Features". Purely informational, no behavioral or
+         upgrade impact. ARPNOMODIFY hides the unused "Modify" button. -->
+    <Property Id="ARPURLINFOABOUT" Value="https://nimbus.rdem-systems.com/" />
+    <Property Id="ARPHELPLINK" Value="https://nimbus.rdem-systems.com/" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/rdemsystems/NimbusBackupClient/releases" />
+    <Property Id="ARPCONTACT" Value="contact@rdem-systems.com" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
     <!-- UI -->
     <UIRef Id="WixUI_InstallDir" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
