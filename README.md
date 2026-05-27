@@ -26,8 +26,8 @@ Don't want to self-host PBS? Use our managed service:
 > This is a known **false positive** for Go/Wails applications — it is *not* a virus.
 > The `!ml` suffix means it comes from a machine-learning model that flags
 > *unsigned, low-prevalence* executables; no engine on VirusTotal flags these files.
-> Read [why this happens and how to verify the download is safe](https://nimbus.rdem-systems.com/en/antivirus-false-positive)
-> ([🇫🇷 version française](https://nimbus.rdem-systems.com/faux-positif-antivirus)).
+> Read [why this happens and how to verify the download is safe](https://nimbus.rdem-systems.com/en/antivirus-false-positive/)
+> ([🇫🇷 version française](https://nimbus.rdem-systems.com/faux-positif-antivirus/)).
 
 **Verify any download** — every release ships SHA-256 checksums and a signed
 build-provenance attestation (cryptographic proof the binary was built by this

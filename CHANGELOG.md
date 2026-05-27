@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Métadonnées d'éditeur Windows ajoutées au binaire de service** — `NimbusBackupSVC.exe` était compilé sans aucune information de version, un signal fort de faux positif antivirus (heuristique/ML). Il embarque désormais éditeur (RDEM Systems), nom de produit, description et version, générés via `goversioninfo` entre le build de la GUI et celui du service.
 - **Versions d'outils de build** — `goversioninfo` épinglé (`v1.4.0`). La CLI Wails n'a pas pu être épinglée sur la version de la librairie (`v2.8.0` de `go.mod` ne compile pas sous Go 1.25) : elle a suivi `@latest` (résolu en `v2.12.0`) pour ce hotfix. *(Toolchain redevenu déterministe ensuite — voir [Unreleased].)*
-- **Documentation des faux positifs antivirus** — lien depuis le README et les notes de release vers une page d'explication dédiée bilingue (« détecté comme virus ? » [FR](https://nimbus.rdem-systems.com/faux-positif-antivirus) / [EN](https://nimbus.rdem-systems.com/en/antivirus-false-positive)), en plus de la mention de la signature SignPath Foundation.
+- **Documentation des faux positifs antivirus** — lien depuis le README et les notes de release vers une page d'explication dédiée bilingue (« détecté comme virus ? » [FR](https://nimbus.rdem-systems.com/faux-positif-antivirus/) / [EN](https://nimbus.rdem-systems.com/en/antivirus-false-positive/)), en plus de la mention de la signature SignPath Foundation.
 
 ## [0.2.105] - 2026-05-26
 
