@@ -329,6 +329,37 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # Best-effort: submit the Windows binaries to VirusTotal so the release
+      # page can link a live multi-engine report (transparency while the
+      # Authenticode certificate is pending). Skips cleanly if the secret is
+      # absent and never fails the release. The GUI report URL is just the
+      # file's SHA-256, so the link is valid once VT finishes analysing.
+      - name: Submit to VirusTotal (best-effort)
+        continue-on-error: true
+        env:
+          VT_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: |
+          if [ -z "$VT_KEY" ]; then
+            echo "VIRUSTOTAL_API_KEY not set — skipping VirusTotal submission."
+            exit 0
+          fi
+          {
+            echo ""
+            echo "### 🛡️ VirusTotal reports"
+            echo ""
+          } > vt-section.md
+          for f in release/NimbusBackup.exe release/NimbusBackup.msi; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            # Free public API: files must be <32MB (ours are); 4 req/min limit.
+            curl -s --max-time 180 -X POST https://www.virustotal.com/api/v3/files \
+              -H "x-apikey: $VT_KEY" --form file=@"$f" > /dev/null || true
+            sha=$(sha256sum "$f" | awk '{print $1}')
+            echo "- [\`$name\`](https://www.virustotal.com/gui/file/$sha)" >> vt-section.md
+            sleep 20
+          done
+          cat vt-section.md
+
       - name: Generate release notes
         id: notes
         run: |
@@ -361,6 +392,11 @@ jobs:
           echo '```' >> RELEASE_BODY.md
           cat release/SHA256SUMS.txt >> RELEASE_BODY.md
           echo '```' >> RELEASE_BODY.md
+
+          # VirusTotal links (produced by the best-effort step above, if any)
+          if [ -f vt-section.md ]; then
+            cat vt-section.md >> RELEASE_BODY.md
+          fi
 
           # Add full status from RELEASE_NOTES.md
           echo "" >> RELEASE_BODY.md
