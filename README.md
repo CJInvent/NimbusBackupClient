@@ -1,5 +1,7 @@
 # Nimbus Backup - Proxmox Backup Server Client
 
+**🇬🇧 English** · [🇫🇷 Français](README.fr.md)
+
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/rdemsystems/NimbusBackupClient)](https://github.com/rdemsystems/NimbusBackupClient/releases)
 [![Documentation](https://img.shields.io/badge/docs-nimbus.rdem--systems.com-orange)](https://nimbus.rdem-systems.com/)
