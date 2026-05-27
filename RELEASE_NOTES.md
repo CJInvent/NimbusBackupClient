@@ -1,37 +1,37 @@
-# Nimbus Backup — Statut & notes
+# Nimbus Backup — Status & notes
 
-> Les changements **par version** figurent dans la section « Changes since… » de chaque release (ci-dessus) et dans [CHANGELOG.md](CHANGELOG.md). Cette page décrit l'état **pérenne** du produit.
+> Per-version changes are listed in the “Changes since…” section of each release (above) and in [CHANGELOG.md](CHANGELOG.md). This page describes the **stable** state of the product.
 
-## 📦 Versions disponibles
+## 📦 Available builds
 
-### NimbusBackup.msi (installateur — recommandé en production)
-- ✅ **Service Windows** : démarre automatiquement au boot système
-- ✅ **Privilèges admin permanents** : le service tourne en LocalSystem (VSS garanti)
-- ✅ **Backups planifiés** : exécutés automatiquement, même après reboot
-- ✅ **Désinstallation propre** : nettoyage complet via le Panneau de configuration
+### NimbusBackup.msi (installer — recommended for production)
+- ✅ **Windows service**: starts automatically at system boot
+- ✅ **Persistent admin privileges**: the service runs as LocalSystem (VSS guaranteed)
+- ✅ **Scheduled backups**: run automatically, even after a reboot
+- ✅ **Clean uninstall**: full cleanup via Control Panel
 
 ### NimbusBackup.exe (standalone)
-- ✅ **Backups manuels et planifiés** : OK tant que l'application est lancée
-- ❌ **Pas de persistance au reboot** : pas de service → préférez le MSI en production
-- 💡 **Usage** : backups ponctuels ou tests
+- ✅ **Manual and scheduled backups**: work as long as the app is running
+- ❌ **No persistence across reboots**: no service → prefer the MSI in production
+- 💡 **Use case**: one-off backups or testing
 
-## ✅ Fonctionnalités
+## ✅ Features
 
-### Sauvegarde & restauration
-- Backup one-shot (immédiat) et planifié (heure configurable)
-- **Auto-split des gros backups** (>100 Go) en jobs équilibrés (~100 Go) avec retry par job
-- **VSS** (Volume Shadow Copy) pour des backups cohérents
-- Exclusions de fichiers/dossiers + **auto-exclusion des dossiers système Windows** (System Volume Information, $RECYCLE.BIN, pagefile.sys…)
-- Restauration et navigation dans les snapshots (**lecture rapide du catalogue**)
-- Backups longue durée robustes (**keep-alive 30 s**, validés sur des backups de 11 h+)
-- **Support multi-serveurs PBS**
+### Backup & restore
+- One-shot (immediate) and scheduled (configurable time) backups
+- **Auto-split of large backups** (>100 GB) into balanced jobs (~100 GB) with per-job retry
+- **VSS** (Volume Shadow Copy) for consistent backups
+- File/folder exclusions + **automatic exclusion of Windows system folders** (System Volume Information, $RECYCLE.BIN, pagefile.sys…)
+- Snapshot restore and browsing (**fast catalog reads**)
+- Robust long-running backups (**30 s keep-alive**, validated on 11 h+ backups)
+- **Multi-server PBS support**
 
 ### Interface & configuration
-- Interface graphique Wails (Go + React), **en français et en anglais**
-- Historique des backups et relance des jobs échoués
-- Barre de progression avec statistiques, minimize to tray
-- Configuration PBS avec test de connexion, **épinglage d'empreinte de certificat (TOFU)** et namespaces
+- Wails GUI (Go + React), **in English and French**
+- Backup history and re-run of failed jobs
+- Progress bar with statistics, minimize to tray
+- PBS configuration with connection test, **certificate fingerprint pinning (TOFU)** and namespaces
 
-## 📌 Problèmes connus
-- ⚠️ La version **.exe standalone** ne persiste pas au reboot → utilisez le **MSI** en production.
-- ⚠️ Le format des exclusions n'est pas validé à la saisie.
+## 📌 Known issues
+- ⚠️ The **standalone .exe** does not persist across reboots → use the **MSI** in production.
+- ⚠️ The exclusion format is not validated on input.

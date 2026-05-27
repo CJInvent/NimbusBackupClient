@@ -295,6 +295,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe`/`git log PREV_TAG..HEAD` in
+          # the release-notes step can compute the previous tag and list the
+          # commits since it. A shallow (depth-1) checkout has no prior tags,
+          # which left the "What's in this release" section empty.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
