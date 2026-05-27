@@ -469,15 +469,15 @@ jobs:
           echo "" >> RELEASE_BODY.md
           echo "### Tested with NimbusBackup" >> RELEASE_BODY.md
           echo "" >> RELEASE_BODY.md
-          echo "This release has been tested against [NimbusBackup managed PBS](https://nimbus.rdem-systems.com/blog/sauvegarder-windows-proxmox-backup-server/)." >> RELEASE_BODY.md
+          echo "This release has been tested against NimbusBackup managed PBS — [🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/backup-windows-proxmox-backup-server/?utm_source=github) · [🇫🇷 FR](https://nimbus.rdem-systems.com/blog/sauvegarder-windows-proxmox-backup-server/?utm_source=github)." >> RELEASE_BODY.md
 
-          # Add links at the end
+          # Add links at the end (FR bare URL + EN /en/ variant)
           echo "" >> RELEASE_BODY.md
           echo "---" >> RELEASE_BODY.md
           echo "" >> RELEASE_BODY.md
-          echo "**RDEM Systems**: https://www.rdem-systems.com/" >> RELEASE_BODY.md
+          echo "**RDEM Systems** — [🇬🇧 EN](https://www.rdem-systems.com/en/) · [🇫🇷 FR](https://www.rdem-systems.com/)" >> RELEASE_BODY.md
           echo "" >> RELEASE_BODY.md
-          echo "**Nimbus Backup - Fully managed Proxmox Backup Servers Datastore**: https://nimbus.rdem-systems.com/" >> RELEASE_BODY.md
+          echo "**Nimbus Backup — Fully managed Proxmox Backup Server datastores** — [🇬🇧 EN](https://nimbus.rdem-systems.com/en/?utm_source=github) · [🇫🇷 FR](https://nimbus.rdem-systems.com/?utm_source=github)" >> RELEASE_BODY.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
