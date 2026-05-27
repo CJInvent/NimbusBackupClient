@@ -28,6 +28,10 @@ coverage.txt
 .go/
 vendor/
 
+# Generated Windows version resource (created in CI by goversioninfo)
+*.syso
+gui/versioninfo.json
+
 # IDE
 .vscode/
 .idea/

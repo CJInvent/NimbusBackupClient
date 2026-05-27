@@ -158,7 +158,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        # Pinned to match github.com/wailsapp/wails/v2 in gui/go.mod.
+        # Avoids reproducibility drift from @latest (Codex review).
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.8.0
 
       - name: Install Frontend Dependencies
         working-directory: gui/frontend
@@ -196,6 +198,44 @@ jobs:
         env:
           GOWORK: off
         run: wails build -clean -platform windows/amd64 -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
+
+      # The service is a plain `go build` from gui/ and would otherwise ship
+      # with no Windows version info — a strong heuristic/ML false-positive
+      # signal (Codex review). Generate a .syso with proper CompanyName /
+      # ProductName / version so NimbusBackupSVC.exe looks like normal signed-
+      # vendor software. Must run AFTER the Wails GUI build (same package dir):
+      # we strip any leftover .syso first so the GUI's resource can't leak into
+      # the service link and cause a duplicate-resource error.
+      - name: Generate service version resource
+        working-directory: gui
+        shell: pwsh
+        run: |
+          Remove-Item *.syso -ErrorAction SilentlyContinue
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.0
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          $p = "${{ steps.version.outputs.VERSION_MSI }}" -split '\.'
+          $json = @"
+          {
+            "FixedFileInfo": {
+              "FileVersion":    { "Major": $($p[0]), "Minor": $($p[1]), "Patch": $($p[2]), "Build": 0 },
+              "ProductVersion": { "Major": $($p[0]), "Minor": $($p[1]), "Patch": $($p[2]), "Build": 0 }
+            },
+            "StringFileInfo": {
+              "CompanyName": "RDEM Systems",
+              "FileDescription": "Nimbus Backup Service",
+              "FileVersion": "$ver",
+              "InternalName": "NimbusBackupSVC",
+              "LegalCopyright": "Copyright (c) 2024-2026 RDEM Systems",
+              "OriginalFilename": "NimbusBackupSVC.exe",
+              "ProductName": "Nimbus Backup",
+              "ProductVersion": "$ver"
+            },
+            "VarFileInfo": { "Translation": { "LangID": "0409", "CharsetID": "04B0" } }
+          }
+          "@
+          $json | Out-File -Encoding utf8 versioninfo.json
+          $gobin = (go env GOPATH) + "\bin\goversioninfo.exe"
+          & $gobin -64 -o servicewinres.syso versioninfo.json
 
       - name: Build Service
         working-directory: gui
@@ -282,6 +322,12 @@ jobs:
           cp NimbusBackup.msi ../../release/NimbusBackup.msi
           zip ../../release/NimbusBackup-${{ steps.version.outputs.VERSION }}-windows.zip *
           cd ../..
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Generate release notes
         id: notes
