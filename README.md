@@ -22,6 +22,8 @@ Don't want to self-host PBS? Use our managed service:
 
 👉 **[Download Latest Release](https://github.com/rdemsystems/NimbusBackupClient/releases)**
 
+Windows binaries are code-signed by [SignPath Foundation](https://signpath.org).
+
 ## 📚 Documentation
 
 - **Complete Proxmox Backup Guide** — PBS deployment best practices ([🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/complete-proxmox-backup-guide/?utm_source=github&utm_campaign=gui-client) / [🇫🇷 FR](https://nimbus.rdem-systems.com/blog/guide-complet-backup-proxmox/?utm_source=github&utm_campaign=gui-client))
