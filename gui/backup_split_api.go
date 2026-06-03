@@ -33,7 +33,7 @@ func (a *App) applyConfiguredSplit(analysis *BackupAnalysis) uint64 {
 func (a *App) AnalyzeBackup(backupDirs []string) (map[string]interface{}, error) {
 	writeBackupLog(fmt.Sprintf("AnalyzeBackup called for %d directories", len(backupDirs)))
 
-	analysis, err := AnalyzeBackupDirs(backupDirs, nil)
+	analysis, err := AnalyzeBackupDirs(backupDirs, nil, nil)
 	if err != nil {
 		writeBackupLog(fmt.Sprintf("AnalyzeBackup failed: %v", err))
 		return nil, err
@@ -70,7 +70,9 @@ func (a *App) AnalyzeBackup(backupDirs []string) (map[string]interface{}, error)
 func (a *App) CreateBackupSplitPlan(backupDirs []string, backupID string) ([]map[string]interface{}, error) {
 	writeBackupLog(fmt.Sprintf("CreateBackupSplitPlan called for backup ID: %s", backupID))
 
-	analysis, err := AnalyzeBackupDirs(backupDirs, nil)
+	// Report folder-by-folder sizing progress to the GUI (the user opted into the
+	// split and may wait several minutes on a large volume).
+	analysis, err := AnalyzeBackupDirs(backupDirs, nil, a.emitAnalysisProgress)
 	if err != nil {
 		return nil, err
 	}

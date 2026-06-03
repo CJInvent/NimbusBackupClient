@@ -155,14 +155,6 @@ func calculateDirSizeCtx(ctx context.Context, path string) (uint64, error) {
 	return totalSize, err
 }
 
-// calculateDirSize is the unbounded variant, used by the in-backup background
-// size estimator (progress %), which may legitimately run as long as the backup
-// itself. Callers that must not stall (e.g. pre-backup analysis) should use
-// calculateDirSizeCtx with a deadline instead.
-func calculateDirSize(path string) (uint64, error) {
-	return calculateDirSizeCtx(context.Background(), path)
-}
-
 type ChunkState struct {
 	assignments         []string
 	assignmentsOffset  []uint64
@@ -488,7 +480,6 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 		}
 	}()
 
-	startTime := time.Now()
 	userName := "<unknown>"
 	if cu, err := user.Current(); err == nil {
 		userName = cu.Username
@@ -530,101 +521,16 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 		hostname = "unnamed-backup"
 	}
 
-	// Auto-split: Analyze directories and split if > 100GB
-	// BUT: Check which folders already have backups (skip those with existing snapshots)
-	writeBackupLog("[Auto-Split] Analyzing backup directories for automatic splitting...")
-	analysis, err := AnalyzeBackupDirs(opts.BackupDirs, opts.ExcludeList)
-	if err != nil {
-		writeBackupLog(fmt.Sprintf("[Auto-Split] Analysis failed: %v - continuing without split", err))
-	} else {
-		// Resolve the configured split threshold (also used as the per-bin target);
-		// 0 means the default. DisableSplit forces a single (non-split) backup.
-		splitThreshold := opts.SplitSizeBytes
-		if splitThreshold == 0 {
-			splitThreshold = SplitThreshold
-		}
-		analysis.ShouldSplit = !opts.DisableSplit && !analysis.Incomplete && analysis.TotalSize > splitThreshold
+	// Splitting a backup into smaller parts is now an explicit, opt-in choice the
+	// user makes in the GUI (the split plan is built and orchestrated there via
+	// CreateBackupSplitPlan, which issues one StartBackup per part). RunBackupInline
+	// therefore no longer sizes the directories or auto-splits by total size: that
+	// pre-pass was what made a whole-drive backup of C:\ hang before it ever began,
+	// and it also ran on every scheduled run. A scheduled/recurring backup is always
+	// a normal (unsplit) backup — exactly the intended "split the first seed, full
+	// afterwards" behavior.
 
-		writeBackupLog(fmt.Sprintf("[Auto-Split] Total size: %s, Should split: %v", FormatSize(analysis.TotalSize), analysis.ShouldSplit))
-
-		// Generate base backup-id (used for checking existing backups and creating splits)
-		baseBackupID := opts.BackupID
-		if baseBackupID == "" {
-			baseBackupID = GenerateBackupID(hostname, opts.BackupDirs[0])
-		}
-
-		if analysis.ShouldSplit {
-			// Create split jobs using bin-packing (groups small folders into ~100GB bins)
-			splitJobs := CreateSplitJobs(analysis, baseBackupID, hostname, splitThreshold)
-			writeBackupLog(fmt.Sprintf("[Auto-Split] Splitting into %d jobs", len(splitJobs)))
-
-			// Execute each split job, suppressing per-split terminal callbacks and
-			// aggregating ONE final result (like the multi-folder path). Continue
-			// independent splits on failure instead of aborting at the first (v2-H-03).
-			aggStart := time.Now()
-			agg := &BackupStatus{Outcome: OutcomeVerifiedSuccess, BackupID: baseBackupID, BackupTime: aggStart.Unix()}
-			var jobErrors []string
-
-			for _, job := range splitJobs {
-				writeBackupLog(fmt.Sprintf("[Auto-Split] Starting job %d/%d: %s (%s, %d folders)",
-					job.Index, job.TotalJobs, job.BackupID, FormatSize(job.TotalSize), len(job.Folders)))
-
-				splitOpts := opts
-				splitOpts.BackupDirs = job.Folders
-				splitOpts.BackupID = job.BackupID
-				splitOpts.OnComplete = nil // suppress per-split terminal callback; aggregated below
-				var jobStatus *BackupStatus
-				splitOpts.OnResult = func(s *BackupStatus) { jobStatus = s }
-				// Merge the user's exclusions with the job's own (a root remainder job
-				// excludes the subfolders already covered by other jobs — v2-H-01).
-				if len(job.ExcludeList) > 0 {
-					merged := make([]string, 0, len(opts.ExcludeList)+len(job.ExcludeList))
-					merged = append(merged, opts.ExcludeList...)
-					merged = append(merged, job.ExcludeList...)
-					splitOpts.ExcludeList = merged
-				}
-
-				derr := runBackupInlineInternal(splitOpts)
-				if jobStatus != nil {
-					agg.merge(jobStatus)
-				} else if derr != nil {
-					agg.Outcome = OutcomeFailed
-				}
-				if derr != nil {
-					errMsg := fmt.Sprintf("[Auto-Split] Job %d/%d failed: %v", job.Index, job.TotalJobs, derr)
-					writeBackupLog(errMsg)
-					jobErrors = append(jobErrors, errMsg)
-					// Continue with the remaining (independent) split jobs.
-				} else {
-					writeBackupLog(fmt.Sprintf("[Auto-Split] Job %d/%d completed successfully", job.Index, job.TotalJobs))
-				}
-			}
-
-			duration := time.Since(startTime)
-			agg.DurationSec = duration.Seconds()
-			if len(jobErrors) > 0 {
-				agg.Message = fmt.Sprintf("%d/%d split jobs failed in %s:\n%s",
-					len(jobErrors), len(splitJobs), formatDuration(duration), strings.Join(jobErrors, "\n"))
-			} else {
-				agg.Message = fmt.Sprintf("Backup completed (%d split jobs) in %s", len(splitJobs), formatDuration(duration))
-			}
-			writeBackupLog(agg.Message)
-
-			// One terminal callback for the whole auto-split run, only after the last job.
-			if opts.OnComplete != nil {
-				opts.OnComplete(agg.Success(), agg.Message)
-			}
-			if opts.OnResult != nil {
-				opts.OnResult(agg)
-			}
-			if len(jobErrors) > 0 {
-				return fmt.Errorf("%s", agg.Message)
-			}
-			return nil
-		}
-	}
-
-	// No size-based split. Each selected directory is its OWN backup group (its own
+	// Each selected directory is its OWN backup group (its own
 	// backup-id), so PBS retention treats successive runs of the same folder as one
 	// series. Previously all selected folders shared one backup-id (derived from the
 	// first), landing as separate snapshots in a single group — which makes prune
@@ -1078,11 +984,16 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 	client.Connect(false, "host")
 	knownChunks := hashmap.New[string, bool]()
 
-	// Start background scan to calculate total size
+	// Start background scan to calculate total size (drives the progress %). This
+	// is non-blocking — the backup streams in parallel — but bound it with the same
+	// runaway guard so a whole-drive root can't leave a goroutine walking forever
+	// (junctions are already skipped); a partial size just makes the % approximate.
 	totalSize := &atomic.Uint64{}
 	go func() {
 		writeBackupLog(fmt.Sprintf("Starting background size calculation for: %s", backupdir))
-		size, err := calculateDirSize(backupdir)
+		ctx, cancel := context.WithTimeout(context.Background(), analysisSizeBudget)
+		defer cancel()
+		size, err := calculateDirSizeCtx(ctx, backupdir)
 		if err != nil {
 			writeBackupLog(fmt.Sprintf("WARNING: Size calculation had errors: %v", err))
 		}

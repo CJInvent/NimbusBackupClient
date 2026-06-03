@@ -100,6 +100,9 @@ const translations = {
     vssAdminHint: "Redémarrez l'application en tant qu'administrateur (clic droit → Exécuter en tant qu'administrateur) pour utiliser VSS.",
     vssServiceAvailable: "VSS disponible via le service.",
     vssServiceHint: "Le service Windows tourne avec les privilèges nécessaires pour VSS.",
+    splitFirstBackup: "Découper ce backup en plusieurs parties",
+    splitFirstBackupHint: "Recommandé pour le 1er backup d'un gros volume (C:\\, D:\\…) : découpe le seed initial en backups plus petits et résumables. Laissez décoché pour les backups suivants (full). L'analyse de la taille peut prendre quelques minutes sur un gros volume.",
+    splitAnalyzing: "Analyse de la taille…",
 
     // Backup Progress
     backupProgress: "Progression du backup",
@@ -364,6 +367,9 @@ const translations = {
     vssAdminHint: "Restart the application as administrator (right-click → Run as administrator) to use VSS.",
     vssServiceAvailable: "VSS available via service.",
     vssServiceHint: "The Windows service runs with the necessary privileges for VSS.",
+    splitFirstBackup: "Split this backup into multiple parts",
+    splitFirstBackupHint: "Recommended for the first backup of a large volume (C:\\, D:\\…): it splits the initial seed into smaller, resumable backups. Leave unchecked for subsequent backups (full). The size analysis can take a few minutes on a large volume.",
+    splitAnalyzing: "Analyzing size…",
 
     // Backup Progress
     backupProgress: "Backup progress",

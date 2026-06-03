@@ -91,6 +91,9 @@ function App() {
   const [physicalDisks, setPhysicalDisks] = useState([])
   const [excludeList, setExcludeList] = useState('')
   const [progress, setProgress] = useState(0)
+  // Opt-in: split this backup into parts (for the first backup of a large volume).
+  // Off by default → no size analysis, the backup starts immediately.
+  const [splitFirstBackup, setSplitFirstBackup] = useState(false)
 
   // Scheduling states
   const [backupMode, setBackupMode] = useState('oneshot') // 'oneshot' or 'scheduled'
@@ -296,6 +299,19 @@ function App() {
     if (!EventsOn) return
     const unsub = EventsOn('search:progress', (data) => {
       setSearchProgress({ percent: Math.round((data.percent || 0) * 100), message: data.message || '' })
+    })
+    return () => { if (unsub) unsub() }
+  }, [])
+
+  // Split size-analysis progress (explicit-split path only) — folder-by-folder so
+  // a multi-minute scan of a large volume shows movement instead of a frozen spinner.
+  useEffect(() => {
+    if (!EventsOn) return
+    const unsub = EventsOn('analysis:progress', (data) => {
+      const done = data.done || 0
+      const total = data.total || 0
+      const gb = ((data.bytes || 0) / (1024 * 1024 * 1024)).toFixed(1)
+      showStatus(`📊 ${t('splitAnalyzing')} ${done}/${total} (${gb} GB)`, 'info')
     })
     return () => { if (unsub) unsub() }
   }, [])
@@ -689,19 +705,43 @@ function App() {
     reader.readAsText(file)
   }
 
-  // Execute split backup for large volumes
-  const executeSplitBackup = async (dirList, analysis) => {
+  // Execute split backup for large volumes (explicit opt-in via the split toggle).
+  // CreateBackupSplitPlan runs the size analysis the user asked for (bounded, and
+  // reporting folder-by-folder progress via the "analysis:progress" event) and
+  // returns one job per part; we then run a backup per part.
+  const executeSplitBackup = async (dirList) => {
     if (!window.go || !window.go.main.App.CreateBackupSplitPlan) {
       showStatus('❌ Split backup not available', 'error')
       return
     }
 
     try {
-      showStatus('📋 Création du plan de découpage...', 'info')
+      showStatus(`📊 ${t('splitAnalyzing')}`, 'info')
       const splitPlan = await window.go.main.App.CreateBackupSplitPlan(
         dirList,
         config['backup-id'] || hostname
       )
+
+      // If the analysis didn't yield a real split (volume below threshold, scan
+      // incomplete, or splitting disabled), the single "job" only covers the
+      // enumerated subfolders and would DROP files sitting directly under the
+      // selected root. Fall back to a normal full backup of the roots, which
+      // always captures everything.
+      if (!splitPlan || splitPlan.length <= 1) {
+        showStatus(`🚀 ${t('statusBackupStarting')}`, 'info')
+        setProgress(5)
+        await StartBackup(
+          backupType,
+          dirList,
+          selectedDrives,
+          excludeList.split('\n').filter(l => l.trim()),
+          config['backup-id'],
+          config.usevss,
+          ''
+        )
+        showStatus(`⏳ ${t('statusBackupRunning')}`, 'info')
+        return
+      }
 
       showStatus(`🔄 Lancement de ${splitPlan.length} backups partiels...`, 'info')
 
@@ -778,45 +818,15 @@ function App() {
       return
     }
 
-    // Analyze backup size for auto-split (only for directory backups in oneshot mode).
-    // This is a best-effort optimization to OFFER splitting large backups; it must
-    // never block the backup itself. Sizing a whole-drive root (e.g. C:\) can be very
-    // slow (antivirus scans every file open), so cap it and fall back to a normal
-    // single-job backup on timeout/error rather than leaving the UI stuck on "Analyse…".
-    if (backupType === 'directory' && backupMode === 'oneshot' && window.go && window.go.main.App.AnalyzeBackup) {
-      try {
-        showStatus('📊 Analyse de la taille du backup...', 'info')
-        const ANALYSIS_TIMEOUT_MS = 45000
-        const analysis = await Promise.race([
-          window.go.main.App.AnalyzeBackup(dirList),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('analysis-timeout')), ANALYSIS_TIMEOUT_MS)
-          ),
-        ])
-
-        if (analysis.should_split) {
-          const confirmSplit = window.confirm(
-            `📦 Backup volumineux détecté (${analysis.total_size_fmt})\n\n` +
-            `Pour améliorer la fiabilité et la vitesse, voulez-vous le découper en ` +
-            `${analysis.suggested_jobs} backups plus petits (~100 GB chacun) ?\n\n` +
-            `✅ Avantages:\n` +
-            `  • Résistance aux pannes (retry ciblé)\n` +
-            `  • Progression visible\n` +
-            `  • Plus rapide en cas d'échec\n\n` +
-            `Les backups seront consolidés automatiquement une fois terminés.`
-          )
-
-          if (confirmSplit) {
-            // User accepted split - execute split backup
-            await executeSplitBackup(dirList, analysis)
-            return
-          }
-          // User declined - continue with normal backup below
-        }
-      } catch (err) {
-        // Analysis failed or timed out - continue with a normal (unsplit) backup.
-        console.warn('Backup analysis skipped:', err)
-      }
+    // Splitting is now an explicit, opt-in choice (the "split this backup" toggle),
+    // intended for the first backup of a large volume. When it's off we never size
+    // the directories — the backup starts immediately, so a whole-drive root like
+    // C:\ can no longer hang on the analysis. When it's on, executeSplitBackup runs
+    // the (bounded, progress-reporting) size analysis the user asked for, then runs
+    // one backup per part. Subsequent backups are left unsplit (full).
+    if (splitFirstBackup && backupType === 'directory' && backupMode === 'oneshot') {
+      await executeSplitBackup(dirList)
+      return
     }
 
     // Scheduled mode - save or update job instead of executing immediately
@@ -1838,6 +1848,22 @@ function App() {
               </div>
             )}
           </div>
+
+          {backupType === 'directory' && backupMode === 'oneshot' && (
+            <div className="form-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={splitFirstBackup}
+                  onChange={(e) => setSplitFirstBackup(e.target.checked)}
+                />
+                {t('splitFirstBackup')}
+              </label>
+              <div className="info-box" style={{marginTop: '10px', backgroundColor: '#f8f9fa', borderColor: '#dee2e6'}}>
+                ℹ️ {t('splitFirstBackupHint')}
+              </div>
+            </div>
+          )}
 
           {progress > 0 && progress < 100 && (
             <div style={{marginTop: '20px', marginBottom: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #dee2e6'}}>

@@ -597,6 +597,21 @@ func (a *App) PinPBSServerFingerprint(id, fingerprint string) error {
 
 // ==================== END MULTI-PBS MANAGEMENT ====================
 
+// emitAnalysisProgress forwards split size-analysis progress to the GUI as an
+// "analysis:progress" event (done/total folders sized + bytes so far). Used only
+// on the explicit-split path so a multi-minute scan of a large volume shows
+// movement instead of a frozen spinner.
+func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "analysis:progress", map[string]interface{}{
+		"done":  done,
+		"total": total,
+		"bytes": scannedBytes,
+	})
+}
+
 // StartBackup starts a backup operation (routes to service or direct based on mode)
 func (a *App) StartBackup(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
 	writeDebugLog(fmt.Sprintf("StartBackup() called - mode: %s, VSS: %v, compression: %s, isServiceProcess: %v", a.mode.String(), useVSS, compression, a.isServiceProcess))

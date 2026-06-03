@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.112] - 2026-06-03
+
+### Changed
+- **Splitting a backup into parts is now an explicit, opt-in choice instead of automatic** — a new "Split this backup into multiple parts" checkbox (one-shot directory backups) lets you split the *first* backup of a large volume into smaller, resumable parts, then run normal full backups afterwards. When it's left unchecked, no size analysis runs at all and the backup starts immediately. This removes the automatic pre-backup size scan that, on a whole-drive root like `C:\`, could walk the entire system tree before the backup even began (and ran on every scheduled run). Scheduled/recurring backups are now always full (unsplit). When you do opt into splitting, the size analysis reports folder-by-folder progress and is bounded by a generous runaway guard (a legitimate large volume — e.g. ~5 min for 1 TB — completes well within it).
+
+### Fixed
+- **Opt-in split no longer drops files sitting directly under the selected root** — if you ticked split but the volume turned out not to need splitting (below the threshold, scan incomplete, or splitting disabled), the run now falls back to a normal full backup of the selected folders instead of backing up only their subfolders.
+- **The in-backup background size estimator (progress %) is now bounded too** — it can no longer leave a goroutine walking a whole drive indefinitely; a partial size just makes the percentage approximate.
+
 ## [0.2.111] - 2026-06-02
 
 ### Fixed

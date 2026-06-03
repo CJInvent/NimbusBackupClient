@@ -12,12 +12,14 @@ import (
 	"time"
 )
 
-// analysisSizeBudget bounds the total time the pre-backup size scan may spend
-// across all selected folders. Sizing is only an optimization (to offer auto-
-// split), so when a whole-drive root makes it slow we stop and proceed with an
-// approximate estimate rather than blocking the backup. Kept below the frontend
-// analysis timeout so the backend returns a (partial) result first.
-const analysisSizeBudget = 30 * time.Second
+// analysisSizeBudget is a runaway guard on the explicit-split size scan — NOT a
+// normal-case timeout. Sizing only runs when the user opts into splitting a
+// backup (the default path does no analysis at all), and a legitimate large
+// volume can take several minutes to size (≈5 min for 1 TB), so the budget is
+// deliberately generous; it only fires to stop a pathological scan that would
+// otherwise never finish. If it fires, the analysis is marked Incomplete and the
+// backup proceeds unsplit rather than acting on partial sizes.
+const analysisSizeBudget = 30 * time.Minute
 
 const (
 	// DefaultSplitSizeGB is the default auto-split threshold and per-bin target,
@@ -105,13 +107,18 @@ func cleanKey(p string) string {
 // excludes are absolute folder paths to skip from the split plan (so an excluded
 // subfolder is neither sized nor turned into a job — keeps the size estimate and
 // the root-remainder job correct; v2-H-01).
-func AnalyzeBackupDirs(backupDirs []string, excludes []string) (*BackupAnalysis, error) {
+//
+// This only runs when the user explicitly opts into splitting a backup; it is no
+// longer on the default backup path. onProgress (may be nil) is called as each
+// top-level folder finishes sizing, with the running done/total count and the
+// bytes scanned so far, so the GUI can show progress during a multi-minute scan.
+func AnalyzeBackupDirs(backupDirs []string, excludes []string, onProgress func(done, total int, scannedBytes uint64)) (*BackupAnalysis, error) {
 	analysis := &BackupAnalysis{
 		Folders: make([]FolderInfo, 0),
 	}
 
-	// Shared deadline across all folder size scans so the whole analysis is
-	// bounded (a slow C:\ can otherwise leave the caller awaiting forever).
+	// Shared deadline across all folder size scans as a runaway guard (see
+	// analysisSizeBudget); a legitimate large volume completes well within it.
 	ctx, cancel := context.WithTimeout(context.Background(), analysisSizeBudget)
 	defer cancel()
 
@@ -122,6 +129,11 @@ func AnalyzeBackupDirs(backupDirs []string, excludes []string) (*BackupAnalysis,
 		}
 	}
 
+	// First pass (cheap — only ReadDir): enumerate the top-level folders to size,
+	// so we know the total up front and can report "done/total" progress while the
+	// expensive recursive sizing runs in the second pass.
+	type pendingFolder struct{ path, name string }
+	var toSize []pendingFolder
 	for _, dir := range backupDirs {
 		info, err := os.Stat(dir)
 		if err != nil {
@@ -151,28 +163,42 @@ func AnalyzeBackupDirs(backupDirs []string, excludes []string) (*BackupAnalysis,
 			if excludeSet[cleanKey(folderPath)] {
 				continue // excluded folder: don't size it or make a job for it
 			}
-			size, err := calculateDirSizeCtx(ctx, folderPath)
-
-			folderInfo := FolderInfo{
-				Path: folderPath,
-				Name: entry.Name(),
-				Size: size,
-			}
-
-			if err != nil && strings.Contains(err.Error(), "access denied") {
-				folderInfo.AccessDenied = true
-				folderInfo.Size = 500 * 1024 * 1024 * 1024 // Estimate 500GB
-			}
-
-			analysis.Folders = append(analysis.Folders, folderInfo)
-			analysis.TotalSize += folderInfo.Size
+			toSize = append(toSize, pendingFolder{path: folderPath, name: entry.Name()})
 		}
 		if hasDirectFiles {
 			analysis.RootsWithFiles = append(analysis.RootsWithFiles, dir)
 		}
 	}
 
-	// If the shared deadline fired, TotalSize is a partial undercount and some
+	total := len(toSize)
+	if onProgress != nil {
+		onProgress(0, total, 0)
+	}
+
+	// Second pass: size each folder (the expensive recursive walk), bounded by the
+	// shared deadline, reporting progress after each one.
+	for i, p := range toSize {
+		size, err := calculateDirSizeCtx(ctx, p.path)
+
+		folderInfo := FolderInfo{
+			Path: p.path,
+			Name: p.name,
+			Size: size,
+		}
+
+		if err != nil && strings.Contains(err.Error(), "access denied") {
+			folderInfo.AccessDenied = true
+			folderInfo.Size = 500 * 1024 * 1024 * 1024 // Estimate 500GB
+		}
+
+		analysis.Folders = append(analysis.Folders, folderInfo)
+		analysis.TotalSize += folderInfo.Size
+		if onProgress != nil {
+			onProgress(i+1, total, analysis.TotalSize)
+		}
+	}
+
+	// If the runaway guard fired, TotalSize is a partial undercount and some
 	// folders were sized as 0 — never offer a split on numbers we don't trust.
 	if ctx.Err() != nil {
 		analysis.Incomplete = true

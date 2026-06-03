@@ -29,6 +29,9 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 	return result
 }
 
+// emitAnalysisProgress is a no-op in the service process (no GUI event sink).
+func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {}
+
 // StartBackup starts a backup job
 // Service implementation using RunBackupInline
 func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeList []string, backupID string, useVSS bool, compression string) error {
