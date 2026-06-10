@@ -55,10 +55,12 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 
 	// Merge directories: backupDirs for directory backup, driveLetters for machine backup
 	var allDirs []string
+	pbsBackupType := "host"
 	if backupType == "directory" {
 		allDirs = backupDirs
 	} else if backupType == "machine" {
 		allDirs = driveLetters
+		pbsBackupType = "vm"
 	}
 
 	// Resolve the EFFECTIVE PBS config: a multi-PBS-only config keeps the legacy
@@ -77,7 +79,7 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		CertFingerprint: pbsCfg.CertFingerprint,
 		BackupDirs:      allDirs,
 		BackupID:        backupID,
-		BackupType:      backupType,
+		BackupType:      pbsBackupType,
 		UseVSS:          useVSS,
 		Compression:     compression,
 		ExcludeList:     excludeList,
@@ -95,7 +97,11 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		},
 	}
 
-	// Execute backup using inline implementation
+	// Execute backup using the appropriate engine for the backup type.
+	if backupType == "machine" {
+		writeDebugLog("[Service] Executing full-volume backup via RunMachineBackup")
+		return RunMachineBackup(opts)
+	}
 	writeDebugLog("[Service] Executing backup via RunBackupInline")
 	return RunBackupInline(opts)
 }

@@ -179,22 +179,20 @@ function App() {
     }
   }, [defaultPBSID])
 
-  // Load physical disks when switching to machine mode (DISABLED FOR NOW)
-  /*
+  // Load physical disks when switching to machine (full-volume) mode.
   useEffect(() => {
     if (backupType === 'machine' && ListPhysicalDisks && physicalDisks.length === 0) {
       ListPhysicalDisks().then(disks => {
-        setPhysicalDisks(disks)
+        setPhysicalDisks(disks || [])
         // Select first disk by default
-        if (disks.length > 0 && selectedDrives.length === 0) {
+        if (disks && disks.length > 0 && selectedDrives.length === 0) {
           setSelectedDrives([disks[0].path])
         }
       }).catch(err => {
-        showStatus(`❌ Erreur lors de la détection des disques: ${err}`, 'error')
+        showStatus(`❌ ${t('diskDetectionError')}: ${err}`, 'error')
       })
     }
   }, [backupType])
-  */
 
   // Listen to backup events
   useEffect(() => {
@@ -842,6 +840,7 @@ function App() {
         scheduleTime: scheduleTime,
         runAtStartup: runAtStartup,
         backupDirs: dirList,
+        driveLetters: selectedDrives,
         backupId: config['backup-id'],
         useVSS: config.usevss,
         backupType: backupType,
@@ -1676,7 +1675,7 @@ function App() {
             <label>{t('backupType')}</label>
             <select value={backupType} onChange={(e) => setBackupType(e.target.value)}>
               <option value="directory">📁 {t('backupTypeDirectory')}</option>
-              {/* <option value="machine">💾 {t('backupTypeMachine')}</option> */}
+              <option value="machine">💾 {t('backupTypeMachine')}</option>
             </select>
           </div>
 
@@ -1776,6 +1775,11 @@ function App() {
             </div>
           ) : (
             <>
+              <div className="info-box" style={{backgroundColor: '#fff3cd', borderColor: '#ffc107'}}>
+                ⚠️ <strong>{t('machineBackupWarning')}</strong><br/>
+                {t('machineBackupWarningHint')}
+              </div>
+
               <div className="form-group">
                 <label>{t('physicalDisksToBackup')}</label>
                 {physicalDisks.length === 0 ? (
@@ -1989,6 +1993,7 @@ function App() {
                           setScheduleTime(job.scheduleTime)
                           setRunAtStartup(job.runAtStartup)
                           setBackupDirs(job.backupDirs.join('\n'))
+                          setSelectedDrives(job.driveLetters || [])
                           setConfig({...config, 'backup-id': job.backupId, usevss: job.useVSS})
                           setBackupType(job.backupType)
                           setExcludeList(job.excludeList.join('\n'))

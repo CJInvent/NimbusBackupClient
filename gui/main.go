@@ -305,8 +305,9 @@ func (a *App) GetVersion() string {
 	return appVersion
 }
 
-// ListPhysicalDisks returns a list of available physical disks (DISABLED - feature postponed)
-/*
+// ListPhysicalDisks returns a list of available physical disks for full-volume
+// (machine) backups. Bound to the frontend via Wails so the Backup tab can
+// populate its disk picker. Returns an error on non-Windows builds.
 func (a *App) ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 	writeDebugLog("ListPhysicalDisks() called from frontend")
 	disks, err := ListPhysicalDisks()
@@ -317,7 +318,6 @@ func (a *App) ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 	writeDebugLog(fmt.Sprintf("Found %d physical disks", len(disks)))
 	return disks, nil
 }
-*/
 
 // GetConfigWithHostname returns config with hostname pre-filled
 func (a *App) GetConfigWithHostname() map[string]interface{} {
@@ -776,8 +776,23 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		if len(driveLetters) == 0 {
 			return fmt.Errorf("au moins un disque physique requis")
 		}
+		// Raw access to \\.\PhysicalDriveN (and the VSS snapshot of its mounted
+		// partitions) always requires elevation. In standalone mode we have no
+		// LocalSystem service to defer to, so fail early with a clear message
+		// instead of an opaque CreateFile "access denied" mid-backup.
+		if !isAdmin() {
+			return fmt.Errorf("la sauvegarde de disque complet nécessite les privilèges administrateur - relancez l'application en tant qu'administrateur ou installez le service Nimbus")
+		}
 		// Physical drive paths are used directly (e.g., \\.\PhysicalDrive0)
 		targetDirs = driveLetters
+	}
+
+	// PBS archive/backup type: directory backups are stored as host snapshots,
+	// full-volume (machine) backups as vm snapshots holding drive-*.img.fidx,
+	// matching the upstream machinebackup layout the nbd restore tool expects.
+	pbsBackupType := "host"
+	if backupType == "machine" {
+		pbsBackupType = "vm"
 	}
 
 	// Prepare backup options
@@ -790,7 +805,7 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		CertFingerprint: pbsCfg.CertFingerprint,
 		BackupDirs:      targetDirs,
 		BackupID:        backupID,
-		BackupType:      "host", // "host" for directory, would be "vm" for machine
+		BackupType:      pbsBackupType, // "host" for directory, "vm" for machine
 		UseVSS:          useVSS,
 		Compression:     compression,
 		ExcludeList:     excludeList,
@@ -929,14 +944,16 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		})
 	}
 
-	// Run backup inline (in background goroutine to not block UI)
+	// Run backup in a background goroutine so the UI thread isn't blocked.
 	go func() {
-		// Machine backup disabled for now - Windows Defender flags it
-		// if backupType == "machine" {
-		// 	err = RunMachineBackup(opts)
-		// } else {
-		err := RunBackupInline(opts)
-		// }
+		var err error
+		if backupType == "machine" {
+			// Full-volume backup: raw disk image (FIDX) of each selected
+			// PhysicalDrive, VSS-snapshotting any mounted partitions.
+			err = RunMachineBackup(opts)
+		} else {
+			err = RunBackupInline(opts)
+		}
 		if err != nil {
 			writeDebugLog(fmt.Sprintf("Backup error: %v", err))
 		}
