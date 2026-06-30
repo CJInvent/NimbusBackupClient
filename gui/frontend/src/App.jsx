@@ -89,6 +89,8 @@ function App() {
   const [backupDirs, setBackupDirs] = useState('')
   const [selectedDrives, setSelectedDrives] = useState([])
   const [physicalDisks, setPhysicalDisks] = useState([])
+  const [disksLoading, setDisksLoading] = useState(false)
+  const [disksError, setDisksError] = useState('')
   const [excludeList, setExcludeList] = useState('')
   const [progress, setProgress] = useState(0)
   // Opt-in: split this backup into parts (for the first backup of a large volume).
@@ -180,18 +182,23 @@ function App() {
   }, [defaultPBSID])
 
   // Load physical disks when switching to machine (full-volume) mode.
+  // Retries on each re-entry to the Machine tab (effect re-runs on backupType).
   useEffect(() => {
-    if (backupType === 'machine' && ListPhysicalDisks && physicalDisks.length === 0) {
-      ListPhysicalDisks().then(disks => {
-        setPhysicalDisks(disks || [])
-        // Select first disk by default
-        if (disks && disks.length > 0 && selectedDrives.length === 0) {
-          setSelectedDrives([disks[0].path])
-        }
-      }).catch(err => {
-        showStatus(`❌ ${t('diskDetectionError')}: ${err}`, 'error')
-      })
-    }
+    if (backupType !== 'machine' || !ListPhysicalDisks) return
+    if (physicalDisks.length > 0 || disksLoading) return
+    setDisksError('')
+    setDisksLoading(true)
+    ListPhysicalDisks().then(disks => {
+      setPhysicalDisks(disks || [])
+      // Select first disk by default
+      if (disks && disks.length > 0 && selectedDrives.length === 0) {
+        setSelectedDrives([disks[0].path])
+      }
+    }).catch(err => {
+      setDisksError(String(err))
+    }).finally(() => {
+      setDisksLoading(false)
+    })
   }, [backupType])
 
   // Listen to backup events
@@ -1782,9 +1789,17 @@ function App() {
 
               <div className="form-group">
                 <label>{t('physicalDisksToBackup')}</label>
-                {physicalDisks.length === 0 ? (
+                {disksLoading ? (
                   <div style={{padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
                     🔍 {t('loadingDisks')}
+                  </div>
+                ) : disksError ? (
+                  <div style={{padding: '10px', backgroundColor: '#f8d7da', borderRadius: '4px'}}>
+                    ❌ {t('diskDetectionError')}: {disksError}
+                  </div>
+                ) : physicalDisks.length === 0 ? (
+                  <div style={{padding: '10px', backgroundColor: '#fff3cd', borderRadius: '4px'}}>
+                    ⚠️ {t('noDisksDetected')}
                   </div>
                 ) : (
                   <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>

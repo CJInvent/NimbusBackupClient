@@ -72,6 +72,26 @@ const IOCTL_DISK_GET_DRIVE_LAYOUT_EX = 0x00070050
 const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
 const IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
 
+// IOCTL_DISK_GET_DRIVE_GEOMETRY_EX is defined with FILE_ANY_ACCESS, so it
+// works on a device handle opened with dwDesiredAccess == 0 (no elevation),
+// unlike IOCTL_DISK_GET_LENGTH_INFO which requires FILE_READ_ACCESS and thus
+// admin rights on a raw \\.\PhysicalDrive. Used to size disks for the picker
+// without requiring the GUI to run elevated.
+const IOCTL_DISK_GET_DRIVE_GEOMETRY_EX = 0x000700A0
+
+// diskGeometryEx is the fixed prefix of DISK_GEOMETRY_EX. The real structure
+// has a variable-length data tail (partition + detection info); we
+// over-allocate the output buffer and read only this prefix. DiskSize is the
+// total capacity in bytes (LARGE_INTEGER at offset 24).
+type diskGeometryEx struct {
+	Cylinders         int64  // LARGE_INTEGER
+	MediaType         uint32 // MEDIA_TYPE enum
+	TracksPerCylinder uint32
+	SectorsPerTrack   uint32
+	BytesPerSector    uint32
+	DiskSize          int64 // LARGE_INTEGER
+}
+
 var (
 	modkernel32                      = windows.NewLazySystemDLL("kernel32.dll")
 	procFindFirstVolumeW             = modkernel32.NewProc("FindFirstVolumeW")
@@ -123,7 +143,7 @@ func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 
 		hVol, err := windows.CreateFile(
 			windows.StringToUTF16Ptr(volName[:len(volName)-1]),
-			windows.GENERIC_READ,
+			0, // metadata-only; IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS is FILE_ANY_ACCESS
 			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 			nil,
 			windows.OPEN_EXISTING,
@@ -203,9 +223,12 @@ func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 }
 
 func GetDiskLength(path string) (int64, error) {
+	// Open with dwDesiredAccess == 0: enough to query device metadata, and
+	// permitted for non-elevated callers (GENERIC_READ on a raw PhysicalDrive
+	// requires admin). The actual backup read path still uses GENERIC_READ.
 	handle, err := windows.CreateFile(
 		windows.StringToUTF16Ptr(path),
-		windows.GENERIC_READ,
+		0,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil,
 		windows.OPEN_EXISTING,
@@ -213,28 +236,33 @@ func GetDiskLength(path string) (int64, error) {
 		0,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("CreateFile failed: %w", err)
+		return 0, fmt.Errorf("createFile failed: %w", err)
 	}
 	defer windows.CloseHandle(handle)
 
-	var lengthInfo GET_LENGTH_INFORMATION
+	// DISK_GEOMETRY_EX has a variable-length tail; over-allocate the buffer so
+	// DeviceIoControl doesn't fail with ERROR_INSUFFICIENT_BUFFER.
+	buf := make([]byte, 4096)
 	var bytesReturned uint32
-
 	err = windows.DeviceIoControl(
 		handle,
-		IOCTL_DISK_GET_LENGTH_INFO,
+		IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
 		nil,
 		0,
-		(*byte)(unsafe.Pointer(&lengthInfo)),
-		uint32(unsafe.Sizeof(lengthInfo)),
+		&buf[0],
+		uint32(len(buf)),
 		&bytesReturned,
 		nil,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("DeviceIoControl failed: %w", err)
+		return 0, fmt.Errorf("deviceIoControl failed: %w", err)
+	}
+	if bytesReturned < uint32(unsafe.Sizeof(diskGeometryEx{})) {
+		return 0, fmt.Errorf("unexpected geometry size: %d bytes", bytesReturned)
 	}
 
-	return lengthInfo.Length, nil
+	geo := (*diskGeometryEx)(unsafe.Pointer(&buf[0]))
+	return geo.DiskSize, nil
 }
 
 func BytesToString(b int64) string {
