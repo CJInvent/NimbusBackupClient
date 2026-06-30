@@ -123,6 +123,7 @@ func main() {
 		webviewBase = os.TempDir()
 	}
 	webviewDataDir := filepath.Join(webviewBase, "NimbusBackup", "WebView2")
+	// #nosec G703 -- base is the OS-provided LOCALAPPDATA/APPDATA env var (the GUI runs as the user, not the elevated service); path suffix is constant, no user-controlled traversal
 	if err := os.MkdirAll(webviewDataDir, 0o755); err != nil {
 		writeDebugLog(fmt.Sprintf("WebView2 data dir %s not creatable: %v; falling back to temp", webviewDataDir, err))
 		webviewDataDir = filepath.Join(os.TempDir(), "NimbusBackup", "WebView2")
