@@ -109,6 +109,27 @@ func main() {
 	app := NewApp()
 	writeDebugLog("App instance created")
 
+	// Resolve the WebView2 user-data folder. Prefer Local AppData: it's always
+	// provisioned per profile and isn't subject to roaming-profile redirection,
+	// which fails for domain accounts whose roaming profile isn't present on the
+	// machine (the "couldn't create the data directory" error when elevating as
+	// a different user). Pre-create it so WebView2 doesn't fail to initialize and
+	// leave the window invisible.
+	webviewBase := os.Getenv("LOCALAPPDATA")
+	if webviewBase == "" {
+		webviewBase = os.Getenv("APPDATA")
+	}
+	if webviewBase == "" {
+		webviewBase = os.TempDir()
+	}
+	webviewDataDir := filepath.Join(webviewBase, "NimbusBackup", "WebView2")
+	if err := os.MkdirAll(webviewDataDir, 0o755); err != nil {
+		writeDebugLog(fmt.Sprintf("WebView2 data dir %s not creatable: %v; falling back to temp", webviewDataDir, err))
+		webviewDataDir = filepath.Join(os.TempDir(), "NimbusBackup", "WebView2")
+		_ = os.MkdirAll(webviewDataDir, 0o755)
+	}
+	writeDebugLog(fmt.Sprintf("WebView2 user-data path: %s", webviewDataDir))
+
 	// Create application options
 	appOptions := &options.App{
 		Title:     fmt.Sprintf("%s v%s", appName, appVersion),
@@ -134,7 +155,7 @@ func main() {
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
 			DisableWindowIcon:    false,
-			WebviewUserDataPath:  filepath.Join(os.Getenv("APPDATA"), "NimbusBackup"),
+			WebviewUserDataPath:  webviewDataDir,
 		},
 	}
 
