@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -397,9 +398,31 @@ func (a *App) DiagnoseConfig() map[string]interface{} {
 
 // SaveConfig saves the configuration
 func (a *App) SaveConfig(config *Config) error {
-	// M-04: the frontend never receives the stored secrets (GetConfigWithHostname
-	// returns "" + a *_set marker), so an empty value here means "keep the existing
-	// one", not "clear it". Only overwrite when the user supplied a new value.
+	// Log sanitized config (no secrets)
+	writeDebugLog(fmt.Sprintf("SaveConfig() called: URL=%s, AuthID=%s, Datastore=%s, BackupID=%s",
+		security.SanitizeURL(config.BaseURL),
+		config.AuthID,
+		config.Datastore,
+		config.BackupID))
+
+	// Delegate to the privileged service when present so it stays the single
+	// writer of config.json. The frontend sends empty secrets to mean "keep the
+	// stored one"; the service preserves them, so secrets never leave the service.
+	if a.delegateConfigWrites() {
+		m, err := toMap(config)
+		if err != nil {
+			return err
+		}
+		if err := a.apiClient.SaveConfig(m); err != nil {
+			writeDebugLog(fmt.Sprintf("SaveConfig: service-side save failed: %v", err))
+			return err
+		}
+		a.ReloadConfig()
+		return nil
+	}
+
+	// Standalone (no service): keep stored secrets, validate, and write directly.
+	// M-04: an empty value means "keep the existing one", not "clear it".
 	if a.config != nil {
 		if config.Secret == "" {
 			config.Secret = a.config.Secret
@@ -408,13 +431,6 @@ func (a *App) SaveConfig(config *Config) error {
 			config.SMTPPassword = a.config.SMTPPassword
 		}
 	}
-
-	// Log sanitized config (no secrets)
-	writeDebugLog(fmt.Sprintf("SaveConfig() called: URL=%s, AuthID=%s, Datastore=%s, BackupID=%s",
-		security.SanitizeURL(config.BaseURL),
-		config.AuthID,
-		config.Datastore,
-		config.BackupID))
 
 	// Validate before saving
 	if err := config.Validate(); err != nil {
@@ -524,15 +540,65 @@ func (a *App) GetPBSServer(id string) (*PBSServer, error) {
 	return s.sanitized(), nil
 }
 
+// delegateConfigWrites reports whether this process should route config writes
+// through the privileged service instead of writing config.json directly. True
+// only in the GUI process when a service is available; the service process and
+// standalone GUIs write locally. Config.json under ProgramData is owned by
+// whichever process wrote it first, so an unprivileged GUI cannot overwrite a
+// service-owned file — delegating keeps a single privileged writer.
+func (a *App) delegateConfigWrites() bool {
+	return !a.isServiceProcess && a.mode == api.ModeService && a.apiClient != nil
+}
+
+// toMap json-round-trips a value into a generic map for delegation over the local
+// API (the api package cannot import the main package's config types).
+func toMap(v interface{}) (map[string]interface{}, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode for service delegation: %w", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("failed to encode for service delegation: %w", err)
+	}
+	return m, nil
+}
+
 // AddPBSServer adds a new PBS server to the configuration
 func (a *App) AddPBSServer(pbs *PBSServer) error {
 	writeDebugLog(fmt.Sprintf("AddPBSServer(%s) called", pbs.ID))
+	if a.delegateConfigWrites() {
+		m, err := toMap(pbs)
+		if err != nil {
+			return err
+		}
+		if err := a.apiClient.SavePBSServer(m); err != nil {
+			writeDebugLog(fmt.Sprintf("AddPBSServer: service-side save failed: %v", err))
+			return err
+		}
+		a.ReloadConfig()
+		return nil
+	}
 	return a.config.AddPBSServer(pbs)
 }
 
 // UpdatePBSServer updates an existing PBS server
 func (a *App) UpdatePBSServer(pbs *PBSServer) error {
 	writeDebugLog(fmt.Sprintf("UpdatePBSServer(%s) called", pbs.ID))
+	if a.delegateConfigWrites() {
+		// The service performs the "empty secret means keep stored one" merge
+		// against its authoritative config, so secrets stay service-side.
+		m, err := toMap(pbs)
+		if err != nil {
+			return err
+		}
+		if err := a.apiClient.SavePBSServer(m); err != nil {
+			writeDebugLog(fmt.Sprintf("UpdatePBSServer: service-side save failed: %v", err))
+			return err
+		}
+		a.ReloadConfig()
+		return nil
+	}
 	// M-04: the frontend never receives the token (sanitized), so an empty secret
 	// on update means "keep the stored one", not "clear it".
 	if pbs.Secret == "" {
@@ -546,12 +612,28 @@ func (a *App) UpdatePBSServer(pbs *PBSServer) error {
 // DeletePBSServer removes a PBS server
 func (a *App) DeletePBSServer(id string) error {
 	writeDebugLog(fmt.Sprintf("DeletePBSServer(%s) called", id))
+	if a.delegateConfigWrites() {
+		if err := a.apiClient.DeletePBSServer(id); err != nil {
+			writeDebugLog(fmt.Sprintf("DeletePBSServer: service-side delete failed: %v", err))
+			return err
+		}
+		a.ReloadConfig()
+		return nil
+	}
 	return a.config.DeletePBSServer(id)
 }
 
 // SetDefaultPBSServer sets the default PBS server
 func (a *App) SetDefaultPBSServer(id string) error {
 	writeDebugLog(fmt.Sprintf("SetDefaultPBSServer(%s) called", id))
+	if a.delegateConfigWrites() {
+		if err := a.apiClient.SetDefaultPBS(id); err != nil {
+			writeDebugLog(fmt.Sprintf("SetDefaultPBSServer: service-side set failed: %v", err))
+			return err
+		}
+		a.ReloadConfig()
+		return nil
+	}
 	return a.config.SetDefaultPBS(id)
 }
 

@@ -92,3 +92,69 @@ func (a *App) PinServerFingerprint(id, fingerprint string) error {
 	writeDebugLog(fmt.Sprintf("PinServerFingerprint(%s) called (service-side write)", id))
 	return a.pinFingerprintLocal(id, fingerprint)
 }
+
+// SavePBSServerFromMap is the service-side write for a delegated PBS server
+// upsert. It converts the map to a PBSServer, preserves the stored secret when
+// the GUI sent an empty one (M-04 parity), and adds or updates by id.
+func (a *App) SavePBSServerFromMap(server map[string]interface{}) error {
+	jsonData, err := json.Marshal(server)
+	if err != nil {
+		return fmt.Errorf("failed to marshal pbs server data: %w", err)
+	}
+	var pbs PBSServer
+	if err := json.Unmarshal(jsonData, &pbs); err != nil {
+		return fmt.Errorf("failed to unmarshal pbs server data: %w", err)
+	}
+	existing, _ := a.config.GetPBSServer(pbs.ID)
+	if pbs.Secret == "" && existing != nil {
+		pbs.Secret = existing.Secret
+	}
+	writeDebugLog(fmt.Sprintf("SavePBSServerFromMap(%s) called (service-side write)", pbs.ID))
+	if existing != nil {
+		return a.config.UpdatePBSServer(&pbs)
+	}
+	return a.config.AddPBSServer(&pbs)
+}
+
+// DeletePBSServerByID is the service-side write for a delegated PBS server delete.
+func (a *App) DeletePBSServerByID(id string) error {
+	writeDebugLog(fmt.Sprintf("DeletePBSServerByID(%s) called (service-side write)", id))
+	return a.config.DeletePBSServer(id)
+}
+
+// SetDefaultPBSByID is the service-side write for a delegated default-server set.
+func (a *App) SetDefaultPBSByID(id string) error {
+	writeDebugLog(fmt.Sprintf("SetDefaultPBSByID(%s) called (service-side write)", id))
+	return a.config.SetDefaultPBS(id)
+}
+
+// SaveConfigFromMap is the service-side write for a delegated full-config save. It
+// preserves stored secrets when the GUI sent empty values (M-04 parity), then
+// validates and persists.
+func (a *App) SaveConfigFromMap(configData map[string]interface{}) error {
+	jsonData, err := json.Marshal(configData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config data: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(jsonData, &cfg); err != nil {
+		return fmt.Errorf("failed to unmarshal config data: %w", err)
+	}
+	if a.config != nil {
+		if cfg.Secret == "" {
+			cfg.Secret = a.config.Secret
+		}
+		if cfg.SMTPPassword == "" {
+			cfg.SMTPPassword = a.config.SMTPPassword
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	writeDebugLog("SaveConfigFromMap() called (service-side write)")
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	a.config = &cfg
+	return nil
+}

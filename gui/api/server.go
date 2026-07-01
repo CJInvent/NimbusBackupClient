@@ -36,6 +36,12 @@ type BackupHandler interface {
 	UpdateScheduledJobFromMap(job map[string]interface{}) error
 	DeleteScheduledJobFromMap(jobID string) error
 	PinServerFingerprint(id, fingerprint string) error
+	// Config writes delegated by the unprivileged GUI so the service stays the
+	// single writer of config.json (Phase 1: GUI as a frontend to the service).
+	SavePBSServerFromMap(server map[string]interface{}) error
+	DeletePBSServerByID(id string) error
+	SetDefaultPBSByID(id string) error
+	SaveConfigFromMap(config map[string]interface{}) error
 }
 
 // NewServer creates a new API server. token is the shared local-auth secret that
@@ -62,6 +68,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/jobs/update", s.handleJobUpdate)
 	s.mux.HandleFunc("/jobs/delete/", s.handleJobDelete)
 	s.mux.HandleFunc("/pbs/fingerprint", s.handlePinFingerprint)
+	s.mux.HandleFunc("/pbs/save", s.handleSavePBSServer)
+	s.mux.HandleFunc("/pbs/delete/", s.handleDeletePBSServer)
+	s.mux.HandleFunc("/pbs/default", s.handleSetDefaultPBS)
+	s.mux.HandleFunc("/config/save", s.handleSaveConfig)
 }
 
 // Start starts the HTTP server
@@ -393,8 +403,86 @@ func (s *Server) handlePinFingerprint(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp, http.StatusOK)
 }
 
-func (s *Server) writeJSON(w http.ResponseWriter, data interface{}, status int) {
-	w.Header().Set("Content-Type", "application/json")
+// handleSavePBSServer upserts a PBS server. The unprivileged GUI delegates the
+// write here so the privileged service remains the single writer of config.json.
+func (s *Server) handleSavePBSServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var server map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&server); err != nil {
+		s.writeError(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := s.app.SavePBSServerFromMap(server); err != nil {
+		s.writeError(w, fmt.Sprintf("Failed to save PBS server: %v", err), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, map[string]interface{}{"success": true, "message": "PBS server saved"}, http.StatusOK)
+}
+
+// handleDeletePBSServer removes a PBS server by id (path: /pbs/delete/{id}).
+func (s *Server) handleDeletePBSServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/pbs/delete/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		s.writeError(w, "PBS server id required", http.StatusBadRequest)
+		return
+	}
+	if err := s.app.DeletePBSServerByID(parts[0]); err != nil {
+		s.writeError(w, fmt.Sprintf("Failed to delete PBS server: %v", err), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, map[string]interface{}{"success": true, "message": "PBS server deleted"}, http.StatusOK)
+}
+
+// handleSetDefaultPBS sets the default PBS server (body: {"id": "..."}).
+func (s *Server) handleSetDefaultPBS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.ID == "" {
+		s.writeError(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.app.SetDefaultPBSByID(req.ID); err != nil {
+		s.writeError(w, fmt.Sprintf("Failed to set default PBS server: %v", err), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, map[string]interface{}{"success": true, "message": "Default PBS server set"}, http.StatusOK)
+}
+
+// handleSaveConfig persists the full configuration (global settings).
+func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var cfg map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		s.writeError(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := s.app.SaveConfigFromMap(cfg); err != nil {
+		s.writeError(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, map[string]interface{}{"success": true, "message": "Configuration saved"}, http.StatusOK)
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, data interface{}, status int) {	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }

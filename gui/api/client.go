@@ -202,6 +202,79 @@ func (c *Client) PinFingerprint(id, fingerprint string) error {
 	return nil
 }
 
+// SavePBSServer upserts a PBS server via the service (single privileged writer of
+// config.json). The GUI delegates here instead of writing the file directly.
+func (c *Client) SavePBSServer(server map[string]interface{}) error {
+	body, err := json.Marshal(server)
+	if err != nil {
+		return fmt.Errorf("failed to encode pbs server: %w", err)
+	}
+	resp, err := c.httpClient.Post(c.baseURL+"/pbs/save", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to save pbs server: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to save pbs server: %s", string(respBody))
+	}
+	return nil
+}
+
+// DeletePBSServer removes a PBS server by id via the service.
+func (c *Client) DeletePBSServer(id string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/pbs/delete/"+id, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete pbs server: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete pbs server: %s", string(respBody))
+	}
+	return nil
+}
+
+// SetDefaultPBS sets the default PBS server via the service.
+func (c *Client) SetDefaultPBS(id string) error {
+	body, err := json.Marshal(map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("failed to encode request: %w", err)
+	}
+	resp, err := c.httpClient.Post(c.baseURL+"/pbs/default", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to set default pbs server: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to set default pbs server: %s", string(respBody))
+	}
+	return nil
+}
+
+// SaveConfig persists the full configuration via the service.
+func (c *Client) SaveConfig(config map[string]interface{}) error {
+	body, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to encode config: %w", err)
+	}
+	resp, err := c.httpClient.Post(c.baseURL+"/config/save", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to save config: %s", string(respBody))
+	}
+	return nil
+}
+
 // UpdateJob updates an existing scheduled job
 func (c *Client) UpdateJob(job map[string]interface{}) error {
 	body, err := json.Marshal(job)
