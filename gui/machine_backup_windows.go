@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -223,6 +224,55 @@ func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 }
 
 func GetDiskLength(path string) (int64, error) {
+	// Two-stage query. IOCTL_DISK_GET_LENGTH_INFO works on both disks and
+	// volume devices (including VSS shadow-copy volumes) but carries
+	// FILE_READ_ACCESS, so it needs a GENERIC_READ handle (privileged for raw
+	// \\.\PhysicalDrive). IOCTL_DISK_GET_DRIVE_GEOMETRY_EX is FILE_ANY_ACCESS
+	// (works on a zero-access handle for non-admin enumeration) but is a
+	// disk-class IOCTL and fails with ERROR_INVALID_FUNCTION ("Incorrect
+	// function") on volume devices like snapshots. Try length-info first, fall
+	// back to geometry, so both the privileged backup path (snapshot volumes)
+	// and the unprivileged GUI picker (raw disks) get a size.
+	if l, err := getDiskLengthViaLengthInfo(path); err == nil {
+		return l, nil
+	}
+	return getDiskLengthViaGeometry(path)
+}
+
+func getDiskLengthViaLengthInfo(path string) (int64, error) {
+	handle, err := windows.CreateFile(
+		windows.StringToUTF16Ptr(path),
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		0,
+		0,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("createFile failed: %w", err)
+	}
+	defer windows.CloseHandle(handle)
+
+	var lengthInfo GET_LENGTH_INFORMATION
+	var bytesReturned uint32
+	err = windows.DeviceIoControl(
+		handle,
+		IOCTL_DISK_GET_LENGTH_INFO,
+		nil,
+		0,
+		(*byte)(unsafe.Pointer(&lengthInfo)),
+		uint32(unsafe.Sizeof(lengthInfo)),
+		&bytesReturned,
+		nil,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deviceIoControl failed: %w", err)
+	}
+	return lengthInfo.Length, nil
+}
+
+func getDiskLengthViaGeometry(path string) (int64, error) {
 	// Open with dwDesiredAccess == 0: enough to query device metadata, and
 	// permitted for non-elevated callers (GENERIC_READ on a raw PhysicalDrive
 	// requires admin). The actual backup read path still uses GENERIC_READ.
@@ -373,7 +423,7 @@ func (c *MachineChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uin
 	c.knownChunks = knownChunks
 }
 
-func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64, ch chan []byte, progress func(float64, string)) error {
+func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64, ch chan []byte, readerErr <-chan error, progress func(float64, string)) error {
 	var newchunk *atomic.Uint64 = new(atomic.Uint64)
 	var reusechunk *atomic.Uint64 = new(atomic.Uint64)
 	knownChunks := hashmap.New[string, bool]()
@@ -383,6 +433,18 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 		knownChunks = knownChunks2
 		writeDebugLog(fmt.Sprintf("Loaded %d known chunks from previous backup", knownChunks.Len()))
 	} else {
+		// This is the session's FIRST request, so a handshake rejection (bad
+		// namespace, permissions, locked backup group, ...) surfaces here. It
+		// must abort: continuing would hit CreateFixedIndex, whose re-dial is
+		// blocked by design and reports a misleading "session cannot be
+		// resumed" error that masks the real cause.
+		var authErr *pbscommon.AuthErr
+		if errors.As(err, &authErr) || strings.Contains(err.Error(), "PBS authentication failed") {
+			writeDebugLog(fmt.Sprintf("PBS rejected the backup session: %v", err))
+			return fmt.Errorf("PBS rejected the backup session: %w", err)
+		}
+		// Anything else just means no usable previous index (normal for a
+		// first backup): start with an empty known-chunk set.
 		writeDebugLog(fmt.Sprintf("No previous backup found: %v", err))
 	}
 
@@ -478,6 +540,13 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 		if err != nil {
 			return err
 		}
+	}
+
+	// The stream is fully drained; now learn how the reader ended. A read
+	// failure means the index is incomplete — abort instead of closing it with
+	// a mismatched chunk count (or worse, a silently truncated image).
+	if rerr := <-readerErr; rerr != nil {
+		return fmt.Errorf("disk read failed, aborting index close: %w", rerr)
 	}
 
 	// Assign chunks
@@ -627,6 +696,18 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 		}
 		defer F.Close()
 
+		// The reader signals its outcome here (buffered so it never blocks).
+		// Any read/seek/snapshot failure MUST abort the whole disk backup:
+		// silently closing ch would truncate the stream and the index close
+		// would be rejected by PBS with a chunk-count mismatch (and a padded
+		// stream would silently corrupt the image, which is worse).
+		readerErr := make(chan error, 1)
+		failRead := func(err error) {
+			writeDebugLog(fmt.Sprintf("Disk read failed: %v", err))
+			readerErr <- err
+			close(ch)
+		}
+
 		go func() {
 			buffer := make([]byte, 0)
 			for idx, P := range parts {
@@ -636,8 +717,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 				if !P.RequiresVSS {
 					_, err := F.Seek(int64(P.StartByte), io.SeekStart)
 					if err != nil {
-						writeDebugLog(fmt.Sprintf("Failed to seek: %v", err))
-						close(ch)
+						failRead(fmt.Errorf("seek to %d failed: %w", P.StartByte, err))
 						return
 					}
 
@@ -646,8 +726,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 					for pos < P.EndByte {
 						nbytes, err := F.Read(block[:min(uint64(len(block)), P.EndByte-pos)])
 						if err != nil {
-							writeDebugLog(fmt.Sprintf("Failed to read: %v", err))
-							close(ch)
+							failRead(fmt.Errorf("raw read at %d failed: %w", pos, err))
 							return
 						}
 						buffer = append(buffer, block[:nbytes]...)
@@ -664,15 +743,13 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 				} else {
 					snap, ok := snapshots[P.Letter+":\\"]
 					if !ok {
-						writeDebugLog(fmt.Sprintf("Cannot find snapshot for letter %s", P.Letter))
-						close(ch)
+						failRead(fmt.Errorf("no VSS snapshot for volume %s:", P.Letter))
 						return
 					}
 
 					snapshotFile, err := os.Open(strings.TrimRight(snap.ObjectPath, "\\"))
 					if err != nil {
-						writeDebugLog(fmt.Sprintf("Failed to open snapshot: %v", err))
-						close(ch)
+						failRead(fmt.Errorf("open snapshot %s failed: %w", snap.ObjectPath, err))
 						return
 					}
 					defer snapshotFile.Close()
@@ -680,8 +757,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 					pos := P.StartByte
 					l, err := GetDiskLength(strings.TrimRight(snap.ObjectPath, "\\"))
 					if err != nil {
-						writeDebugLog(fmt.Sprintf("Failed to get snapshot length: %v", err))
-						close(ch)
+						failRead(fmt.Errorf("size snapshot %s failed: %w", snap.ObjectPath, err))
 						return
 					}
 
@@ -701,13 +777,11 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 							break
 						}
 						if pos >= P.EndByte {
-							writeDebugLog("Fatal: Went outside partition space")
-							close(ch)
+							failRead(fmt.Errorf("read past partition end at %d (partition ends %d)", pos, P.EndByte))
 							return
 						}
 						if err != nil {
-							writeDebugLog(fmt.Sprintf("Failed to read snapshot: %v", err))
-							close(ch)
+							failRead(fmt.Errorf("snapshot read at %d failed: %w", pos, err))
 							return
 						}
 						pos += uint64(nbytes)
@@ -747,12 +821,17 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 				}
 			}
 
+			readerErr <- nil
 			close(ch)
 		}()
 
-		return uploadWorker(client, fmt.Sprintf("drive-sata%d.img.fidx", index), uint64(total), ch, progress)
+		return uploadWorker(client, fmt.Sprintf("drive-sata%d.img.fidx", index), uint64(total), ch, readerErr, progress)
 	})
 }
+
+// machineBackupFailedMsg is what the UI (history, progress) shows on failure.
+// The detailed cause is deliberately kept to the log only.
+const machineBackupFailedMsg = "Backup failed - see backup log in C:\\ProgramData\\NimbusBackup"
 
 // RunMachineBackup performs a full physical disk backup
 func RunMachineBackup(opts BackupOptions) error {
@@ -765,6 +844,30 @@ func RunMachineBackup(opts BackupOptions) error {
 
 	if len(opts.BackupDirs) == 0 {
 		return fmt.Errorf("At least one physical drive required")
+	}
+
+	// Serialize backups per destination. Overlapping sessions to the same
+	// backup group make PBS fail group locking ("while creating locked backup
+	// group"), which is exactly what repeated one-shot clicks produced.
+	lock := getBackupLock(opts.BaseURL, opts.Datastore)
+	if !lock.TryLock() {
+		msg := "A backup to this destination is already running - not starting another"
+		writeDebugLog(msg)
+		if opts.OnComplete != nil {
+			opts.OnComplete(false, msg)
+		}
+		return errors.New(msg)
+	}
+	defer lock.Unlock()
+
+	// fail logs the detailed cause and reports only a generic message to the
+	// UI/history; the log is the source of truth for diagnostics.
+	fail := func(detail string) error {
+		writeDebugLog(detail)
+		if opts.OnComplete != nil {
+			opts.OnComplete(false, machineBackupFailedMsg)
+		}
+		return errors.New(machineBackupFailedMsg)
 	}
 
 	// Create PBS client
@@ -781,8 +884,16 @@ func RunMachineBackup(opts BackupOptions) error {
 		},
 	}
 
+	// Throttle chunk-level lines in the debug log: a 931GB disk is ~240k
+	// chunks and two log lines per chunk would write millions of lines. Log
+	// non-chunk messages always, chunk messages only when overall progress
+	// advanced by >= 0.1%. The UI callback still gets every update.
+	var lastLoggedPct float64 = -1
 	progress := func(pct float64, msg string) {
-		writeDebugLog(fmt.Sprintf("Machine backup progress: %.1f%% - %s", pct*100, msg))
+		if !strings.HasPrefix(msg, "Chunk ") || pct-lastLoggedPct >= 0.001 {
+			lastLoggedPct = pct
+			writeDebugLog(fmt.Sprintf("Machine backup progress: %.1f%% - %s", pct*100, msg))
+		}
 		if opts.OnProgress != nil {
 			opts.OnProgress(pct, msg)
 		}
@@ -811,34 +922,19 @@ func RunMachineBackup(opts BackupOptions) error {
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
 		_, err = backupWindowsDisk(client, int(idx), progress)
 		if err != nil {
-			errMsg := fmt.Sprintf("Failed to backup PhysicalDrive%d: %v", idx, err)
-			writeDebugLog(errMsg)
-			if opts.OnComplete != nil {
-				opts.OnComplete(false, errMsg)
-			}
-			return fmt.Errorf(errMsg)
+			return fail(fmt.Sprintf("Failed to backup PhysicalDrive%d: %v", idx, err))
 		}
 	}
 
 	progress(0.95, "Finalizing backup...")
 	err := client.UploadManifest()
 	if err != nil {
-		errMsg := fmt.Sprintf("Failed to upload manifest: %v", err)
-		writeDebugLog(errMsg)
-		if opts.OnComplete != nil {
-			opts.OnComplete(false, errMsg)
-		}
-		return fmt.Errorf(errMsg)
+		return fail(fmt.Sprintf("Failed to upload manifest: %v", err))
 	}
 
 	err = client.Finish()
 	if err != nil {
-		errMsg := fmt.Sprintf("Failed to finalize backup: %v", err)
-		writeDebugLog(errMsg)
-		if opts.OnComplete != nil {
-			opts.OnComplete(false, errMsg)
-		}
-		return fmt.Errorf(errMsg)
+		return fail(fmt.Sprintf("Failed to finalize backup: %v", err))
 	}
 
 	progress(1.0, "Backup completed")
