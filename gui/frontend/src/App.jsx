@@ -362,7 +362,8 @@ function App() {
               namespace: data.namespace || '',
               backupdir: data.backupdir || '',
               'backup-id': data['backup-id'] || hn,
-              usevss: data.usevss !== undefined ? data.usevss : true
+              usevss: data.usevss !== undefined ? data.usevss : true,
+              upload_limit_mbps: data.upload_limit_mbps || 0
             })
 
             // Initialize backupDirs from config if available
@@ -638,7 +639,8 @@ function App() {
         namespace: (config.namespace || '').trim(),
         backupdir: (config.backupdir || '').trim(),
         'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
-        usevss: config.usevss !== undefined ? config.usevss : true
+        usevss: config.usevss !== undefined ? config.usevss : true,
+        upload_limit_mbps: Number(config.upload_limit_mbps) || 0
       }
       await SaveConfig(trimmedConfig)
       setConfig(trimmedConfig)
@@ -1854,6 +1856,17 @@ function App() {
               />
               {t('useVSS')}
             </label>
+            <div style={{marginTop: '12px'}}>
+              <label>{t('uploadLimitLabel')}</label>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={config.upload_limit_mbps || 0}
+                onChange={(e) => setConfig({...config, upload_limit_mbps: e.target.value})}
+              />
+              <div style={{fontSize: '0.85em', color: '#666', marginTop: '4px'}}>{t('uploadLimitHint')}</div>
+            </div>
             {config.usevss && systemInfo.mode === 'Standalone' && !systemInfo.is_admin && (
               <div className="info-box" style={{marginTop: '10px', backgroundColor: '#fff3cd', borderColor: '#ffc107'}}>
                 ⚠️ <strong>{t('vssAdminRequired')}</strong><br/>

@@ -129,6 +129,11 @@ type PBSClient struct {
 
 	Insecure bool
 
+	// UploadLimitBytesPerSec caps the backup session's send rate at the TLS
+	// socket (0 = unlimited). Applied in the session dialer so it governs all
+	// upload traffic (chunks, indexes, manifest) with one token bucket.
+	UploadLimitBytesPerSec int64
+
 	Client    http.Client
 	TLSConfig tls.Config
 
@@ -959,12 +964,62 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 
 				fmt.Printf("Upgraderesp: %s\n", string(buf))
 				fmt.Println("Successfully upgraded to HTTP/2.")
+				if pbs.UploadLimitBytesPerSec > 0 {
+					return &rateLimitedConn{Conn: conn, limit: pbs.UploadLimitBytesPerSec, last: time.Now()}, nil
+				}
 				return conn, nil
 			},
 		},
 	}
 
 	registerActive(pbs)
+}
+
+// rateLimitedConn throttles Write with a token bucket (1s of burst) so the
+// backup's upload rate can be capped without touching the protocol layers.
+// Reads are unlimited. Zero/negative limit is handled by not wrapping at all.
+type rateLimitedConn struct {
+	net.Conn
+	limit     int64 // bytes/sec
+	mu        sync.Mutex
+	allowance float64
+	last      time.Time
+}
+
+func (c *rateLimitedConn) Write(p []byte) (int, error) {
+	written := 0
+	for written < len(p) {
+		n := len(p) - written
+		if n > 64*1024 {
+			n = 64 * 1024
+		}
+		c.waitFor(int64(n))
+		m, err := c.Conn.Write(p[written : written+n])
+		written += m
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+func (c *rateLimitedConn) waitFor(n int64) {
+	c.mu.Lock()
+	now := time.Now()
+	c.allowance += now.Sub(c.last).Seconds() * float64(c.limit)
+	c.last = now
+	if c.allowance > float64(c.limit) { // at most 1s of burst
+		c.allowance = float64(c.limit)
+	}
+	c.allowance -= float64(n)
+	var sleep time.Duration
+	if c.allowance < 0 {
+		sleep = time.Duration(-c.allowance / float64(c.limit) * float64(time.Second))
+	}
+	c.mu.Unlock()
+	if sleep > 0 {
+		time.Sleep(sleep)
+	}
 }
 
 // Close force-terminates the HTTP/2 session so PBS releases the backup

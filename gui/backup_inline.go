@@ -42,6 +42,7 @@ type BackupOptions struct {
 	ExcludeList     []string // User-configured exclusion patterns applied by the PXAR writer (H-04)
 	DisableSplit    bool     // When true, never auto-split regardless of size
 	SplitSizeBytes  uint64   // Auto-split threshold and per-bin target; 0 = default (SplitThreshold)
+	UploadLimitMbps float64  // Upload bandwidth cap in megabits/s (0 = unlimited)
 	OnProgress      func(percent float64, message string)
 	OnComplete      func(success bool, message string)
 	// OnResult delivers the full structured result (Group 0 contract). It is
@@ -707,14 +708,15 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 
 	// Create PBS client
 	client := &pbscommon.PBSClient{
-		BaseURL:          opts.BaseURL,
-		CertFingerPrint:  opts.CertFingerprint,
-		AuthID:           opts.AuthID,
-		Secret:           opts.Secret,
-		Datastore:        opts.Datastore,
-		Namespace:        opts.Namespace,
-		Insecure:         opts.CertFingerprint != "",
-		CompressionLevel: compressionLevel,
+		BaseURL:                opts.BaseURL,
+		CertFingerPrint:        opts.CertFingerprint,
+		AuthID:                 opts.AuthID,
+		Secret:                 opts.Secret,
+		Datastore:              opts.Datastore,
+		Namespace:              opts.Namespace,
+		Insecure:               opts.CertFingerprint != "",
+		CompressionLevel:       compressionLevel,
+		UploadLimitBytesPerSec: int64(opts.UploadLimitMbps * 1e6 / 8),
 		Manifest: pbscommon.BackupManifest{
 			BackupID: opts.BackupID,
 		},

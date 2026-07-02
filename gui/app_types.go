@@ -22,6 +22,7 @@ type App struct {
 // progressCallbacks stores the callback functions for a backup operation
 type progressCallbacks struct {
 	onProgress func(jobID string, percent float64, message string)
+	onStats    func(jobID string, bytesDone, bytesTotal, newChunks, reusedChunks uint64)
 	onComplete func(jobID string, success bool, message string)
 }
 

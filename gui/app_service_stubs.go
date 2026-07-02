@@ -86,7 +86,15 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		DisableSplit:    pbsCfg.DisableSplit,
 		SplitSizeBytes:  pbsCfg.SplitSizeBytes(),
 		OnProgress: func(percent float64, message string) {
-			writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", percent, message))
+			// Engines report a 0..1 fraction; the API progress map (and the
+			// GUI) use 0-100. This was logged raw before, which is why the
+			// log showed "0.1%" while chunk 19213/238468 was in flight.
+			pct := percent * 100
+			writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", pct, message))
+			a.notifyProgressCallbacks(pct, message)
+		},
+		OnStats: func(stats *BackupProgressStats) {
+			a.notifyStatsCallbacks(stats.BytesDone, stats.BytesTotal, stats.NewChunks, stats.ReusedChunks)
 		},
 		OnComplete: func(success bool, message string) {
 			if success {
@@ -94,7 +102,9 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 			} else {
 				writeDebugLog(fmt.Sprintf("[Backup Complete] FAILED - %s", message))
 			}
+			a.notifyCompleteCallbacks(success, message)
 		},
+		UploadLimitMbps: a.config.UploadLimitMbps,
 	}
 
 	// Execute backup using the appropriate engine for the backup type.

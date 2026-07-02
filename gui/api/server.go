@@ -143,7 +143,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 
 		// Set up progress callbacks to update the progress map
 		handler, ok := s.app.(interface {
-			SetProgressCallbacks(jobID string, onProgress func(string, float64, string), onComplete func(string, bool, string))
+			SetProgressCallbacks(jobID string, onProgress func(string, float64, string), onStats func(string, uint64, uint64, uint64, uint64), onComplete func(string, bool, string))
 		})
 		if ok {
 			log.Printf("[API] SetProgressCallbacks interface found, registering callbacks for %s", jobID)
@@ -157,6 +157,16 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 						log.Printf("[API] Progress update %s: %.1f%% - %s", jid, percent, message)
 					} else {
 						log.Printf("[API] WARNING: Progress update for unknown job %s", jid)
+					}
+					s.progressMutex.Unlock()
+				},
+				func(jid string, bytesDone, bytesTotal, newChunks, reusedChunks uint64) {
+					s.progressMutex.Lock()
+					if progress, exists := s.backupProgress[jid]; exists {
+						progress.BytesDone = bytesDone
+						progress.BytesTotal = bytesTotal
+						progress.NewChunks = newChunks
+						progress.ReusedChunks = reusedChunks
 					}
 					s.progressMutex.Unlock()
 				},

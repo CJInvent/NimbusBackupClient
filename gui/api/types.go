@@ -55,10 +55,15 @@ type ErrorResponse struct {
 type BackupProgress struct {
 	JobID     string  `json:"job_id"`
 	Running   bool    `json:"running"`
-	Progress  float64 `json:"progress"`  // 0-100
+	Progress  float64 `json:"progress"` // 0-100
 	Message   string  `json:"message"`
 	Success   bool    `json:"success"`
 	Complete  bool    `json:"complete"`
 	Error     string  `json:"error,omitempty"`
 	StartTime string  `json:"start_time,omitempty"`
+	// Structured live stats (machine backups; zero when not reported)
+	BytesDone    uint64 `json:"bytes_done,omitempty"`
+	BytesTotal   uint64 `json:"bytes_total,omitempty"`
+	NewChunks    uint64 `json:"new_chunks,omitempty"`
+	ReusedChunks uint64 `json:"reused_chunks,omitempty"`
 }

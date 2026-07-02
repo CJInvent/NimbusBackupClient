@@ -423,6 +423,12 @@ func (c *MachineChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uin
 	c.knownChunks = knownChunks
 }
 
+// machineStatsFn, when non-nil, receives structured live stats from the chunk
+// uploader (bytesDone, bytesTotal, newChunks, reusedChunks). Set by
+// RunMachineBackup while holding the per-destination backup lock, which also
+// guarantees a single machine backup at a time, so a package var is safe here.
+var machineStatsFn func(bytesDone, bytesTotal, newChunks, reusedChunks uint64)
+
 func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64, ch chan []byte, readerErr <-chan error, progress func(float64, string)) error {
 	var newchunk *atomic.Uint64 = new(atomic.Uint64)
 	var reusechunk *atomic.Uint64 = new(atomic.Uint64)
@@ -460,7 +466,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 
 	var assignmentMutex sync.Mutex
 
-	errch := make(chan error)
+	errch := make(chan error, 8)
 	digests := make(map[int64][]byte)
 
 	type PosSeg struct {
@@ -468,7 +474,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 		Data []byte
 	}
 
-	ch2 := make(chan PosSeg)
+	ch2 := make(chan PosSeg, 8)
 
 	workerfn := func() {
 		for seg := range ch2 {
@@ -500,20 +506,28 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 			CS.assignmentsOffset = append(CS.assignmentsOffset, seg.Pos)
 			CS.processedSize += uint64(len(seg.Data))
 			CS.chunkcount++
+			processedSnapshot := CS.processedSize
+			chunkcountSnapshot := CS.chunkcount
+			assignmentMutex.Unlock()
 
-			// Update progress
-			percent := float64(CS.processedSize) / float64(totalSize)
+			// Progress/stats callbacks and error checks happen OUTSIDE the
+			// mutex: holding it through the callback serialized all 8 workers
+			// on every chunk, and the old over-size error path broke out of
+			// the loop while still holding the lock, deadlocking the others.
+			percent := float64(processedSnapshot) / float64(totalSize)
 			totalChunks := int(math.Ceil(float64(totalSize) / float64(pbscommon.PBS_FIXED_CHUNK_SIZE)))
-			msg := fmt.Sprintf("Chunk %d/%d (New: %d, Reused: %d)", CS.chunkcount, totalChunks, newchunk.Load(), reusechunk.Load())
+			msg := fmt.Sprintf("Chunk %d/%d (New: %d, Reused: %d)", chunkcountSnapshot, totalChunks, newchunk.Load(), reusechunk.Load())
 			if progress != nil {
 				progress(0.1+percent*0.85, msg)
 			}
+			if machineStatsFn != nil {
+				machineStatsFn(processedSnapshot, totalSize, newchunk.Load(), reusechunk.Load())
+			}
 
-			if CS.processedSize > totalSize {
+			if processedSnapshot > totalSize {
 				errch <- fmt.Errorf("Fatal: tried to backup more data than specified size!")
 				break
 			}
-			assignmentMutex.Unlock()
 		}
 		errch <- nil
 	}
@@ -582,7 +596,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
-	ch := make(chan []byte)
+	ch := make(chan []byte, 8)
 	diskdev := fmt.Sprintf("\\\\.\\PhysicalDrive%d", index)
 
 	volumeHandle, err := syscall.CreateFile(
@@ -860,6 +874,22 @@ func RunMachineBackup(opts BackupOptions) error {
 	}
 	defer lock.Unlock()
 
+	// Structured live stats for the GUI (speed and ETA are derived client-side
+	// from these deltas). Set while holding the backup lock (single machine
+	// backup at a time), cleared on exit.
+	if opts.OnStats != nil {
+		machineStatsFn = func(bytesDone, bytesTotal, newChunks, reusedChunks uint64) {
+			opts.OnStats(&BackupProgressStats{
+				Percent:      float64(bytesDone) / float64(bytesTotal),
+				BytesDone:    bytesDone,
+				BytesTotal:   bytesTotal,
+				NewChunks:    newChunks,
+				ReusedChunks: reusedChunks,
+			})
+		}
+		defer func() { machineStatsFn = nil }()
+	}
+
 	// fail logs the detailed cause and reports only a generic message to the
 	// UI/history; the log is the source of truth for diagnostics.
 	fail := func(detail string) error {
@@ -872,13 +902,14 @@ func RunMachineBackup(opts BackupOptions) error {
 
 	// Create PBS client
 	client := &pbscommon.PBSClient{
-		BaseURL:         opts.BaseURL,
-		CertFingerPrint: opts.CertFingerprint,
-		AuthID:          opts.AuthID,
-		Secret:          opts.Secret,
-		Datastore:       opts.Datastore,
-		Namespace:       opts.Namespace,
-		Insecure:        opts.CertFingerprint != "",
+		BaseURL:                opts.BaseURL,
+		CertFingerPrint:        opts.CertFingerprint,
+		AuthID:                 opts.AuthID,
+		Secret:                 opts.Secret,
+		Datastore:              opts.Datastore,
+		Namespace:              opts.Namespace,
+		Insecure:               opts.CertFingerprint != "",
+		UploadLimitBytesPerSec: int64(opts.UploadLimitMbps * 1e6 / 8),
 		Manifest: pbscommon.BackupManifest{
 			BackupID: opts.BackupID,
 		},

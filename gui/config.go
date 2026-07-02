@@ -36,6 +36,9 @@ type Config struct {
 	// per-bin target size; 0 means the default (DefaultSplitSizeGB).
 	DisableSplit bool `json:"disable_split,omitempty"`
 	SplitSizeGB  int  `json:"split_size_gb,omitempty"`
+	// UploadLimitMbps caps backup upload bandwidth in megabits/s (0 = unlimited).
+	// Applied at the PBS session socket, so it covers all backup types.
+	UploadLimitMbps float64 `json:"upload_limit_mbps,omitempty"`
 
 	// ==================== EMAIL NOTIFICATIONS ====================
 	SMTPHost     string `json:"smtp_host,omitempty"`

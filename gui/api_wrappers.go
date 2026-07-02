@@ -11,6 +11,60 @@ import (
 // API wrapper methods for HTTP API compatibility
 // These methods convert map[string]interface{} to typed structs
 
+// SetProgressCallbacks registers per-job progress/stats/completion callbacks for
+// API mode. Shared file: the SERVICE build needs this too — it used to live in
+// the !service main.go only, so the service never implemented the interface the
+// API server asserts, the progress map never updated during a run, and the GUI
+// showed a frozen "Starting backup..." for the entire backup.
+func (a *App) SetProgressCallbacks(jobID string, onProgress func(string, float64, string), onStats func(string, uint64, uint64, uint64, uint64), onComplete func(string, bool, string)) {
+	writeDebugLog(fmt.Sprintf("[SetProgressCallbacks] Registered callbacks for jobID: %s", jobID))
+	a.callbacksMutex.Lock()
+	a.callbacksMap[jobID] = &progressCallbacks{
+		onProgress: onProgress,
+		onStats:    onStats,
+		onComplete: onComplete,
+	}
+	a.callbacksMutex.Unlock()
+}
+
+// notifyProgressCallbacks fans a progress update (percent 0-100) out to all
+// registered per-job callbacks. Returns whether any callback was registered.
+func (a *App) notifyProgressCallbacks(percent float64, message string) bool {
+	a.callbacksMutex.RLock()
+	defer a.callbacksMutex.RUnlock()
+	for jobID, callbacks := range a.callbacksMap {
+		if callbacks.onProgress != nil {
+			callbacks.onProgress(jobID, percent, message)
+		}
+	}
+	return len(a.callbacksMap) > 0
+}
+
+// notifyStatsCallbacks fans structured stats out to registered callbacks.
+func (a *App) notifyStatsCallbacks(bytesDone, bytesTotal, newChunks, reusedChunks uint64) {
+	a.callbacksMutex.RLock()
+	defer a.callbacksMutex.RUnlock()
+	for jobID, callbacks := range a.callbacksMap {
+		if callbacks.onStats != nil {
+			callbacks.onStats(jobID, bytesDone, bytesTotal, newChunks, reusedChunks)
+		}
+	}
+}
+
+// notifyCompleteCallbacks fans completion out and clears the registry.
+func (a *App) notifyCompleteCallbacks(success bool, message string) bool {
+	a.callbacksMutex.Lock()
+	defer a.callbacksMutex.Unlock()
+	had := len(a.callbacksMap) > 0
+	for jobID, callbacks := range a.callbacksMap {
+		if callbacks.onComplete != nil {
+			callbacks.onComplete(jobID, success, message)
+		}
+		delete(a.callbacksMap, jobID)
+	}
+	return had
+}
+
 // SaveScheduledJobFromMap is an API wrapper that accepts map[string]interface{}
 func (a *App) SaveScheduledJobFromMap(jobData map[string]interface{}) error {
 	// Convert map to JSON then unmarshal to ScheduledJob

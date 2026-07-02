@@ -36,7 +36,6 @@ const (
 	appName = "Nimbus Backup"
 )
 
-
 var (
 	crashReportPath string
 )
@@ -184,7 +183,6 @@ func main() {
 	writeDebugLog("Application shutdown normally")
 }
 
-
 func writeCrashReport(message string) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
@@ -212,17 +210,8 @@ Please report this issue to RDEM Systems:
 	}
 }
 
-
-// SetProgressCallbacks sets custom progress callbacks for API mode
-func (a *App) SetProgressCallbacks(jobID string, onProgress func(string, float64, string), onComplete func(string, bool, string)) {
-	writeDebugLog(fmt.Sprintf("[SetProgressCallbacks] Registered callbacks for jobID: %s", jobID))
-	a.callbacksMutex.Lock()
-	a.callbacksMap[jobID] = &progressCallbacks{
-		onProgress: onProgress,
-		onComplete: onComplete,
-	}
-	a.callbacksMutex.Unlock()
-}
+// SetProgressCallbacks moved to api_wrappers.go (shared) so the service build
+// implements it too — see the comment there.
 
 // startup is called when the app starts
 func (a *App) startup(ctx context.Context) {
@@ -355,14 +344,15 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 		// M-04: never hand the PBS token to the webview/frontend. Expose only
 		// whether one is stored; SaveConfig keeps the existing secret when the
 		// frontend submits an empty value, and TestConnection falls back to it.
-		"secret":          "",
-		"secret_set":      cfg.Secret != "",
-		"datastore":       cfg.Datastore,
-		"namespace":       cfg.Namespace,
-		"backupdir":       cfg.BackupDir,
-		"backup-id":       cfg.BackupID,
-		"usevss":          cfg.UseVSS,
-		"hostname":        hostname,
+		"secret":            "",
+		"secret_set":        cfg.Secret != "",
+		"datastore":         cfg.Datastore,
+		"namespace":         cfg.Namespace,
+		"backupdir":         cfg.BackupDir,
+		"backup-id":         cfg.BackupID,
+		"usevss":            cfg.UseVSS,
+		"upload_limit_mbps": cfg.UploadLimitMbps,
+		"hostname":          hostname,
 	}
 
 	// Pre-fill backup-id with hostname if empty
@@ -385,14 +375,14 @@ func (a *App) DiagnoseConfig() map[string]interface{} {
 	configPath, _ := getConfigPath()
 
 	return map[string]interface{}{
-		"config_path":       configPath,
-		"baseurl_set":       cfg.BaseURL != "",
-		"baseurl_value":     security.SanitizeURL(cfg.BaseURL),
-		"authid_set":        cfg.AuthID != "",
-		"datastore_set":     cfg.Datastore != "",
-		"validation_ok":     validationError == "",
-		"validation_error":  validationError,
-		"mode":              a.mode.String(),
+		"config_path":      configPath,
+		"baseurl_set":      cfg.BaseURL != "",
+		"baseurl_value":    security.SanitizeURL(cfg.BaseURL),
+		"authid_set":       cfg.AuthID != "",
+		"datastore_set":    cfg.Datastore != "",
+		"validation_ok":    validationError == "",
+		"validation_error": validationError,
+		"mode":             a.mode.String(),
 	}
 }
 
@@ -816,6 +806,15 @@ func (a *App) pollBackupProgress(jobID string) {
 				"percent": progress.Progress,
 				"message": progress.Message,
 			})
+			if progress.BytesTotal > 0 {
+				runtime.EventsEmit(a.ctx, "backup:stats", map[string]interface{}{
+					"percent":      progress.Progress,
+					"bytesDone":    progress.BytesDone,
+					"bytesTotal":   progress.BytesTotal,
+					"newChunks":    progress.NewChunks,
+					"reusedChunks": progress.ReusedChunks,
+				})
+			}
 		}
 
 		// If backup completed, emit final event and stop polling
@@ -918,71 +917,31 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		OnProgress: func(percent float64, message string) {
 			writeDebugLog(fmt.Sprintf("Progress: %.1f%% - %s", percent*100, message))
 
-			// Check if there's a registered callback for any job (service mode)
-			a.callbacksMutex.RLock()
-			hasCallbacks := len(a.callbacksMap) > 0
-			if hasCallbacks {
-				// Call all registered callbacks (typically just one per backup)
-				for jobID, callbacks := range a.callbacksMap {
-					if callbacks.onProgress != nil {
-						writeDebugLog(fmt.Sprintf("[OnProgress] Calling custom callback for jobID: %s", jobID))
-						callbacks.onProgress(jobID, percent*100, message)
-					}
-				}
-			}
-			a.callbacksMutex.RUnlock()
+			// API mode: feed registered per-job callbacks (percent 0-100)
+			hasCallbacks := a.notifyProgressCallbacks(percent*100, message)
 
 			// If no custom callbacks and we have Wails context, emit events (GUI standalone mode)
 			// NEVER emit events if we're the service process (no Wails runtime)
 			if !hasCallbacks && !a.isServiceProcess && a.ctx != nil {
-				writeDebugLog("[OnProgress] Emitting Wails event (GUI mode)")
 				runtime.EventsEmit(a.ctx, "backup:progress", map[string]interface{}{
 					"percent": percent * 100,
 					"message": message,
 				})
-			} else if !hasCallbacks && (a.isServiceProcess || a.ctx == nil) {
-				writeDebugLog("[OnProgress] No callbacks/context (service or headless mode)")
 			}
 		},
 		OnComplete: func(success bool, message string) {
 			writeDebugLog(fmt.Sprintf("Backup complete: success=%v, %s", success, message))
 
-			// Check if there's a registered callback for any job (service mode)
-			a.callbacksMutex.RLock()
-			hasCallbacks := len(a.callbacksMap) > 0
-			var jobIDsToCleanup []string
-			if hasCallbacks {
-				// Call all registered callbacks and collect jobIDs for cleanup
-				for jobID, callbacks := range a.callbacksMap {
-					if callbacks.onComplete != nil {
-						writeDebugLog(fmt.Sprintf("[OnComplete] Calling custom callback for jobID: %s", jobID))
-						callbacks.onComplete(jobID, success, message)
-					}
-					jobIDsToCleanup = append(jobIDsToCleanup, jobID)
-				}
-			}
-			a.callbacksMutex.RUnlock()
-
-			// Clean up completed callbacks
-			if len(jobIDsToCleanup) > 0 {
-				a.callbacksMutex.Lock()
-				for _, jobID := range jobIDsToCleanup {
-					delete(a.callbacksMap, jobID)
-					writeDebugLog(fmt.Sprintf("[OnComplete] Cleaned up callbacks for jobID: %s", jobID))
-				}
-				a.callbacksMutex.Unlock()
-			}
+			// API mode: notify + clean registered per-job callbacks
+			hasCallbacks := a.notifyCompleteCallbacks(success, message)
 
 			// If no custom callbacks and we have Wails context, emit events (GUI standalone mode)
 			// NEVER emit events if we're the service process (no Wails runtime)
 			if !hasCallbacks && !a.isServiceProcess && a.ctx != nil {
-				writeDebugLog("[OnComplete] Emitting Wails event (GUI mode)")
 				runtime.EventsEmit(a.ctx, "backup:complete", map[string]interface{}{
 					"success": success,
 					"message": message,
 				})
-			} else if !hasCallbacks && (a.isServiceProcess || a.ctx == nil) {
-				writeDebugLog("[OnComplete] No callbacks/context (service or headless mode)")
 			}
 
 			// Add manual backup to history
@@ -1015,10 +974,11 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		},
 	}
 
-	// Structured live stats + final structured result for the GUI (standalone mode).
-	// In the service process there is no Wails runtime, and the service-mode stats
-	// bridge is a separate backlog item (service-mode progress), so we only emit here.
+	// Structured live stats + final structured result for the GUI (standalone mode)
+	// and, in API mode, the registered per-job stats callbacks.
+	opts.UploadLimitMbps = a.config.UploadLimitMbps
 	opts.OnStats = func(stats *BackupProgressStats) {
+		a.notifyStatsCallbacks(stats.BytesDone, stats.BytesTotal, stats.NewChunks, stats.ReusedChunks)
 		if a.isServiceProcess || a.ctx == nil {
 			return
 		}
