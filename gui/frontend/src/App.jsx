@@ -363,7 +363,14 @@ function App() {
               backupdir: data.backupdir || '',
               'backup-id': data['backup-id'] || hn,
               usevss: data.usevss !== undefined ? data.usevss : true,
-              upload_limit_mbps: data.upload_limit_mbps || 0
+              upload_limit_mbps: data.upload_limit_mbps || 0,
+              smtp_host: data.smtp_host || '',
+              smtp_port: data.smtp_port || '',
+              smtp_username: data.smtp_username || '',
+              smtp_password: '',
+              smtp_password_set: data.smtp_password_set || false,
+              smtp_from: data.smtp_from || '',
+              alert_email: data.alert_email || ''
             })
 
             // Initialize backupDirs from config if available
@@ -640,7 +647,13 @@ function App() {
         backupdir: (config.backupdir || '').trim(),
         'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
         usevss: config.usevss !== undefined ? config.usevss : true,
-        upload_limit_mbps: Number(config.upload_limit_mbps) || 0
+        upload_limit_mbps: Number(config.upload_limit_mbps) || 0,
+        smtp_host: (config.smtp_host || '').trim(),
+        smtp_port: (config.smtp_port || '').trim(),
+        smtp_username: (config.smtp_username || '').trim(),
+        smtp_password: config.smtp_password || '',
+        smtp_from: (config.smtp_from || '').trim(),
+        alert_email: (config.alert_email || '').trim()
       }
       await SaveConfig(trimmedConfig)
       setConfig(trimmedConfig)
@@ -1866,6 +1879,22 @@ function App() {
                 onChange={(e) => setConfig({...config, upload_limit_mbps: e.target.value})}
               />
               <div style={{fontSize: '0.85em', color: '#666', marginTop: '4px'}}>{t('uploadLimitHint')}</div>
+            </div>
+            <div style={{marginTop: '16px'}}>
+              <label style={{fontWeight: 'bold'}}>{t('alertsSection')}</label>
+              <div style={{fontSize: '0.85em', color: '#666', margin: '4px 0 8px'}}>{t('alertsHint')}</div>
+              <label>{t('alertEmailLabel')}</label>
+              <input type="email" value={config.alert_email || ''} onChange={(e) => setConfig({...config, alert_email: e.target.value})} />
+              <label>{t('smtpHostLabel')}</label>
+              <input type="text" value={config.smtp_host || ''} onChange={(e) => setConfig({...config, smtp_host: e.target.value})} />
+              <label>{t('smtpPortLabel')}</label>
+              <input type="text" placeholder="587" value={config.smtp_port || ''} onChange={(e) => setConfig({...config, smtp_port: e.target.value})} />
+              <label>{t('smtpUsernameLabel')}</label>
+              <input type="text" value={config.smtp_username || ''} onChange={(e) => setConfig({...config, smtp_username: e.target.value})} />
+              <label>{t('smtpPasswordLabel')}</label>
+              <input type="password" placeholder={config.smtp_password_set ? '********' : ''} value={config.smtp_password || ''} onChange={(e) => setConfig({...config, smtp_password: e.target.value})} />
+              <label>{t('smtpFromLabel')}</label>
+              <input type="text" value={config.smtp_from || ''} onChange={(e) => setConfig({...config, smtp_from: e.target.value})} />
             </div>
             {config.usevss && systemInfo.mode === 'Standalone' && !systemInfo.is_admin && (
               <div className="info-box" style={{marginTop: '10px', backgroundColor: '#fff3cd', borderColor: '#ffc107'}}>

@@ -45,6 +45,8 @@ type Config struct {
 	SMTPPort     string `json:"smtp_port,omitempty"`
 	SMTPUsername string `json:"smtp_username,omitempty"`
 	SMTPPassword string `json:"smtp_password,omitempty"`
+	SMTPFrom     string `json:"smtp_from,omitempty"`
+	AlertEmail   string `json:"alert_email,omitempty"` // failure-alert recipient; empty = alerts off
 	EmailFrom    string `json:"email_from,omitempty"`
 	EmailTo      string `json:"email_to,omitempty"`
 }

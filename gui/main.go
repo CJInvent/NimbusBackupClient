@@ -352,6 +352,13 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 		"backup-id":         cfg.BackupID,
 		"usevss":            cfg.UseVSS,
 		"upload_limit_mbps": cfg.UploadLimitMbps,
+		"smtp_host":         cfg.SMTPHost,
+		"smtp_port":         cfg.SMTPPort,
+		"smtp_username":     cfg.SMTPUsername,
+		"smtp_password":     "",
+		"smtp_password_set": cfg.SMTPPassword != "",
+		"smtp_from":         cfg.SMTPFrom,
+		"alert_email":       cfg.AlertEmail,
 		"hostname":          hostname,
 	}
 
@@ -931,6 +938,9 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		},
 		OnComplete: func(success bool, message string) {
 			writeDebugLog(fmt.Sprintf("Backup complete: success=%v, %s", success, message))
+			if !success {
+				a.alertBackupFailure(message)
+			}
 
 			// API mode: notify + clean registered per-job callbacks
 			hasCallbacks := a.notifyCompleteCallbacks(success, message)
