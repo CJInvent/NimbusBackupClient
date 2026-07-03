@@ -174,6 +174,25 @@ func LoadConfig() *Config {
 		return config
 	}
 
+	// ==================== SECRETS AT REST (Phase 2) ====================
+	// Decrypt stored secrets into memory. Values without the encv1 prefix are
+	// legacy plaintext: note them so this load migrates the file to encrypted
+	// form via the Save() below.
+	needsSecretMigration := false
+	migrate := func(v string) string {
+		if v != "" && !isEncryptedSecret(v) {
+			needsSecretMigration = true
+		}
+		return decryptSecret(v)
+	}
+	config.Secret = migrate(config.Secret)
+	config.SMTPPassword = migrate(config.SMTPPassword)
+	for _, s := range config.PBSServers {
+		if s != nil {
+			s.Secret = migrate(s.Secret)
+		}
+	}
+
 	// ==================== AUTO-MIGRATION ====================
 	// If legacy single PBS config exists (BaseURL not empty) and PBSServers is empty,
 	// migrate to multi-PBS format automatically
@@ -208,6 +227,17 @@ func LoadConfig() *Config {
 		config.PBSServers = make(map[string]*PBSServer)
 	}
 
+	// Persist the secrets-at-rest migration (Save() encrypts on write). Only
+	// fires when a legacy plaintext secret was found, so steady-state loads
+	// stay read-only.
+	if needsSecretMigration {
+		if err := config.Save(); err != nil {
+			writeDebugLog(fmt.Sprintf("[Secrets] WARNING: failed to persist secret encryption migration: %v", err))
+		} else {
+			writeDebugLog("[Secrets] Migrated stored secrets to encrypted form (encv1)")
+		}
+	}
+
 	return config
 }
 
@@ -217,7 +247,25 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	data, err := json.MarshalIndent(c, "", "  ")
+	// Encrypt secrets on a COPY: the in-memory config stays plaintext (the
+	// backup engines need the real values to authenticate to PBS), while the
+	// file on disk only ever sees encv1 envelopes.
+	onDisk := *c
+	onDisk.Secret = encryptSecret(c.Secret)
+	onDisk.SMTPPassword = encryptSecret(c.SMTPPassword)
+	if c.PBSServers != nil {
+		onDisk.PBSServers = make(map[string]*PBSServer, len(c.PBSServers))
+		for id, s := range c.PBSServers {
+			if s == nil {
+				continue
+			}
+			sc := *s
+			sc.Secret = encryptSecret(s.Secret)
+			onDisk.PBSServers[id] = &sc
+		}
+	}
+
+	data, err := json.MarshalIndent(&onDisk, "", "  ")
 	if err != nil {
 		return err
 	}
