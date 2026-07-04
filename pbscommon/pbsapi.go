@@ -987,6 +987,13 @@ type rateLimitedConn struct {
 }
 
 func (c *rateLimitedConn) Write(p []byte) (int, error) {
+	// Small writes pass through unthrottled: they are protocol control
+	// traffic (HTTP/2 SETTINGS/PING/WINDOW_UPDATE frames, headers), and
+	// delaying WINDOW_UPDATEs would starve the receive path at low limits.
+	// Bulk chunk payloads are far larger, so accounting stays accurate.
+	if len(p) <= 1024 {
+		return c.Conn.Write(p)
+	}
 	written := 0
 	for written < len(p) {
 		n := len(p) - written

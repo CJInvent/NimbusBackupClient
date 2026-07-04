@@ -29,6 +29,11 @@ func (a *App) alertBackupFailure(message string) {
 	if cfg == nil || cfg.SMTPHost == "" || cfg.AlertEmail == "" {
 		return
 	}
+	// A rejected duplicate start (concurrency guard) is operator feedback,
+	// not a backup failure - do not page anyone for a double-click.
+	if strings.Contains(message, "already running") {
+		return
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {

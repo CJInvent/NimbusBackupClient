@@ -434,6 +434,23 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 	var reusechunk *atomic.Uint64 = new(atomic.Uint64)
 	knownChunks := hashmap.New[string, bool]()
 
+	// abort unblocks the disk reader before returning an error: the reader
+	// goroutine may be parked on a channel send, and while parked it pins the
+	// raw-disk and VSS-snapshot handles for the life of the process. Draining
+	// its channel (and result slot) in the background lets it run to
+	// completion and release everything.
+	abort := func(e error) error {
+		go func() {
+			for range ch {
+			}
+			select {
+			case <-readerErr:
+			default:
+			}
+		}()
+		return e
+	}
+
 	knownChunks2, err := client.GetKnownSha265FromFIDX(filename)
 	if err == nil {
 		knownChunks = knownChunks2
@@ -447,7 +464,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 		var authErr *pbscommon.AuthErr
 		if errors.As(err, &authErr) || strings.Contains(err.Error(), "PBS authentication failed") {
 			writeDebugLog(fmt.Sprintf("PBS rejected the backup session: %v", err))
-			return fmt.Errorf("PBS rejected the backup session: %w", err)
+			return abort(fmt.Errorf("PBS rejected the backup session: %w", err))
 		}
 		// Anything else just means no usable previous index (normal for a
 		// first backup): start with an empty known-chunk set.
@@ -461,7 +478,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 		Size:        int64(totalSize),
 	})
 	if err != nil {
-		return err
+		return abort(err)
 	}
 
 	var assignmentMutex sync.Mutex
@@ -525,7 +542,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 			}
 
 			if processedSnapshot > totalSize {
-				errch <- fmt.Errorf("Fatal: tried to backup more data than specified size!")
+				errch <- fmt.Errorf("fatal: tried to backup more data than specified size")
 				break
 			}
 		}
@@ -552,7 +569,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 	for i := 0; i < 8; i++ {
 		err := <-errch
 		if err != nil {
-			return err
+			return abort(err)
 		}
 	}
 
@@ -706,7 +723,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 
 		F, err := os.Open(diskdev)
 		if err != nil {
-			return fmt.Errorf("Failed to open disk: %v", err)
+			return fmt.Errorf("failed to open disk: %v", err)
 		}
 		defer F.Close()
 
@@ -857,7 +874,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	}
 
 	if len(opts.BackupDirs) == 0 {
-		return fmt.Errorf("At least one physical drive required")
+		return fmt.Errorf("at least one physical drive required")
 	}
 
 	// Serialize backups per destination. Overlapping sessions to the same
@@ -936,7 +953,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	// Parse and backup each physical drive
 	for _, dev := range opts.BackupDirs {
 		if !strings.HasPrefix(dev, "\\\\.\\PhysicalDrive") {
-			return fmt.Errorf("Invalid physical drive path: %s", dev)
+			return fmt.Errorf("invalid physical drive path: %s", dev)
 		}
 
 		re := regexp.MustCompile(`PhysicalDrive(\d+)$`)

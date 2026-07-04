@@ -10,6 +10,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // GetConfigWithHostname returns the configuration with hostname
@@ -70,6 +71,7 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 	pbsCfg := a.config.EffectivePBS()
 
 	// Prepare backup options
+	lastLoggedPct := -1.0
 	opts := BackupOptions{
 		BaseURL:         pbsCfg.BaseURL,
 		AuthID:          pbsCfg.AuthID,
@@ -87,10 +89,15 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		SplitSizeBytes:  pbsCfg.SplitSizeBytes(),
 		OnProgress: func(percent float64, message string) {
 			// Engines report a 0..1 fraction; the API progress map (and the
-			// GUI) use 0-100. This was logged raw before, which is why the
-			// log showed "0.1%" while chunk 19213/238468 was in flight.
+			// GUI) use 0-100. Chunk-level messages are throttled to >=0.1%
+			// progress steps in the log (a 931GB disk is ~240k chunks; a line
+			// per chunk was rewriting megabytes of log). The progress map
+			// still gets every update.
 			pct := percent * 100
-			writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", pct, message))
+			if !strings.HasPrefix(message, "Chunk ") || pct-lastLoggedPct >= 0.1 {
+				lastLoggedPct = pct
+				writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", pct, message))
+			}
 			a.notifyProgressCallbacks(pct, message)
 		},
 		OnStats: func(stats *BackupProgressStats) {
