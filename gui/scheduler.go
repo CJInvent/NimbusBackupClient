@@ -443,7 +443,7 @@ func (a *App) CleanupAbandonedJobs() {
 		if entry.Status == "running" {
 			writeDebugLog(fmt.Sprintf("Marking abandoned job as failed: %s", entry.Name))
 			history[i].Status = "failed"
-			history[i].Message = "Abandonné (application interrompue)"
+			history[i].Message = "Aborted (application interrupted)"
 			history[i].Timestamp = time.Now().Format(time.RFC3339)
 			modified = true
 		}
@@ -610,7 +610,7 @@ func (a *App) executeScheduledJob(job ScheduledJob) {
 		Name:       job.Name,
 		Timestamp:  time.Now().Format(time.RFC3339),
 		Status:     "success",
-		Message:    "Backup terminé",
+		Message:    "Backup completed",
 		BackupDirs: job.BackupDirs,
 		BackupID:   job.BackupID,
 		UseVSS:     job.UseVSS,

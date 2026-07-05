@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"security"
 )
@@ -33,17 +34,17 @@ func (pbs *PBSServer) sanitized() *PBSServer {
 func (pbs *PBSServer) Validate() error {
 	// Validate ID
 	if pbs.ID == "" {
-		return fmt.Errorf("PBS server ID requis")
+		return errors.New("[NB-1009] PBS server ID required")
 	}
 
 	// Validate Name
 	if pbs.Name == "" {
-		return fmt.Errorf("PBS server name requis")
+		return errors.New(errServerNameRequired)
 	}
 
 	// Validate BaseURL
 	if pbs.BaseURL == "" {
-		return fmt.Errorf("URL du serveur PBS requis")
+		return errors.New(errServerURLRequired)
 	}
 	if err := security.ValidateURL(pbs.BaseURL); err != nil {
 		return fmt.Errorf("URL invalide: %w", err)
@@ -51,7 +52,7 @@ func (pbs *PBSServer) Validate() error {
 
 	// Validate AuthID
 	if pbs.AuthID == "" {
-		return fmt.Errorf("authentication ID requis")
+		return errors.New(errAuthIDRequired)
 	}
 	if err := security.ValidateAuthID(pbs.AuthID); err != nil {
 		return fmt.Errorf("authentication ID invalide: %w", err)
@@ -59,12 +60,12 @@ func (pbs *PBSServer) Validate() error {
 
 	// Validate Secret (non-empty check)
 	if pbs.Secret == "" {
-		return fmt.Errorf("secret requis")
+		return errors.New(errSecretRequired)
 	}
 
 	// Validate Datastore
 	if pbs.Datastore == "" {
-		return fmt.Errorf("datastore requis")
+		return errors.New(errDatastoreRequired)
 	}
 	if err := security.ValidateDatastore(pbs.Datastore); err != nil {
 		return fmt.Errorf("datastore invalide: %w", err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -475,21 +476,21 @@ func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRew
 	switch mode {
 	case RestoreModeOriginal:
 		if meta == nil {
-			return nil, fmt.Errorf("restauration in-place impossible : ce snapshot n'a pas de métadonnées (.nimbus_backup_meta.json absent), choisissez « autre emplacement »")
+			return nil, errors.New(errInPlaceNoMeta)
 		}
 		if meta.OriginalPath == "" {
-			return nil, fmt.Errorf("restauration in-place impossible : le chemin d'origine n'est pas renseigné dans les métadonnées")
+			return nil, errors.New(errInPlaceNoOrigPath)
 		}
 		if meta.OS != "" && meta.OS != runtime.GOOS {
-			return nil, fmt.Errorf("restauration in-place impossible : sauvegarde faite sur %s, machine actuelle %s", meta.OS, runtime.GOOS)
+			return nil, fmt.Errorf("%s :: %s -> %s", errInPlaceOSMismatch, meta.OS, runtime.GOOS)
 		}
 		if !opts.AllowCrossHost {
 			localHost, err := os.Hostname()
 			if err != nil {
-				return nil, fmt.Errorf("impossible de lire le hostname local : %w", err)
+				return nil, fmt.Errorf("%s :: %v", errReadHostname, err)
 			}
 			if meta.Hostname != "" && !equalHostnames(meta.Hostname, localHost) {
-				return nil, fmt.Errorf("restauration in-place bloquée : sauvegarde de %q, machine actuelle %q — cochez « forcer cross-host » si l'intention est délibérée", meta.Hostname, localHost)
+				return nil, fmt.Errorf("%s :: %s -> %s", errInPlaceCrossHost, meta.Hostname, localHost)
 			}
 		}
 		// Materialize the original root once, with native separators.
@@ -503,7 +504,7 @@ func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRew
 
 	case RestoreModeAlternateAbs:
 		if opts.DestPath == "" {
-			return nil, fmt.Errorf("dossier de destination requis")
+			return nil, errors.New(errDestPathRequired)
 		}
 		dest := opts.DestPath
 		return func(archivePath string) string {
@@ -512,7 +513,7 @@ func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRew
 
 	case RestoreModeAlternateFlat:
 		if opts.DestPath == "" {
-			return nil, fmt.Errorf("dossier de destination requis")
+			return nil, errors.New(errDestPathRequired)
 		}
 		// Empty selection means "restore everything" — flat is meaningless,
 		// fall back to abs so the user gets a sensible result instead of

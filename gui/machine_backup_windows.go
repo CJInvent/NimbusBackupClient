@@ -862,7 +862,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 
 // machineBackupFailedMsg is what the UI (history, progress) shows on failure.
 // The detailed cause is deliberately kept to the log only.
-const machineBackupFailedMsg = "Backup failed - see backup log in C:\\ProgramData\\NimbusBackup"
+const machineBackupFailedMsg = errBackupFailedSeeLog
 
 // RunMachineBackup performs a full physical disk backup
 func RunMachineBackup(opts BackupOptions) error {
@@ -870,11 +870,11 @@ func RunMachineBackup(opts BackupOptions) error {
 
 	// Validate options
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
-		return fmt.Errorf("PBS connection parameters required")
+		return errors.New(errPBSParamsRequired)
 	}
 
 	if len(opts.BackupDirs) == 0 {
-		return fmt.Errorf("at least one physical drive required")
+		return errors.New(errDiskRequired)
 	}
 
 	// Serialize backups per destination. Overlapping sessions to the same
@@ -882,7 +882,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	// group"), which is exactly what repeated one-shot clicks produced.
 	lock := getBackupLock(opts.BaseURL, opts.Datastore)
 	if !lock.TryLock() {
-		msg := "A backup to this destination is already running - not starting another"
+		msg := errAlreadyRunning
 		writeDebugLog(msg)
 		if opts.OnComplete != nil {
 			opts.OnComplete(false, msg)

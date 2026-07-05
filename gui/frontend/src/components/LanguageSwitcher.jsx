@@ -42,6 +42,21 @@ function LanguageSwitcher() {
       >
         🇬🇧 EN
       </button>
+      <button
+        onClick={() => setLanguage('es')}
+        style={{
+          padding: '6px 12px',
+          border: 'none',
+          borderRadius: '6px',
+          cursor: 'pointer',
+          fontWeight: language === 'es' ? 'bold' : 'normal',
+          backgroundColor: language === 'es' ? '#667eea' : 'transparent',
+          color: language === 'es' ? 'white' : '#4a5568',
+          transition: 'all 0.2s'
+        }}
+      >
+        🇪🇸 ES
+      </button>
     </div>
   )
 }

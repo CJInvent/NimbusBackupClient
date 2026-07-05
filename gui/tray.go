@@ -38,13 +38,13 @@ func onReady(a *App) func() {
 		// Set tray icon from embedded PNG data (icon.go)
 		systray.SetIcon(TrayIconData)
 		systray.SetTitle("Nimbus Backup")
-		systray.SetTooltip("Nimbus Backup - Backups planifiés actifs")
+		systray.SetTooltip("Nimbus Backup - scheduled backups active")
 
 		// Add menu items
-		menuShow = systray.AddMenuItem("🖥️ Afficher la fenêtre", "Ouvrir l'interface Nimbus Backup")
+		menuShow = systray.AddMenuItem("🖥️ Show window", "Open the Nimbus Backup interface")
 		systray.AddSeparator()
 
-		menuStatus := systray.AddMenuItem("📊 État des backups", "Voir l'état des backups planifiés")
+		menuStatus := systray.AddMenuItem("📊 Backup status", "View scheduled backup status")
 		menuStatus.Disable() // For display only
 
 		systray.AddSeparator()

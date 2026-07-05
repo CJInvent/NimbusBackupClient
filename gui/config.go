@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -209,7 +210,7 @@ func LoadConfig() *Config {
 			Secret:          config.Secret,
 			Datastore:       config.Datastore,
 			Namespace:       config.Namespace,
-			Description:     "Serveur PBS par défaut (migré depuis ancienne config)",
+			Description:     "Default PBS server (migrated from legacy config)",
 		}
 
 		// Initialize PBSServers map if nil
@@ -278,15 +279,15 @@ func (c *Config) Save() error {
 func (c *Config) Validate() error {
 	// Validate BaseURL
 	if c.BaseURL == "" {
-		return fmt.Errorf("URL du serveur PBS requis")
+		return errors.New(errServerURLRequired)
 	}
 	if err := security.ValidateURL(c.BaseURL); err != nil {
-		return fmt.Errorf("URL invalide: %w", err)
+		return fmt.Errorf("%s :: %v", errInvalidURL, err)
 	}
 
 	// Validate AuthID
 	if c.AuthID == "" {
-		return fmt.Errorf("authentication ID requis")
+		return errors.New(errAuthIDRequired)
 	}
 	if err := security.ValidateAuthID(c.AuthID); err != nil {
 		return fmt.Errorf("authentication ID invalide: %w", err)
@@ -294,12 +295,12 @@ func (c *Config) Validate() error {
 
 	// Validate Secret (non-empty check)
 	if c.Secret == "" {
-		return fmt.Errorf("secret requis")
+		return errors.New(errSecretRequired)
 	}
 
 	// Validate Datastore
 	if c.Datastore == "" {
-		return fmt.Errorf("datastore requis")
+		return errors.New(errDatastoreRequired)
 	}
 	if err := security.ValidateDatastore(c.Datastore); err != nil {
 		return fmt.Errorf("datastore invalide: %w", err)
@@ -370,7 +371,7 @@ func (c *Config) GetPBSServer(id string) (*PBSServer, error) {
 
 	// If still empty, return error
 	if id == "" {
-		return nil, fmt.Errorf("aucun serveur PBS spécifié et pas de serveur par défaut")
+		return nil, errors.New(errNoPBSServer)
 	}
 
 	// Get server by ID
@@ -394,7 +395,7 @@ func (c *Config) AddPBSServer(pbs *PBSServer) error {
 
 	// Check if ID already exists
 	if _, exists := c.PBSServers[pbs.ID]; exists {
-		return fmt.Errorf("serveur PBS avec ID '%s' existe déjà", pbs.ID)
+		return fmt.Errorf("%s :: %s", errServerIDExists, pbs.ID)
 	}
 
 	c.PBSServers[pbs.ID] = pbs
