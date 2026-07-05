@@ -158,25 +158,25 @@ func calculateDirSizeCtx(ctx context.Context, path string) (uint64, error) {
 
 type ChunkState struct {
 	assignments         []string
-	assignmentsOffset  []uint64
+	assignmentsOffset   []uint64
 	pos                 uint64
 	wrid                uint64
 	chunkcount          uint64
 	chunkdigests        hash.Hash
-	currentChunk       []byte
+	currentChunk        []byte
 	C                   pbscommon.Chunker
 	newchunk            *atomic.Uint64
 	reusechunk          *atomic.Uint64
-	failedchunk         *atomic.Uint64     // Track failed chunk uploads
+	failedchunk         *atomic.Uint64 // Track failed chunk uploads
 	knownChunks         *hashmap.Map[string, bool]
 	onProgress          func(float64, string)
 	onStats             func(*BackupProgressStats) // Structured live stats for the GUI (nil for the catalog stream)
 	currentDir          string                     // Directory currently being archived, for the stats payload
 	lastProgressReport  uint64
-	lastProgressPercent float64            // Track last reported percentage to prevent backwards progress
-	totalSize           *atomic.Uint64     // Total size, updated by background scan
-	uploadErrors        []string           // Collect upload errors to report at the end
-	errorsMutex         sync.Mutex         // Protect uploadErrors slice
+	lastProgressPercent float64        // Track last reported percentage to prevent backwards progress
+	totalSize           *atomic.Uint64 // Total size, updated by background scan
+	uploadErrors        []string       // Collect upload errors to report at the end
+	errorsMutex         sync.Mutex     // Protect uploadErrors slice
 }
 
 type DidxEntry struct {
@@ -664,6 +664,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		if opts.OnProgress != nil {
 			opts.OnProgress(pct, msg)
 		}
+		writeCatLog(catChunks, msg)
 	}
 
 	// Check if all backup directories exist

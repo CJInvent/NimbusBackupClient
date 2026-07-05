@@ -147,7 +147,7 @@ func collectLogTails(n int) string {
 	var out strings.Builder
 	for _, prefix := range []string{"service-", "backup-"} {
 		if path := newestLog(prefix); path != "" {
-			out.WriteString(fmt.Sprintf("--- %s (last %d lines) ---\n", filepath.Base(path), n))
+			_, _ = fmt.Fprintf(&out, "--- %s (last %d lines) ---\n", filepath.Base(path), n)
 			out.WriteString(tailFile(path, n))
 			out.WriteString("\n")
 		}
@@ -180,7 +180,7 @@ func tailFile(path string, n int) string {
 	if err != nil {
 		return fmt.Sprintf("(cannot read %s: %v)", filepath.Base(path), err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	const window = 64 * 1024
 	st, err := f.Stat()
 	if err != nil {

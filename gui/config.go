@@ -48,6 +48,7 @@ type Config struct {
 	SMTPPassword string `json:"smtp_password,omitempty"`
 	SMTPFrom     string `json:"smtp_from,omitempty"`
 	AlertEmail   string `json:"alert_email,omitempty"` // failure-alert recipient; empty = alerts off
+	ExchangeAware bool `json:"exchange_aware,omitempty"` // run app-aware Exchange post-backup tasks; control-server togglable
 	EmailFrom    string `json:"email_from,omitempty"`
 	EmailTo      string `json:"email_to,omitempty"`
 }

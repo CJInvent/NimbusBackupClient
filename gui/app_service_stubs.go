@@ -106,6 +106,7 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		OnComplete: func(success bool, message string) {
 			if success {
 				writeDebugLog(fmt.Sprintf("[Backup Complete] SUCCESS - %s", message))
+				a.maybeRunExchangePostBackup()
 			} else {
 				writeDebugLog(fmt.Sprintf("[Backup Complete] FAILED - %s", message))
 				a.alertBackupFailure(message)

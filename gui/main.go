@@ -366,6 +366,7 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 		"smtp_password_set": cfg.SMTPPassword != "",
 		"smtp_from":         cfg.SMTPFrom,
 		"alert_email":       cfg.AlertEmail,
+		"exchange_aware":    cfg.ExchangeAware,
 		"hostname":          hostname,
 	}
 
@@ -947,6 +948,8 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 			writeDebugLog(fmt.Sprintf("Backup complete: success=%v, %s", success, message))
 			if !success {
 				a.alertBackupFailure(message)
+			} else {
+				a.maybeRunExchangePostBackup()
 			}
 
 			// API mode: notify + clean registered per-job callbacks

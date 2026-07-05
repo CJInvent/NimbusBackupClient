@@ -540,6 +540,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 			if machineStatsFn != nil {
 				machineStatsFn(processedSnapshot, totalSize, newchunk.Load(), reusechunk.Load())
 			}
+			writeCatLog(catChunks, msg)
 
 			if processedSnapshot > totalSize {
 				errch <- fmt.Errorf("fatal: tried to backup more data than specified size")

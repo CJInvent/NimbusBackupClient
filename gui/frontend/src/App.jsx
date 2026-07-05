@@ -4,7 +4,7 @@ import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
 let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch
-let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings
+let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
 let GetServerFingerprint, PinPBSServerFingerprint
@@ -25,6 +25,7 @@ if (window.go) {
   ListPhysicalDisks = window.go.main.App.ListPhysicalDisks
   GetVersion = window.go.main.App.GetVersion
   GetSecurityWarnings = window.go.main.App.GetSecurityWarnings
+  GetExchangeStatus = window.go.main.App.GetExchangeStatus
   SaveScheduledJob = window.go.main.App.SaveScheduledJob
   UpdateScheduledJob = window.go.main.App.UpdateScheduledJob
   GetScheduledJobs = window.go.main.App.GetScheduledJobs
@@ -91,6 +92,7 @@ function App() {
   const [selectedDrives, setSelectedDrives] = useState([])
   const [physicalDisks, setPhysicalDisks] = useState([])
   const [securityWarnings, setSecurityWarnings] = useState([])
+  const [exchangeStatus, setExchangeStatus] = useState({installed:false, version:"", aware:false, highlight_setting:false})
   const [disksLoading, setDisksLoading] = useState(false)
   const [disksError, setDisksError] = useState('')
   const [excludeList, setExcludeList] = useState('')
@@ -161,6 +163,9 @@ function App() {
   useEffect(() => {
     if (GetSecurityWarnings) {
       GetSecurityWarnings().then(w => setSecurityWarnings(w || [])).catch(() => {})
+    }
+    if (GetExchangeStatus) {
+      GetExchangeStatus().then(st => setExchangeStatus(st || {})).catch(() => {})
     }
   }, [])
 
@@ -378,7 +383,8 @@ function App() {
               smtp_password: '',
               smtp_password_set: data.smtp_password_set || false,
               smtp_from: data.smtp_from || '',
-              alert_email: data.alert_email || ''
+              alert_email: data.alert_email || '',
+              exchange_aware: data.exchange_aware || false
             })
 
             // Initialize backupDirs from config if available
@@ -679,7 +685,8 @@ function App() {
         smtp_username: (config.smtp_username || '').trim(),
         smtp_password: config.smtp_password || '',
         smtp_from: (config.smtp_from || '').trim(),
-        alert_email: (config.alert_email || '').trim()
+        alert_email: (config.alert_email || '').trim(),
+        exchange_aware: !!config.exchange_aware
       }
       await SaveConfig(trimmedConfig)
       setConfig(trimmedConfig)
@@ -1931,6 +1938,18 @@ function App() {
               <label>{t('smtpFromLabel')}</label>
               <input type="text" value={config.smtp_from || ''} onChange={(e) => setConfig({...config, smtp_from: e.target.value})} />
             </div>
+            {exchangeStatus.installed && (
+              <div className="form-group" style={exchangeStatus.highlight_setting ? {marginTop:'16px',background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'6px',padding:'10px 14px'} : {marginTop:'16px'}}>
+                <label style={{fontWeight:'bold'}}>{t('exchangeSection')} {exchangeStatus.version ? '(' + exchangeStatus.version + ')' : ''}</label>
+                <div style={{fontSize:'0.85em',color:'#666',margin:'4px 0 8px'}}>
+                  {exchangeStatus.highlight_setting ? '⚠️ ' + t('exchangeDetectedHint') : t('exchangeHint')}
+                </div>
+                <label>
+                  <input type="checkbox" checked={!!config.exchange_aware} onChange={(e) => setConfig({...config, exchange_aware: e.target.checked})} />
+                  {t('exchangeAwareLabel')}
+                </label>
+              </div>
+            )}
             {config.usevss && systemInfo.mode === 'Standalone' && !systemInfo.is_admin && (
               <div className="info-box" style={{marginTop: '10px', backgroundColor: '#fff3cd', borderColor: '#ffc107'}}>
                 ⚠️ <strong>{t('vssAdminRequired')}</strong><br/>
