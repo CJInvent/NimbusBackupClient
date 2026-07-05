@@ -60,7 +60,12 @@ func init() {
 func main() {
 	// Parse command line flags
 	minimized := flag.Bool("minimized", false, "Start minimized to system tray")
+	logcat := flag.String("logcat", "", "Enable detailed log categories (comma-separated): pbs,chunks,security,api or 'all'")
 	flag.Parse()
+	if *logcat != "" {
+		SetLogCategories(*logcat)
+		writeDebugLog("Detailed log categories enabled: " + *logcat)
+	}
 
 	// Check for single instance (GUI only)
 	// If another instance exists, activate it and exit
@@ -217,6 +222,7 @@ Please report this issue to RDEM Systems:
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	writeDebugLog("App.startup() called")
+	a.GetSecurityWarnings() // logs posture warnings once at startup
 
 	// Detect execution mode (Service vs Standalone)
 	detector := api.NewModeDetector(getAPITokenPath())

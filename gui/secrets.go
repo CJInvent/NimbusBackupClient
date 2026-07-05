@@ -44,7 +44,7 @@ type masterKeyFile struct {
 }
 
 var (
-	dekOnce      sync.Once
+	dekMu        sync.Mutex
 	dekCached    []byte
 	dekProtector string
 	dekErr       error
@@ -53,9 +53,14 @@ var (
 // getDEK returns the machine's data encryption key, creating and persisting it
 // on first use. Cached for the process lifetime.
 func getDEK() ([]byte, string, error) {
-	dekOnce.Do(func() {
-		dekCached, dekProtector, dekErr = loadOrCreateDEK()
-	})
+	dekMu.Lock()
+	defer dekMu.Unlock()
+	if dekCached != nil {
+		return dekCached, dekProtector, nil
+	}
+	// Retry on the next call after a failure (e.g. TPM busy at boot) instead
+	// of caching the error for the process lifetime.
+	dekCached, dekProtector, dekErr = loadOrCreateDEK()
 	return dekCached, dekProtector, dekErr
 }
 

@@ -44,6 +44,12 @@ func EnsureToken(path string) (string, error) {
 	if err := os.WriteFile(path, []byte(t), 0o600); err != nil {
 		return "", fmt.Errorf("write api token %q: %w", path, err)
 	}
+	// Tighten the DACL to SYSTEM/Administrators/INTERACTIVE only (H-01). Best
+	// effort: a failure here still leaves the 0600-equivalent default, so it
+	// must not block token creation.
+	if err := restrictToOwners(path); err != nil {
+		fmt.Printf("warning: could not restrict api token ACL: %v\n", err)
+	}
 	return t, nil
 }
 

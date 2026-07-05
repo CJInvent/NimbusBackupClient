@@ -4,7 +4,7 @@ import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
 let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch
-let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs
+let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
 let GetServerFingerprint, PinPBSServerFingerprint
@@ -24,6 +24,7 @@ if (window.go) {
   CancelSearch = window.go.main.App.CancelSearch
   ListPhysicalDisks = window.go.main.App.ListPhysicalDisks
   GetVersion = window.go.main.App.GetVersion
+  GetSecurityWarnings = window.go.main.App.GetSecurityWarnings
   SaveScheduledJob = window.go.main.App.SaveScheduledJob
   UpdateScheduledJob = window.go.main.App.UpdateScheduledJob
   GetScheduledJobs = window.go.main.App.GetScheduledJobs
@@ -89,6 +90,7 @@ function App() {
   const [backupDirs, setBackupDirs] = useState('')
   const [selectedDrives, setSelectedDrives] = useState([])
   const [physicalDisks, setPhysicalDisks] = useState([])
+  const [securityWarnings, setSecurityWarnings] = useState([])
   const [disksLoading, setDisksLoading] = useState(false)
   const [disksError, setDisksError] = useState('')
   const [excludeList, setExcludeList] = useState('')
@@ -156,6 +158,12 @@ function App() {
   const [searchResult, setSearchResult] = useState(null)     // { hits, snapshots_*, truncated, cancelled }
 
   // Update restoreBackupId when config or hostname changes
+  useEffect(() => {
+    if (GetSecurityWarnings) {
+      GetSecurityWarnings().then(w => setSecurityWarnings(w || [])).catch(() => {})
+    }
+  }, [])
+
   useEffect(() => {
     if (!restoreBackupId && (config['backup-id'] || hostname)) {
       setRestoreBackupId(config['backup-id'] || hostname)
@@ -1297,6 +1305,15 @@ function App() {
       </div>
 
       <div className="container">
+      {securityWarnings.length > 0 && (
+        <div className="security-warning-banner" style={{background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'6px',padding:'10px 14px',margin:'8px'}}>
+          <strong>⚠️ {t('securityWarningTitle')}</strong>
+          <ul style={{margin:'6px 0 0',paddingLeft:'20px'}}>
+            {securityWarnings.map((w,i) => <li key={i} style={{fontSize:'0.9em'}}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+
         <div className="tabs">
           <div className={`tab ${activeTab === 'servers' ? 'active' : ''}`} onClick={() => setActiveTab('servers')}>
             {t('tabServers')}
