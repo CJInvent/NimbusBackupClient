@@ -6,4 +6,6 @@ package main
 // Exchange detection and tasks are Windows-only.
 func detectExchange() (bool, string) { return false, "" }
 
-func runExchangePostBackup(version string) {}
+func getExchangeCircularLogging() (bool, bool, string) { return false, false, "" }
+
+func runExchangePostBackup(version string, healthCheck, truncate bool) {}

@@ -49,6 +49,7 @@ type Config struct {
 	SMTPFrom     string `json:"smtp_from,omitempty"`
 	AlertEmail   string `json:"alert_email,omitempty"` // failure-alert recipient; empty = alerts off
 	ExchangeAware bool `json:"exchange_aware,omitempty"` // run app-aware Exchange post-backup tasks; control-server togglable
+	ExchangeLogTruncation bool `json:"exchange_log_truncation,omitempty"` // truncate Exchange transaction logs after a successful backup; control-server togglable
 	EmailFrom    string `json:"email_from,omitempty"`
 	EmailTo      string `json:"email_to,omitempty"`
 }

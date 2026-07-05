@@ -4,7 +4,7 @@ import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
 let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch
-let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus
+let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
 let GetServerFingerprint, PinPBSServerFingerprint
@@ -26,6 +26,7 @@ if (window.go) {
   GetVersion = window.go.main.App.GetVersion
   GetSecurityWarnings = window.go.main.App.GetSecurityWarnings
   GetExchangeStatus = window.go.main.App.GetExchangeStatus
+  QueryExchangeLogMode = window.go.main.App.QueryExchangeLogMode
   SaveScheduledJob = window.go.main.App.SaveScheduledJob
   UpdateScheduledJob = window.go.main.App.UpdateScheduledJob
   GetScheduledJobs = window.go.main.App.GetScheduledJobs
@@ -92,7 +93,8 @@ function App() {
   const [selectedDrives, setSelectedDrives] = useState([])
   const [physicalDisks, setPhysicalDisks] = useState([])
   const [securityWarnings, setSecurityWarnings] = useState([])
-  const [exchangeStatus, setExchangeStatus] = useState({installed:false, version:"", aware:false, highlight_setting:false})
+  const [exchangeStatus, setExchangeStatus] = useState({installed:false, version:"", aware:false, highlight_setting:false, log_truncation:false, highlight_truncation:false})
+  const [exchangeLogMode, setExchangeLogMode] = useState({queried:false, logs_accumulate:false, detail:""})
   const [disksLoading, setDisksLoading] = useState(false)
   const [disksError, setDisksError] = useState('')
   const [excludeList, setExcludeList] = useState('')
@@ -165,7 +167,12 @@ function App() {
       GetSecurityWarnings().then(w => setSecurityWarnings(w || [])).catch(() => {})
     }
     if (GetExchangeStatus) {
-      GetExchangeStatus().then(st => setExchangeStatus(st || {})).catch(() => {})
+      GetExchangeStatus().then(st => {
+        setExchangeStatus(st || {})
+        if (st && st.installed && QueryExchangeLogMode) {
+          QueryExchangeLogMode().then(m => setExchangeLogMode(m || {})).catch(() => {})
+        }
+      }).catch(() => {})
     }
   }, [])
 
@@ -384,7 +391,8 @@ function App() {
               smtp_password_set: data.smtp_password_set || false,
               smtp_from: data.smtp_from || '',
               alert_email: data.alert_email || '',
-              exchange_aware: data.exchange_aware || false
+              exchange_aware: data.exchange_aware || false,
+              exchange_log_truncation: data.exchange_log_truncation || false
             })
 
             // Initialize backupDirs from config if available
@@ -686,7 +694,8 @@ function App() {
         smtp_password: config.smtp_password || '',
         smtp_from: (config.smtp_from || '').trim(),
         alert_email: (config.alert_email || '').trim(),
-        exchange_aware: !!config.exchange_aware
+        exchange_aware: !!config.exchange_aware,
+        exchange_log_truncation: !!config.exchange_log_truncation
       }
       await SaveConfig(trimmedConfig)
       setConfig(trimmedConfig)
@@ -1948,6 +1957,21 @@ function App() {
                   <input type="checkbox" checked={!!config.exchange_aware} onChange={(e) => setConfig({...config, exchange_aware: e.target.checked})} />
                   {t('exchangeAwareLabel')}
                 </label>
+                <div style={exchangeLogMode.queried && exchangeLogMode.logs_accumulate && !config.exchange_log_truncation ? {marginTop:'10px',background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'6px',padding:'8px 12px'} : {marginTop:'10px'}}>
+                  <label>
+                    <input type="checkbox" checked={!!config.exchange_log_truncation} onChange={(e) => setConfig({...config, exchange_log_truncation: e.target.checked})} />
+                    {t('exchangeLogTruncationLabel')}
+                  </label>
+                  <div style={{fontSize:'0.82em',color:'#666',marginTop:'4px'}}>
+                    {t('exchangeLogTruncationHint')}
+                    {exchangeLogMode.queried && (
+                      <div style={{marginTop:'4px'}}>
+                        {exchangeLogMode.logs_accumulate ? '⚠️ ' + t('exchangeLogsAccumulate') : '✓ ' + t('exchangeLogsCircular')}
+                        {exchangeLogMode.detail ? ' — ' + exchangeLogMode.detail : ''}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
             {config.usevss && systemInfo.mode === 'Standalone' && !systemInfo.is_admin && (
