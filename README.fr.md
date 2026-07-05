@@ -50,6 +50,11 @@ Vous ne voulez pas auto-héberger Proxmox Backup Server ? Utilisez nos datastore
 - **Sauvegarder Windows avec Proxmox Backup Server** — guide de déploiement spécifique Windows ([🇫🇷 FR](https://nimbus.rdem-systems.com/blog/sauvegarder-windows-proxmox-backup-server/?utm_source=github))
 - **PBS vs Veeam** — comparatif backup Proxmox ([🇫🇷 FR](https://nimbus.rdem-systems.com/blog/pbs-vs-veeam-comparatif-backup-proxmox/?utm_source=github))
 
+
+## 🛠️ Pour les développeurs
+
+L'architecture, la structure des modules, les règles de build-tags, l'API du plan de contrôle, le modèle de sécurité et les travaux prévus sont documentés dans **[`ARCHITECTURE.md`](ARCHITECTURE.md)** (en anglais) — le point de départ pour contribuer. Matrice des fonctionnalités : [`FEATURES_STATUS.md`](FEATURES_STATUS.md).
+
 ## ✨ Fonctionnalités
 
 ### Interface graphique (recommandée)

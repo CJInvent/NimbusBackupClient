@@ -50,6 +50,11 @@ Don't want to self-host Proxmox Backup Server? Use our fully managed, **offsite 
 - **Back up Windows with Proxmox Backup Server** — Windows-specific deployment guide ([🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/backup-windows-proxmox-backup-server/?utm_source=github))
 - **PBS vs Veeam** — Proxmox Backup Server comparison ([🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/pbs-vs-veeam-proxmox-backup-comparison/?utm_source=github))
 
+
+## 🛠️ For developers
+
+Architecture, module layout, build-tag rules, the control-plane API, the security model, and planned work are documented in **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — start there to pick up development. Feature status matrix: [`FEATURES_STATUS.md`](FEATURES_STATUS.md).
+
 ## ✨ Features
 
 ### GUI interface (recommended)
