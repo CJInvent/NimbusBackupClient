@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.129] - 2026-07-07
+
+### Added
+- **NimbusControl integration (control plane)** — the client can now enroll
+  with a NimbusControl server using a one-time token and check in on a
+  server-tuned interval. The check-in reports scheduled-job inventory (feeds
+  server-side missed-backup detection), drains queued commands
+  (`run_backup` triggers the existing scheduler path, de-duplicated), and
+  applies the server-resolved policy set. Fully optional: with no
+  `control_server_url` configured, nothing changes.
+- **VSS-aware run reporting** — backup runs report phases to the control
+  plane: `preparing` at job start, `running` only once the VSS shadow copy
+  is confirmed (or reading begins for non-VSS jobs), and a distinct
+  `vss_failed` terminal status when snapshot creation fails, so the portal
+  can alert with the on-machine runbook (chkdsk / VSS writer health)
+  instead of a generic failure. Successful runs report the PBS snapshot
+  identity so the server can detect PBS-side prune/GC later.
+- **Policy-gated file restore** — restore browsing/extraction honors the
+  hierarchical `file_restore` policy (machine > customer > server-wide,
+  finest wins; default OFF under management). Standalone installs remain
+  fully enabled. Enforced at the restore engine entry points so GUI and
+  local API are both covered.
+- New config fields: `control_server_url`, `control_enroll_token`
+  (one-time, wiped after enrollment), `control_agent_id`, `control_secret`
+  (sealed via the DEK/TPM secret store), `control_cert_fp` (optional pin).
+
+### Notes
+- The control-plane secret never touches disk in plaintext; the check-in
+  loop fails closed (all governed features off) until the first successful
+  contact with the server.
+
 ## [0.2.112] - 2026-06-03
 
 ### Changed
