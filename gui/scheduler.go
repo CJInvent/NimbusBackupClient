@@ -587,6 +587,11 @@ func (a *App) executeScheduledJob(job ScheduledJob) {
 		compression = "fastest"
 	}
 
+	// Control plane: open a run under the job's DISPLAY name (must match the
+	// inventory name so a success clears the server's missed-backup latch).
+	// attachControlPlaneHooks picks this up at BackupOptions construction.
+	registerRunReporter(job.BackupID, job.Name, job.BackupType)
+
 	err := a.StartBackup(
 		job.BackupType,
 		job.BackupDirs,

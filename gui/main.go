@@ -995,6 +995,9 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		},
 	}
 
+	// Control plane run reporting (no-op when not configured).
+	attachControlPlaneHooks(&opts)
+
 	// Structured live stats + final structured result for the GUI (standalone mode)
 	// and, in API mode, the registered per-job stats callbacks.
 	opts.UploadLimitMbps = a.config.UploadLimitMbps

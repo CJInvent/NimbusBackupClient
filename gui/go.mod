@@ -7,6 +7,7 @@ require (
 	github.com/wailsapp/wails/v2 v2.8.0
 	github.com/tizbac/proxmoxbackupclient_go/gui/api v0.0.0
 	clientcommon v0.0.0
+	controlplane v0.0.0
 	pbscommon v0.0.0
 	retry v0.0.0
 	security v0.0.0
@@ -47,6 +48,7 @@ require (
 replace (
 	github.com/tizbac/proxmoxbackupclient_go/gui/api => ./api
 	clientcommon => ../clientcommon
+	controlplane => ../controlplane
 	pbscommon => ../pbscommon
 	retry => ../pkg/retry
 	security => ../pkg/security

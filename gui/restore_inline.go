@@ -358,6 +358,12 @@ func buildSnapshotCacheKey(opts RestoreOptions) snapshotCacheKey {
 //
 // archiveName defaults to "backup.pxar.didx" when empty.
 func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRefresh bool) ([]SnapshotEntry, error) {
+	// Same policy gate as RestoreSnapshotInline: browsing file contents of
+	// a snapshot IS the restore browser — hide it when disabled.
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
+
 	if archiveName == "" {
 		archiveName = "backup.pxar.didx"
 	}
@@ -614,6 +620,13 @@ func equalHostnames(a, b string) bool {
 // When opts.IncludePaths is non-empty, only the matching files and directories
 // are extracted. Otherwise the whole snapshot is restored.
 func RestoreSnapshotInline(opts RestoreOptions) error {
+	// Hierarchical policy gate (agent > org > global, server-resolved).
+	// Enforced here — the lowest common entry — so every caller (GUI,
+	// local API, future CLI) is covered. Standalone installs are exempt.
+	if !ControlPolicy().FileRestore {
+		return ErrRestoreDisabled
+	}
+
 	mode := opts.Mode
 	if mode == "" {
 		mode = RestoreModeAlternateAbs

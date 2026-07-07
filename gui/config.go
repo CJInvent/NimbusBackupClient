@@ -42,6 +42,15 @@ type Config struct {
 	UploadLimitMbps float64 `json:"upload_limit_mbps,omitempty"`
 
 	// ==================== EMAIL NOTIFICATIONS ====================
+	// ==================== CONTROL SERVER (NimbusControl) ====================
+	// Empty ControlServerURL = standalone mode; every control-plane feature
+	// becomes a no-op and local policy defaults to fully enabled.
+	ControlServerURL   string `json:"control_server_url,omitempty"`
+	ControlEnrollToken string `json:"control_enroll_token,omitempty"` // one-time; wiped after enrollment
+	ControlAgentID     int64  `json:"control_agent_id,omitempty"`
+	ControlSecret      string `json:"control_secret,omitempty"` // sealed via encryptSecret (DEK/TPM)
+	ControlCertFP      string `json:"control_cert_fp,omitempty"` // optional SHA-256 leaf pin
+
 	SMTPHost     string `json:"smtp_host,omitempty"`
 	SMTPPort     string `json:"smtp_port,omitempty"`
 	SMTPUsername string `json:"smtp_username,omitempty"`

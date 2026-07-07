@@ -13,3 +13,5 @@ use ./machinebackup
 use ./nbd
 
 use ./gui
+
+use ./controlplane

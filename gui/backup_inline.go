@@ -52,7 +52,19 @@ type BackupOptions struct {
 	// OnStats delivers structured live progress so the GUI can show real
 	// statistics instead of parsing them out of the progress message string.
 	OnStats func(*BackupProgressStats)
+	// OnPhase reports lifecycle phases to the control plane. The only phase
+	// today is "running", emitted at the moment the backup is CONFIRMED in
+	// progress: for VSS jobs that is when the shadow copy exists (inside the
+	// CreateVSSSnapshot callback), for non-VSS jobs when reading begins.
+	// The portal's "backing up" state is defined by this signal — do not
+	// move it earlier. Nil-safe; fires once per directory.
+	OnPhase func(phase string)
 }
+
+// vssCreateFailedMarker tags errors that occurred BEFORE the VSS shadow
+// copy was confirmed, so the control plane can classify them as vss_failed
+// (own alert runbook: chkdsk / vssadmin writers) instead of generic failure.
+const vssCreateFailedMarker = "VSS snapshot creation failed"
 
 var didxMagic = []byte{28, 145, 78, 165, 25, 186, 179, 205}
 
@@ -755,7 +767,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		// PBS dedupes chunks, so retrying is cheap for the already-uploaded data.
 		var err error
 		for attempt := 1; attempt <= maxDirAttempts; attempt++ {
-			err = backupDirectory(client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList)
+			err = backupDirectory(client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase)
 			if err == nil {
 				break
 			}
@@ -953,20 +965,39 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	return nil
 }
 
-func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string) error {
+func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string)) error {
 	writeBackupLog(fmt.Sprintf("Starting backup of %s", backupdir))
 	originalPath := backupdir
 
 	if usevss {
-		return snapshot.CreateVSSSnapshot([]string{backupdir}, func(snaps map[string]snapshot.SnapShot) error {
+		// vssConfirmed distinguishes error origins: an error while the flag
+		// is still false happened during shadow-copy creation and is wrapped
+		// with the VSS marker so the control plane reports vss_failed; an
+		// error after the callback entered is an upload-side failure.
+		vssConfirmed := false
+		err := snapshot.CreateVSSSnapshot([]string{backupdir}, func(snaps map[string]snapshot.SnapShot) error {
+			vssConfirmed = true
+			// The shadow copy EXISTS here — this is the one true "backing
+			// up" signal the control plane's run state machine keys on.
+			if onPhase != nil {
+				onPhase("running")
+			}
 			for _, snap := range snaps {
 				backupdir = snap.FullPath
 				break
 			}
 			return backupReal(client, newchunk, reusechunk, failedchunk, backupdir, originalPath, usevss, progress, onStats, excludeList)
 		})
+		if err != nil && !vssConfirmed {
+			return fmt.Errorf("%s: %w", vssCreateFailedMarker, err)
+		}
+		return err
 	}
 
+	// Non-VSS: "running" means reading has begun.
+	if onPhase != nil {
+		onPhase("running")
+	}
 	return backupReal(client, newchunk, reusechunk, failedchunk, backupdir, originalPath, usevss, progress, onStats, excludeList)
 }
 

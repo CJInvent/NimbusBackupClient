@@ -116,6 +116,9 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		UploadLimitMbps: a.config.UploadLimitMbps,
 	}
 
+	// Control plane run reporting (no-op when not configured).
+	attachControlPlaneHooks(&opts)
+
 	// Execute backup using the appropriate engine for the backup type.
 	if backupType == "machine" {
 		writeDebugLog("[Service] Executing full-volume backup via RunMachineBackup")
