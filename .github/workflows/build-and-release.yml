@@ -66,6 +66,12 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           cd gui && gosec -severity high -confidence high ./...
 
+      - name: Run gosec (controlplane module)
+        env:
+          GOWORK: off
+        run: |
+          cd controlplane && gosec -severity high -confidence high ./...
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
@@ -91,6 +97,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
+      - name: Tidy dependencies (controlplane)
+        working-directory: controlplane
+        env:
+          GOWORK: off
+        run: go mod tidy
+
+      - name: Run tests (controlplane module)
+        working-directory: controlplane
+        env:
+          GOWORK: off
+        run: go test -v -race ./...
 
       - name: Tidy dependencies
         working-directory: gui

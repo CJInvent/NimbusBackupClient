@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.131] - 2026-07-08
+## [0.2.132] - 2026-07-08
 
 ### Added
 - **Control server in the GUI** — new "Control server (NimbusControl)" card in
@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NimbusControl design language: dense bordered panels, dark app bar,
   PVE-blue accents, 3 px corner radius. Follows the OS by default; a ◐
   button in the header cycles auto → light → dark (persisted).
+
+### Changed
+- **CI now covers the  module** — the security job runs gosec
+  and the test job runs  against  in addition
+  to , so control-plane regressions can no longer pass unchecked.
 
 ### Removed
 - **Client-side SMTP alerting** — `alerts.go`, the SMTP settings UI, and the

@@ -51,7 +51,10 @@ func (c *Client) http() *http.Client {
 	if c.CertFingerprint != "" {
 		want := strings.ToLower(strings.ReplaceAll(c.CertFingerprint, ":", ""))
 		// Pin: accept any chain whose LEAF matches the fingerprint. System
-		// verification is disabled because the pin IS the trust anchor.
+		// verification is disabled because the pin IS the trust anchor;
+		// VerifyPeerCertificate below enforces the SHA-256 leaf match, so a
+		// mismatched or substituted certificate is still rejected.
+		// #nosec G402 -- deliberate cert pinning; verification is done by the fingerprint callback, not the system trust store
 		tlsCfg.InsecureSkipVerify = true
 		tlsCfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
 			if len(raw) == 0 {
