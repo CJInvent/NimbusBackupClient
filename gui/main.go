@@ -367,7 +367,6 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 		"upload_limit_mbps":       cfg.UploadLimitMbps,
 		"control_server_url":      cfg.ControlServerURL,
 		"control_enrolled":        cfg.ControlAgentID > 0,
-		"alert_email":             cfg.AlertEmail,
 		"exchange_aware":          cfg.ExchangeAware,
 		"exchange_log_truncation": cfg.ExchangeLogTruncation,
 		"hostname":                hostname,
