@@ -250,6 +250,12 @@ func (a *App) startup(ctx context.Context) {
 		// Start background job scheduler
 		a.StartScheduler()
 		writeDebugLog("Background scheduler started (standalone mode)")
+
+		// Control plane (NimbusControl): in standalone mode this process is
+		// the brain, so the check-in loop runs here. In service mode the
+		// service owns it (see NimbusService.run) and the GUI only displays
+		// status via the local API.
+		a.StartControlPlane()
 	} else {
 		writeDebugLog("Service mode detected - scheduler runs in service")
 	}
@@ -359,12 +365,8 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 		"backup-id":               cfg.BackupID,
 		"usevss":                  cfg.UseVSS,
 		"upload_limit_mbps":       cfg.UploadLimitMbps,
-		"smtp_host":               cfg.SMTPHost,
-		"smtp_port":               cfg.SMTPPort,
-		"smtp_username":           cfg.SMTPUsername,
-		"smtp_password":           "",
-		"smtp_password_set":       cfg.SMTPPassword != "",
-		"smtp_from":               cfg.SMTPFrom,
+		"control_server_url":      cfg.ControlServerURL,
+		"control_enrolled":        cfg.ControlAgentID > 0,
 		"alert_email":             cfg.AlertEmail,
 		"exchange_aware":          cfg.ExchangeAware,
 		"exchange_log_truncation": cfg.ExchangeLogTruncation,
@@ -402,6 +404,39 @@ func (a *App) DiagnoseConfig() map[string]interface{} {
 	}
 }
 
+// GetControlServerStatus returns the control-plane connectivity snapshot for
+// the GUI status card. In service mode the service (which owns the check-in
+// loop) is authoritative; standalone answers locally.
+func (a *App) GetControlServerStatus() map[string]interface{} {
+	if !a.isServiceProcess && a.mode == api.ModeService && a.apiClient != nil {
+		if st, err := a.apiClient.GetControlPlaneStatus(); err == nil {
+			return st
+		}
+		// Service unreachable: fall through to the local (config-only) view
+		// so the card still shows what is configured.
+	}
+	return a.ControlPlaneStatusMap()
+}
+
+// SaveControlServerConfig applies control-server settings from the GUI.
+// Empty enroll token keeps the stored one; changing the URL forgets the old
+// identity (see SaveControlPlaneFromMap).
+func (a *App) SaveControlServerConfig(serverURL, enrollToken, certFP string) error {
+	m := map[string]interface{}{
+		"control_server_url":   serverURL,
+		"control_enroll_token": enrollToken,
+		"control_cert_fp":      certFP,
+	}
+	if a.delegateConfigWrites() {
+		if err := a.apiClient.SaveControlPlane(m); err != nil {
+			return err
+		}
+		a.ReloadConfig()
+		return nil
+	}
+	return a.SaveControlPlaneFromMap(m)
+}
+
 // SaveConfig saves the configuration
 func (a *App) SaveConfig(config *Config) error {
 	// Log sanitized config (no secrets)
@@ -432,9 +467,6 @@ func (a *App) SaveConfig(config *Config) error {
 	if a.config != nil {
 		if config.Secret == "" {
 			config.Secret = a.config.Secret
-		}
-		if config.SMTPPassword == "" {
-			config.SMTPPassword = a.config.SMTPPassword
 		}
 	}
 
@@ -948,7 +980,6 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		OnComplete: func(success bool, message string) {
 			writeDebugLog(fmt.Sprintf("Backup complete: success=%v, %s", success, message))
 			if !success {
-				a.alertBackupFailure(message)
 			} else {
 				a.maybeRunExchangePostBackup()
 			}

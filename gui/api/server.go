@@ -42,6 +42,10 @@ type BackupHandler interface {
 	DeletePBSServerByID(id string) error
 	SetDefaultPBSByID(id string) error
 	SaveConfigFromMap(config map[string]interface{}) error
+	// Control plane (NimbusControl): connectivity snapshot for the GUI and
+	// settings write (service-side, single-writer rule as everything else).
+	ControlPlaneStatusMap() map[string]interface{}
+	SaveControlPlaneFromMap(m map[string]interface{}) error
 }
 
 // NewServer creates a new API server. token is the shared local-auth secret that
@@ -72,6 +76,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/pbs/delete/", s.handleDeletePBSServer)
 	s.mux.HandleFunc("/pbs/default", s.handleSetDefaultPBS)
 	s.mux.HandleFunc("/config/save", s.handleSaveConfig)
+	s.mux.HandleFunc("/controlplane/status", s.handleControlPlaneStatus)
+	s.mux.HandleFunc("/controlplane/save", s.handleControlPlaneSave)
 }
 
 // Start starts the HTTP server
@@ -503,4 +509,34 @@ func (s *Server) writeError(w http.ResponseWriter, message string, status int) {
 		Code:  status,
 	}
 	s.writeJSON(w, errResp, status)
+}
+
+
+// handleControlPlaneStatus returns the control-server connectivity snapshot
+// (never includes secrets — the handler map is built sanitized at source).
+func (s *Server) handleControlPlaneStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.writeJSON(w, s.app.ControlPlaneStatusMap(), http.StatusOK)
+}
+
+// handleControlPlaneSave applies control-server settings via the service
+// (single config writer), then the service restarts its check-in loop.
+func (s *Server) handleControlPlaneSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var m map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.app.SaveControlPlaneFromMap(m); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.writeJSON(w, map[string]interface{}{"ok": true}, http.StatusOK)
 }

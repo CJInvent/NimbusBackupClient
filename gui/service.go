@@ -72,6 +72,11 @@ func (s *NimbusService) run() {
 	// Start the scheduler
 	s.app.StartScheduler()
 
+	// Control plane (NimbusControl): the service is the brain, so the
+	// enroll/check-in loop lives here. No-op unless control_server_url is
+	// configured. The GUI reads status via /controlplane/status.
+	s.app.StartControlPlane()
+
 	// Start HTTP API server for GUI communication (token-authenticated — H-01).
 	// If token init fails the server keeps an empty token and rejects every
 	// request (fail closed) rather than exposing the privileged API unauthenticated.

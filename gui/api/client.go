@@ -320,3 +320,41 @@ func (c *Client) DeleteJob(jobID string) error {
 
 	return nil
 }
+
+// GetControlPlaneStatus fetches the control-server connectivity snapshot
+// from the service (GUI status card data source in service mode).
+func (c *Client) GetControlPlaneStatus() (map[string]interface{}, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/controlplane/status")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get control plane status: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get control plane status: %s", string(respBody))
+	}
+	var out map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode control plane status: %w", err)
+	}
+	return out, nil
+}
+
+// SaveControlPlane sends control-server settings to the service (single
+// config writer); the service persists and restarts its check-in loop.
+func (c *Client) SaveControlPlane(m map[string]interface{}) error {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("failed to encode control plane config: %w", err)
+	}
+	resp, err := c.httpClient.Post(c.baseURL+"/controlplane/save", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to save control plane config: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to save control plane config: %s", string(respBody))
+	}
+	return nil
+}

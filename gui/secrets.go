@@ -2,7 +2,7 @@ package main
 
 // Phase 2 of the zero-trust plan: secrets at rest.
 //
-// Stored secrets (PBS API token secrets, SMTP password) are envelope-encrypted:
+// Stored secrets (PBS API token secrets, control-plane secret) are envelope-encrypted:
 // each value is sealed with AES-256-GCM under a random 256-bit data encryption
 // key (DEK), and the DEK itself is protected by the strongest available
 // "protector" on the machine:

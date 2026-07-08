@@ -1,9 +1,18 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from './i18n/i18nContext'
+
+// Theme: 'auto' follows the OS; explicit choice persists. Applied via the
+// data-theme attribute the token CSS keys on (Proxmox-style light/dark).
+const applyTheme = (choice) => {
+  const root = document.documentElement
+  if (choice === 'light' || choice === 'dark') root.setAttribute('data-theme', choice)
+  else root.removeAttribute('data-theme')
+}
+applyTheme(localStorage.getItem('nimbus.theme'))
 import LanguageSwitcher from './components/LanguageSwitcher'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -12,6 +21,8 @@ let GetServerFingerprint, PinPBSServerFingerprint
 // Check if we're running in Wails
 if (window.go) {
   GetConfigWithHostname = window.go.main.App.GetConfigWithHostname
+  GetControlServerStatus = window.go.main.App.GetControlServerStatus
+  SaveControlServerConfig = window.go.main.App.SaveControlServerConfig
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
@@ -133,6 +144,9 @@ function App() {
   const [selectedSnapshot, setSelectedSnapshot] = useState(null) // { id, unix, time }
   const [snapshotMeta, setSnapshotMeta] = useState(null)         // .nimbus_backup_meta.json sidecar (null if legacy)
   const [snapshotEntries, setSnapshotEntries] = useState([])     // flat list from backend
+  // Control server (NimbusControl) status + settings form
+  const [cpStatus, setCpStatus] = useState(null)
+  const [cpForm, setCpForm] = useState({ url: '', token: '', fp: '' })
   const [expandedDirs, setExpandedDirs] = useState(new Set())     // expanded paths in tree
   const [selectedPaths, setSelectedPaths] = useState(new Set())   // selected entry paths
   const [restoreDestPath, setRestoreDestPath] = useState('')
@@ -162,6 +176,36 @@ function App() {
   const [searchResult, setSearchResult] = useState(null)     // { hits, snapshots_*, truncated, cancelled }
 
   // Update restoreBackupId when config or hostname changes
+  // Control server status: fetch at mount and every 30 s.
+  useEffect(() => {
+    if (!GetControlServerStatus) return
+    let alive = true
+    const load = async () => {
+      try {
+        const st = await GetControlServerStatus()
+        if (!alive) return
+        setCpStatus(st)
+        setCpForm(f => f.url === '' && st && st.server_host ? { ...f, url: (st.server_host.startsWith('http') ? st.server_host : 'https://' + st.server_host) } : f)
+      } catch (e) { /* service unreachable — keep last known */ }
+    }
+    load()
+    const iv = setInterval(load, 30000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
+
+  const saveControlServer = async () => {
+    if (!SaveControlServerConfig) return
+    try {
+      await SaveControlServerConfig((cpForm.url || '').trim(), (cpForm.token || '').trim(), (cpForm.fp || '').trim())
+      setCpForm(f => ({ ...f, token: '' })) // one-time token never lingers in the form
+      showStatus('✅ ' + t('controlServerSaved'), 'success')
+      const st = await GetControlServerStatus()
+      setCpStatus(st)
+    } catch (e) {
+      showStatus('❌ ' + (e && e.message ? e.message : String(e)), 'error')
+    }
+  }
+
   useEffect(() => {
     if (GetSecurityWarnings) {
       GetSecurityWarnings().then(w => setSecurityWarnings(w || [])).catch(() => {})
@@ -384,13 +428,6 @@ function App() {
               'backup-id': data['backup-id'] || hn,
               usevss: data.usevss !== undefined ? data.usevss : true,
               upload_limit_mbps: data.upload_limit_mbps || 0,
-              smtp_host: data.smtp_host || '',
-              smtp_port: data.smtp_port || '',
-              smtp_username: data.smtp_username || '',
-              smtp_password: '',
-              smtp_password_set: data.smtp_password_set || false,
-              smtp_from: data.smtp_from || '',
-              alert_email: data.alert_email || '',
               exchange_aware: data.exchange_aware || false,
               exchange_log_truncation: data.exchange_log_truncation || false
             })
@@ -688,12 +725,6 @@ function App() {
         'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
         usevss: config.usevss !== undefined ? config.usevss : true,
         upload_limit_mbps: Number(config.upload_limit_mbps) || 0,
-        smtp_host: (config.smtp_host || '').trim(),
-        smtp_port: (config.smtp_port || '').trim(),
-        smtp_username: (config.smtp_username || '').trim(),
-        smtp_password: config.smtp_password || '',
-        smtp_from: (config.smtp_from || '').trim(),
-        alert_email: (config.alert_email || '').trim(),
         exchange_aware: !!config.exchange_aware,
         exchange_log_truncation: !!config.exchange_log_truncation
       }
@@ -1329,6 +1360,12 @@ function App() {
   return (
     <>
       <div className="header">
+        <button className="theme-toggle" title={t('themeToggle')} onClick={() => {
+          const cur = localStorage.getItem('nimbus.theme')
+          const next = cur === null ? 'light' : (cur === 'light' ? 'dark' : null)
+          if (next) localStorage.setItem('nimbus.theme', next); else localStorage.removeItem('nimbus.theme')
+          applyTheme(next)
+        }}>◐</button>
         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
           <div>
             <h1>🛡️ {t('appTitle')}</h1>
@@ -1340,7 +1377,7 @@ function App() {
 
       <div className="container">
       {securityWarnings.length > 0 && (
-        <div className="security-warning-banner" style={{background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'6px',padding:'10px 14px',margin:'8px'}}>
+        <div className="security-warning-banner" style={{background:'var(--nc-warn-bg)',border:'1px solid var(--nc-warn-border)',borderRadius:'6px',padding:'10px 14px',margin:'8px'}}>
           <strong>⚠️ {t('securityWarningTitle')}</strong>
           <ul style={{margin:'6px 0 0',paddingLeft:'20px'}}>
             {securityWarnings.map((w,i) => <li key={i} style={{fontSize:'0.9em'}}>{w}</li>)}
@@ -1929,40 +1966,47 @@ function App() {
                 value={config.upload_limit_mbps || 0}
                 onChange={(e) => setConfig({...config, upload_limit_mbps: e.target.value})}
               />
-              <div style={{fontSize: '0.85em', color: '#666', marginTop: '4px'}}>{t('uploadLimitHint')}</div>
+              <div style={{fontSize: '0.85em', color: 'var(--nc-text-dim)', marginTop: '4px'}}>{t('uploadLimitHint')}</div>
             </div>
-            <div style={{marginTop: '16px'}}>
-              <label style={{fontWeight: 'bold'}}>{t('alertsSection')}</label>
-              <div style={{fontSize: '0.85em', color: '#666', margin: '4px 0 8px'}}>{t('alertsHint')}</div>
-              <label>{t('alertEmailLabel')}</label>
-              <input type="email" value={config.alert_email || ''} onChange={(e) => setConfig({...config, alert_email: e.target.value})} />
-              <label>{t('smtpHostLabel')}</label>
-              <input type="text" value={config.smtp_host || ''} onChange={(e) => setConfig({...config, smtp_host: e.target.value})} />
-              <label>{t('smtpPortLabel')}</label>
-              <input type="text" placeholder="587" value={config.smtp_port || ''} onChange={(e) => setConfig({...config, smtp_port: e.target.value})} />
-              <label>{t('smtpUsernameLabel')}</label>
-              <input type="text" value={config.smtp_username || ''} onChange={(e) => setConfig({...config, smtp_username: e.target.value})} />
-              <label>{t('smtpPasswordLabel')}</label>
-              <input type="password" placeholder={config.smtp_password_set ? '********' : ''} value={config.smtp_password || ''} onChange={(e) => setConfig({...config, smtp_password: e.target.value})} />
-              <label>{t('smtpFromLabel')}</label>
-              <input type="text" value={config.smtp_from || ''} onChange={(e) => setConfig({...config, smtp_from: e.target.value})} />
+            <div className="card" style={{marginTop: '16px'}}>
+              <label style={{fontWeight: 'bold'}}>{t('controlServerSection')}</label>
+              <div className="hint-text" style={{margin: '4px 0 8px'}}>{t('controlServerHint')}</div>
+              {cpStatus && cpStatus.configured && (
+                <div className="cp-status">
+                  <span className={'cp-dot ' + (cpStatus.connected ? 'ok' : 'err')}></span>
+                  <span className="mono">{cpStatus.server_host}</span>
+                  <span>
+                    {cpStatus.connected ? t('controlServerConnected') : t('controlServerDisconnected')}
+                    {cpStatus.enrolled ? ` · ${t('controlServerAgentId')} ${cpStatus.agent_id}` : ` · ${t('controlServerNotEnrolled')}`}
+                  </span>
+                  {cpStatus.last_checkin && <span className="hint-text">{t('controlServerLastCheckin')}: {new Date(cpStatus.last_checkin).toLocaleString()}</span>}
+                  {!cpStatus.connected && cpStatus.last_error && <span className="hint-text">{cpStatus.last_error}</span>}
+                </div>
+              )}
+              <label>{t('controlServerUrlLabel')}</label>
+              <input type="text" placeholder="https://nimbus.example.com" value={cpForm.url} onChange={(e) => setCpForm({...cpForm, url: e.target.value})} />
+              <label>{t('controlServerTokenLabel')}</label>
+              <input type="password" placeholder={cpStatus && cpStatus.enrolled ? t('controlServerTokenEnrolledPh') : t('controlServerTokenPh')} value={cpForm.token} onChange={(e) => setCpForm({...cpForm, token: e.target.value})} />
+              <label>{t('controlServerFpLabel')}</label>
+              <input type="text" placeholder={t('controlServerFpPh')} value={cpForm.fp} onChange={(e) => setCpForm({...cpForm, fp: e.target.value})} />
+              <button className="btn btn-secondary" style={{marginTop: '8px'}} onClick={saveControlServer}>{t('controlServerSave')}</button>
             </div>
             {exchangeStatus.installed && (
-              <div className="form-group" style={exchangeStatus.highlight_setting ? {marginTop:'16px',background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'6px',padding:'10px 14px'} : {marginTop:'16px'}}>
+              <div className="form-group" style={exchangeStatus.highlight_setting ? {marginTop:'16px',background:'var(--nc-warn-bg)',border:'1px solid var(--nc-warn-border)',borderRadius:'6px',padding:'10px 14px'} : {marginTop:'16px'}}>
                 <label style={{fontWeight:'bold'}}>{t('exchangeSection')} {exchangeStatus.version ? '(' + exchangeStatus.version + ')' : ''}</label>
-                <div style={{fontSize:'0.85em',color:'#666',margin:'4px 0 8px'}}>
+                <div style={{fontSize:'0.85em',color:'var(--nc-text-dim)',margin:'4px 0 8px'}}>
                   {exchangeStatus.highlight_setting ? '⚠️ ' + t('exchangeDetectedHint') : t('exchangeHint')}
                 </div>
                 <label>
                   <input type="checkbox" checked={!!config.exchange_aware} onChange={(e) => setConfig({...config, exchange_aware: e.target.checked})} />
                   {t('exchangeAwareLabel')}
                 </label>
-                <div style={exchangeLogMode.queried && exchangeLogMode.logs_accumulate && !config.exchange_log_truncation ? {marginTop:'10px',background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'6px',padding:'8px 12px'} : {marginTop:'10px'}}>
+                <div style={exchangeLogMode.queried && exchangeLogMode.logs_accumulate && !config.exchange_log_truncation ? {marginTop:'10px',background:'var(--nc-warn-bg)',border:'1px solid var(--nc-warn-border)',borderRadius:'6px',padding:'8px 12px'} : {marginTop:'10px'}}>
                   <label>
                     <input type="checkbox" checked={!!config.exchange_log_truncation} onChange={(e) => setConfig({...config, exchange_log_truncation: e.target.checked})} />
                     {t('exchangeLogTruncationLabel')}
                   </label>
-                  <div style={{fontSize:'0.82em',color:'#666',marginTop:'4px'}}>
+                  <div style={{fontSize:'0.82em',color:'var(--nc-text-dim)',marginTop:'4px'}}>
                     {t('exchangeLogTruncationHint')}
                     {exchangeLogMode.queried && (
                       <div style={{marginTop:'4px'}}>
@@ -2064,7 +2108,7 @@ function App() {
               </div>
 
               {status.message && status.type === 'info' && (
-                <div style={{marginTop: '10px', padding: '8px', backgroundColor: '#fff', borderRadius: '4px', fontSize: '13px', color: '#666', border: '1px solid #e9ecef'}}>
+                <div style={{marginTop: '10px', padding: '8px', backgroundColor: '#fff', borderRadius: '4px', fontSize: '13px', color: 'var(--nc-text-dim)', border: '1px solid #e9ecef'}}>
                   {status.message}
                 </div>
               )}

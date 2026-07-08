@@ -153,13 +153,20 @@ Current routes:
 | `POST /pbs/fingerprint` | Pin a TOFU certificate fingerprint |
 | `POST /config/save` | Persist full config |
 
-**How a future control server should integrate:** it is effectively another
-client of this same API surface (the GUI is the reference client in
-`gui/api/client.go`). The service already is the privileged brain; a control
-server would (a) drive these endpoints remotely, and (b) read/write the config
-flags below to steer agents. Design work still needed: remote transport +
-mutual-auth agent enrollment (the per-agent token infra is the seed), and
-pull-vs-push config. See `gui/api/INTEGRATION.md`.
+**Control server integration (implemented, v0.2.129+):** the design landed
+inverted from the sketch above — the agent dials OUT to the NimbusControl
+server (CGNAT/Starlink-safe); the server never connects in. The `controlplane/`
+module (stdlib-only, unit-tested) implements enrollment (one-time token → per-
+agent secret, sealed by the Phase 2/3 secret store), a server-cadenced check-in
+loop (inventory → missed-backup expectations; command drain — `run_backup`;
+resolved policy set, fail-closed), and forward-only run reporting with
+VSS-confirmed phases (`preparing`/`running`/`vss_failed`/terminal + PBS
+snapshot triple). Glue lives in `gui/controlplane_glue.go`; the loop runs in
+the SERVICE (`NimbusService.run`) or in a standalone GUI. The GUI reads
+connectivity via the local API (`/controlplane/status`) and writes settings
+via `/controlplane/save` (single-writer rule). Wire contract:
+NimbusControl repo `docs/AGENT-API.md`; client-side notes:
+`docs/CONTROL-PLANE.md`.
 
 ### Config flags a control server can read/toggle
 
@@ -169,10 +176,14 @@ persisted in `config.json`:
 | Flag | Meaning |
 |---|---|
 | `upload_limit_mbps` | Upload bandwidth cap (token bucket on the PBS TLS socket) |
-| `alert_email`, `smtp_*`, `smtp_from` | Failure-alert email sink (see `alerts.go`) |
 | `exchange_aware` | Run app-aware Exchange post-backup health tasks |
 | `exchange_log_truncation` | Truncate Exchange transaction logs after a successful backup |
 | `usevss` | Use VSS shadow copies |
+| `control_server_url`, `control_cert_fp` | NimbusControl attachment (agent id + sealed secret are managed automatically; enroll token is one-time and wiped) |
+
+> **SMTP alerting was removed in 0.2.130** — failure/missed/VSS alerting is a
+> control-server responsibility now (`alerts.go` deleted; `smtp_*`/`alert_email`
+> config keys are ignored if present in old config.json files).
 
 Read-only posture/detection surfaced to the GUI and available to a control
 server: `GetSecurityWarnings()` (CPU speculation-control / Windows Update

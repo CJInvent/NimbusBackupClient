@@ -51,12 +51,6 @@ type Config struct {
 	ControlSecret      string `json:"control_secret,omitempty"` // sealed via encryptSecret (DEK/TPM)
 	ControlCertFP      string `json:"control_cert_fp,omitempty"` // optional SHA-256 leaf pin
 
-	SMTPHost     string `json:"smtp_host,omitempty"`
-	SMTPPort     string `json:"smtp_port,omitempty"`
-	SMTPUsername string `json:"smtp_username,omitempty"`
-	SMTPPassword string `json:"smtp_password,omitempty"`
-	SMTPFrom     string `json:"smtp_from,omitempty"`
-	AlertEmail   string `json:"alert_email,omitempty"` // failure-alert recipient; empty = alerts off
 	ExchangeAware bool `json:"exchange_aware,omitempty"` // run app-aware Exchange post-backup tasks; control-server togglable
 	ExchangeLogTruncation bool `json:"exchange_log_truncation,omitempty"` // truncate Exchange transaction logs after a successful backup; control-server togglable
 	EmailFrom    string `json:"email_from,omitempty"`
@@ -64,12 +58,11 @@ type Config struct {
 }
 
 // sanitized returns a copy of the config with all secrets stripped (legacy PBS
-// token, SMTP password, and every PBSServer token), for any path that hands the
+// token and every PBSServer token), for any path that hands the
 // config to the frontend (M-04). Internal callers must use the real *Config.
 func (c *Config) sanitized() *Config {
 	cp := *c
 	cp.Secret = ""
-	cp.SMTPPassword = ""
 	if c.PBSServers != nil {
 		cp.PBSServers = make(map[string]*PBSServer, len(c.PBSServers))
 		for k, v := range c.PBSServers {
@@ -200,7 +193,6 @@ func LoadConfig() *Config {
 		return decryptSecret(v)
 	}
 	config.Secret = migrate(config.Secret)
-	config.SMTPPassword = migrate(config.SMTPPassword)
 	for _, s := range config.PBSServers {
 		if s != nil {
 			s.Secret = migrate(s.Secret)
@@ -266,7 +258,6 @@ func (c *Config) Save() error {
 	// file on disk only ever sees encv1 envelopes.
 	onDisk := *c
 	onDisk.Secret = encryptSecret(c.Secret)
-	onDisk.SMTPPassword = encryptSecret(c.SMTPPassword)
 	if c.PBSServers != nil {
 		onDisk.PBSServers = make(map[string]*PBSServer, len(c.PBSServers))
 		for id, s := range c.PBSServers {

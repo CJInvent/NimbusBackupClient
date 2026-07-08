@@ -1,5 +1,21 @@
 const translations = {
   fr: {
+    controlServerSection: "Serveur de contrôle (NimbusControl)",
+    controlServerHint: "Rattachez cette machine à votre serveur NimbusControl. La supervision, les alertes et les politiques sont gérées côté serveur.",
+    controlServerUrlLabel: "URL du serveur",
+    controlServerTokenLabel: "Jeton d'enrôlement (usage unique)",
+    controlServerTokenPh: "Fourni par votre MSP",
+    controlServerTokenEnrolledPh: "Déjà enrôlé — laisser vide",
+    controlServerFpLabel: "Empreinte du certificat (optionnel)",
+    controlServerFpPh: "SHA-256, uniquement si certificat auto-signé",
+    controlServerSave: "Enregistrer et connecter",
+    controlServerSaved: "Configuration du serveur de contrôle enregistrée",
+    controlServerConnected: "Connecté",
+    controlServerDisconnected: "Déconnecté",
+    controlServerAgentId: "agent nº",
+    controlServerNotEnrolled: "non enrôlé",
+    controlServerLastCheckin: "Dernier contact",
+    themeToggle: "Thème : auto / clair / sombre",
     // Header
     appTitle: "Nimbus Backup",
     appSubtitle: "Client de sauvegarde pour Proxmox Backup Server - RDEM Systems",
@@ -103,14 +119,13 @@ const translations = {
     uploadLimitLabel: "Limite d'envoi (Mbps, 0 = illimité)",
     uploadLimitHint: "Plafonne la bande passante montante des sauvegardes. 0 = pas de limite.",
     securityWarningTitle: "Avertissements de sécurité",
-    alertsSection: "Alertes par e-mail",
-    alertsHint: "Envoie un e-mail avec les derniers journaux quand une sauvegarde échoue. Laissez le destinataire vide pour désactiver.",
-    alertEmailLabel: "Destinataire des alertes",
-    smtpHostLabel: "Serveur SMTP",
-    smtpPortLabel: "Port SMTP (587 = STARTTLS, 465 = TLS)",
-    smtpUsernameLabel: "Utilisateur SMTP",
-    smtpPasswordLabel: "Mot de passe SMTP",
-    smtpFromLabel: "Adresse d'expéditeur (optionnel)",
+
+
+
+
+
+
+
     exchangeSection: "Microsoft Exchange (compatible application)",
     exchangeHint: "Exécute les tâches Exchange post-sauvegarde (contrôle santé des bases, journaux) après une sauvegarde réussie.",
     exchangeDetectedHint: "Exchange détecté sur cette machine mais le mode compatible application est désactivé — activez-le pour les tâches post-sauvegarde.",
@@ -322,6 +337,22 @@ const translations = {
 
   },
   en: {
+    controlServerSection: "Control server (NimbusControl)",
+    controlServerHint: "Attach this machine to your NimbusControl server. Monitoring, alerting, and policies are handled server-side.",
+    controlServerUrlLabel: "Server URL",
+    controlServerTokenLabel: "Enrollment token (one-time)",
+    controlServerTokenPh: "Provided by your MSP",
+    controlServerTokenEnrolledPh: "Already enrolled — leave blank",
+    controlServerFpLabel: "Certificate fingerprint (optional)",
+    controlServerFpPh: "SHA-256, only for self-signed certificates",
+    controlServerSave: "Save & connect",
+    controlServerSaved: "Control server settings saved",
+    controlServerConnected: "Connected",
+    controlServerDisconnected: "Disconnected",
+    controlServerAgentId: "agent #",
+    controlServerNotEnrolled: "not enrolled",
+    controlServerLastCheckin: "Last check-in",
+    themeToggle: "Theme: auto / light / dark",
     // Header
     appTitle: "Nimbus Backup",
     appSubtitle: "Backup client for Proxmox Backup Server - RDEM Systems",
@@ -425,14 +456,13 @@ const translations = {
     uploadLimitLabel: "Upload limit (Mbps, 0 = unlimited)",
     uploadLimitHint: "Caps backup upload bandwidth. 0 = no limit.",
     securityWarningTitle: "Security warnings",
-    alertsSection: "Email alerts",
-    alertsHint: "Sends an email with recent logs when a backup fails. Leave the recipient empty to disable.",
-    alertEmailLabel: "Alert recipient",
-    smtpHostLabel: "SMTP server",
-    smtpPortLabel: "SMTP port (587 = STARTTLS, 465 = TLS)",
-    smtpUsernameLabel: "SMTP username",
-    smtpPasswordLabel: "SMTP password",
-    smtpFromLabel: "Sender address (optional)",
+
+
+
+
+
+
+
     exchangeSection: "Microsoft Exchange (application-aware)",
     exchangeHint: "Runs post-backup Exchange tasks (database health, log state) after a successful backup.",
     exchangeDetectedHint: "Exchange detected on this machine but application-aware mode is off — enable it for post-backup tasks.",
@@ -644,6 +674,22 @@ const translations = {
 
   },
   es: {
+    controlServerSection: "Servidor de control (NimbusControl)",
+    controlServerHint: "Vincule esta máquina a su servidor NimbusControl. La supervisión, las alertas y las políticas se gestionan en el servidor.",
+    controlServerUrlLabel: "URL del servidor",
+    controlServerTokenLabel: "Token de inscripción (un solo uso)",
+    controlServerTokenPh: "Proporcionado por su MSP",
+    controlServerTokenEnrolledPh: "Ya inscrito — dejar en blanco",
+    controlServerFpLabel: "Huella del certificado (opcional)",
+    controlServerFpPh: "SHA-256, solo para certificados autofirmados",
+    controlServerSave: "Guardar y conectar",
+    controlServerSaved: "Configuración del servidor de control guardada",
+    controlServerConnected: "Conectado",
+    controlServerDisconnected: "Desconectado",
+    controlServerAgentId: "agente n.º",
+    controlServerNotEnrolled: "no inscrito",
+    controlServerLastCheckin: "Último contacto",
+    themeToggle: "Tema: auto / claro / oscuro",
     // Header
     appTitle: "Nimbus Backup",
     appSubtitle: "Cliente de copias de seguridad para Proxmox Backup Server - RDEM Systems",
@@ -747,14 +793,13 @@ const translations = {
     uploadLimitLabel: "Límite de subida (Mbps, 0 = ilimitado)",
     uploadLimitHint: "Limita el ancho de banda de subida de las copias. 0 = sin límite.",
     securityWarningTitle: "Avisos de seguridad",
-    alertsSection: "Alertas por correo",
-    alertsHint: "Envía un correo con los registros recientes cuando una copia falla. Deje el destinatario vacío para desactivar.",
-    alertEmailLabel: "Destinatario de alertas",
-    smtpHostLabel: "Servidor SMTP",
-    smtpPortLabel: "Puerto SMTP (587 = STARTTLS, 465 = TLS)",
-    smtpUsernameLabel: "Usuario SMTP",
-    smtpPasswordLabel: "Contraseña SMTP",
-    smtpFromLabel: "Dirección del remitente (opcional)",
+
+
+
+
+
+
+
     exchangeSection: "Microsoft Exchange (compatible con la aplicación)",
     exchangeHint: "Ejecuta tareas de Exchange posteriores (estado de bases de datos, registros) tras una copia correcta.",
     exchangeDetectedHint: "Exchange detectado en este equipo pero el modo compatible está desactivado — actívelo para las tareas posteriores.",

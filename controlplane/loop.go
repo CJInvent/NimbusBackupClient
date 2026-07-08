@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// Status is a point-in-time snapshot of control-plane connectivity for
+// display surfaces (GUI status card, local API). Connected means the most
+// recent check-in attempt succeeded.
+type Status struct {
+	Connected     bool      `json:"connected"`
+	LastAttempt   time.Time `json:"last_attempt"`
+	LastSuccess   time.Time `json:"last_success"`
+	LastError     string    `json:"last_error,omitempty"`
+	CheckinPeriod int       `json:"checkin_seconds"`
+	Policy        Policy    `json:"policy"`
+}
+
 // Agent runs the check-in loop and owns the current Policy. It is the only
 // long-lived control-plane object; construct one in the service and keep it
 // for the process lifetime.
@@ -39,6 +51,33 @@ type Agent struct {
 	policy   atomic.Value // Policy
 	interval atomic.Int64 // seconds, server-driven
 	mu       sync.Mutex   // serializes forced check-ins with the loop
+
+	statusMu sync.Mutex
+	status   Status
+}
+
+// Status returns the latest connectivity snapshot (safe from any goroutine).
+func (a *Agent) Status() Status {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	st := a.status
+	st.CheckinPeriod = int(a.interval.Load())
+	st.Policy = a.CurrentPolicy()
+	return st
+}
+
+func (a *Agent) recordAttempt(err error) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	a.status.LastAttempt = time.Now()
+	if err != nil {
+		a.status.Connected = false
+		a.status.LastError = err.Error()
+		return
+	}
+	a.status.Connected = true
+	a.status.LastError = ""
+	a.status.LastSuccess = a.status.LastAttempt
 }
 
 // CurrentPolicy returns the last policy the server delivered. Before the
@@ -79,6 +118,7 @@ func (a *Agent) CheckinNow() {
 	}
 
 	resp, err := a.Client.Checkin(req)
+	a.recordAttempt(err)
 	if err != nil {
 		log.Printf("[controlplane] check-in failed (will retry next cycle): %v", err)
 		return

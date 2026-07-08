@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.130] - 2026-07-08
+
+### Added
+- **Control server in the GUI** — new "Control server (NimbusControl)" card in
+  Settings: configure the server URL, one-time enrollment token, and an
+  optional certificate fingerprint pin; shows live connection status (server
+  hostname, connected/disconnected, agent id, last check-in, last error),
+  refreshed every 30 s. Settings writes flow through the service (single
+  config writer); the service restarts its check-in loop on save.
+- **Service ↔ control server wiring** — the check-in loop now actually starts:
+  in the Windows service (`NimbusService.run`, the privileged brain) and in
+  standalone GUIs. New local API routes `/controlplane/status` and
+  `/controlplane/save` let the GUI display and manage it in service mode.
+- **Proxmox-style theme, light + dark** — full restyle to the shared
+  NimbusControl design language: dense bordered panels, dark app bar,
+  PVE-blue accents, 3 px corner radius. Follows the OS by default; a ◐
+  button in the header cycles auto → light → dark (persisted).
+
+### Removed
+- **Client-side SMTP alerting** — `alerts.go`, the SMTP settings UI, and the
+  `smtp_*`/`alert_email` config fields are gone. Failure, VSS-failure, and
+  missed-backup alerting is handled by the control server, which sees runs
+  from every machine and owns the recipients. Old config files with SMTP
+  keys still load fine (unknown keys are ignored).
+
 ## [0.2.129] - 2026-07-07
 
 ### Added

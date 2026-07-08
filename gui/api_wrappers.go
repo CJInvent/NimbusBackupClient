@@ -198,9 +198,6 @@ func (a *App) SaveConfigFromMap(configData map[string]interface{}) error {
 		if cfg.Secret == "" {
 			cfg.Secret = a.config.Secret
 		}
-		if cfg.SMTPPassword == "" {
-			cfg.SMTPPassword = a.config.SMTPPassword
-		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return err

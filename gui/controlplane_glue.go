@@ -16,13 +16,17 @@ import (
 	"controlplane"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
+	cpMu     sync.Mutex // guards cpAgent/cpClient/cpStop lifecycle
+	cpStop   chan struct{}
 	cpAgent  *controlplane.Agent
 	cpClient *controlplane.Client
 
@@ -39,6 +43,8 @@ var (
 // Call once from service startup after config load. Returns silently when
 // no control server is configured.
 func (a *App) StartControlPlane() {
+	cpMu.Lock()
+	defer cpMu.Unlock()
 	cfg := a.config
 	if cfg.ControlServerURL == "" {
 		writeDebugLog("[controlplane] not configured; running standalone")
@@ -90,7 +96,114 @@ func (a *App) StartControlPlane() {
 			writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
 		},
 	}
-	go cpAgent.Run(make(chan struct{})) // runs for the process lifetime
+	cpStop = make(chan struct{})
+	go cpAgent.Run(cpStop)
+}
+
+// StopControlPlane halts the check-in loop (config change / shutdown).
+func (a *App) StopControlPlane() {
+	cpMu.Lock()
+	defer cpMu.Unlock()
+	if cpStop != nil {
+		close(cpStop)
+		cpStop = nil
+	}
+	cpAgent, cpClient = nil, nil
+}
+
+// RestartControlPlane applies a changed control-server config live.
+func (a *App) RestartControlPlane() {
+	a.StopControlPlane()
+	a.StartControlPlane()
+	// Prompt an immediate first contact so the GUI status card reflects the
+	// new server within seconds instead of one full interval.
+	cpMu.Lock()
+	ag := cpAgent
+	cpMu.Unlock()
+	if ag != nil {
+		go ag.CheckinNow()
+	}
+}
+
+// ControlPlaneStatusMap is the display snapshot for the GUI/local API.
+// Never includes the secret or enrollment token.
+func (a *App) ControlPlaneStatusMap() map[string]interface{} {
+	cfg := a.config
+	out := map[string]interface{}{
+		"configured": cfg != nil && cfg.ControlServerURL != "",
+		"server_host": func() string {
+			if cfg == nil || cfg.ControlServerURL == "" {
+				return ""
+			}
+			if u, err := url.Parse(cfg.ControlServerURL); err == nil && u.Host != "" {
+				return u.Host
+			}
+			return cfg.ControlServerURL
+		}(),
+		"enrolled":             cfg != nil && cfg.ControlAgentID > 0,
+		"agent_id":             int64(0),
+		"connected":            false,
+		"pending_enroll_token": cfg != nil && cfg.ControlEnrollToken != "",
+	}
+	if cfg != nil {
+		out["agent_id"] = cfg.ControlAgentID
+	}
+	cpMu.Lock()
+	ag := cpAgent
+	cpMu.Unlock()
+	if ag != nil {
+		st := ag.Status()
+		out["connected"] = st.Connected
+		out["last_error"] = st.LastError
+		out["checkin_seconds"] = st.CheckinPeriod
+		out["policy_file_restore"] = st.Policy.FileRestore
+		if !st.LastSuccess.IsZero() {
+			out["last_checkin"] = st.LastSuccess.UTC().Format(time.RFC3339)
+		}
+		if !st.LastAttempt.IsZero() {
+			out["last_attempt"] = st.LastAttempt.UTC().Format(time.RFC3339)
+		}
+	}
+	return out
+}
+
+// SaveControlPlaneFromMap applies control-server settings (service-side
+// write path, mirroring SaveConfigFromMap conventions: empty strings keep
+// stored values; url cleared = disable + forget identity).
+func (a *App) SaveControlPlaneFromMap(m map[string]interface{}) error {
+	str := func(k string) (string, bool) {
+		v, ok := m[k]
+		if !ok {
+			return "", false
+		}
+		sv, _ := v.(string)
+		return strings.TrimSpace(sv), true
+	}
+	if u, ok := str("control_server_url"); ok {
+		if u != "" {
+			parsed, err := url.Parse(u)
+			if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+				return errors.New("control server url must be https://host[:port]")
+			}
+		}
+		if u == "" || u != a.config.ControlServerURL {
+			// New/removed server: previous identity is meaningless there.
+			a.config.ControlAgentID = 0
+			a.config.ControlSecret = ""
+		}
+		a.config.ControlServerURL = u
+	}
+	if tok, ok := str("control_enroll_token"); ok && tok != "" {
+		a.config.ControlEnrollToken = tok
+	}
+	if fp, ok := str("control_cert_fp"); ok {
+		a.config.ControlCertFP = fp
+	}
+	if err := a.config.Save(); err != nil {
+		return err
+	}
+	a.RestartControlPlane()
+	return nil
 }
 
 // cpBuildInventory reports every scheduled job so the server can maintain
