@@ -1,6 +1,8 @@
 package controlplane
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -116,5 +118,33 @@ func TestUUIDShape(t *testing.T) {
 	u := NewRunUUID()
 	if len(u) != 36 || u[14] != '4' {
 		t.Fatalf("bad uuid: %s", u)
+	}
+}
+
+// TestCertPinningVerifyConnection exercises the pinned-fingerprint path end
+// to end: a correct pin connects, a wrong pin is rejected. Guards against
+// regressions in the VerifyConnection wiring (G123 fix).
+func TestCertPinningVerifyConnection(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(EnrollResponse{AgentID: 1, Secret: "x", CheckinSeconds: 120})
+	}))
+	defer srv.Close()
+
+	// Real fingerprint of the test server's leaf certificate.
+	leaf := srv.Certificate()
+	sum := sha256.Sum256(leaf.Raw)
+	goodFP := hex.EncodeToString(sum[:])
+
+	// Correct pin: handshake + call succeed.
+	ok := &Client{BaseURL: srv.URL, CertFingerprint: goodFP}
+	if _, err := ok.Enroll(EnrollRequest{Token: "good-token", Hostname: "h"}); err != nil {
+		t.Fatalf("correct pin should connect: %v", err)
+	}
+
+	// Wrong pin: every attempt fails the handshake (not a 4xx — a TLS error,
+	// so the retry ladder runs and still ends in failure).
+	bad := &Client{BaseURL: srv.URL, CertFingerprint: "00" + goodFP[2:]}
+	if _, err := bad.Enroll(EnrollRequest{Token: "good-token", Hostname: "h"}); err == nil {
+		t.Fatal("wrong pin must be rejected")
 	}
 }

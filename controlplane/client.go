@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -50,26 +49,28 @@ func (c *Client) http() *http.Client {
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if c.CertFingerprint != "" {
 		want := strings.ToLower(strings.ReplaceAll(c.CertFingerprint, ":", ""))
-		// verifyPin enforces the SHA-256 leaf match, so a mismatched or
-		// substituted certificate is still rejected even though the system
-		// trust store is bypassed — the pin IS the trust anchor.
-		verifyPin := func(raw [][]byte, _ [][]*x509.Certificate) error {
-			if len(raw) == 0 {
+		// verifyPin enforces the SHA-256 leaf match. It is wired through
+		// VerifyConnection (NOT VerifyPeerCertificate) because the latter is
+		// skipped on resumed TLS sessions — VerifyConnection runs on every
+		// handshake including resumptions, so a mismatched or substituted
+		// certificate is always rejected even though the system trust store
+		// is bypassed (the pin is the trust anchor). This also satisfies
+		// gosec G123.
+		verifyPin := func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("controlplane: no peer certificate")
 			}
-			got := sha256.Sum256(raw[0])
+			got := sha256.Sum256(cs.PeerCertificates[0].Raw)
 			if hex.EncodeToString(got[:]) != want {
 				return fmt.Errorf("controlplane: certificate fingerprint mismatch")
 			}
 			return nil
 		}
-		// Rebuilt as one composite literal so the gosec G402 suppression
-		// attaches to the flagged node. InsecureSkipVerify is deliberate
-		// cert pinning; verifyPin above performs the real verification.
-		tlsCfg = &tls.Config{ // #nosec G402 -- deliberate cert pinning; verification done by verifyPin, not the system trust store
-			MinVersion:            tls.VersionTLS12,
-			InsecureSkipVerify:    true,
-			VerifyPeerCertificate: verifyPin,
+		tlsCfg = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			// #nosec G402 -- deliberate certificate pinning; verification is done by VerifyConnection, not the system trust store
+			InsecureSkipVerify: true,
+			VerifyConnection:   verifyPin,
 		}
 	}
 	c.httpc = &http.Client{

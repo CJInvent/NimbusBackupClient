@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.133] - 2026-07-08
+## [0.2.134] - 2026-07-09
 
 ### Added
 - **Control server in the GUI** — new "Control server (NimbusControl)" card in
