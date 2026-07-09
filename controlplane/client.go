@@ -50,13 +50,10 @@ func (c *Client) http() *http.Client {
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if c.CertFingerprint != "" {
 		want := strings.ToLower(strings.ReplaceAll(c.CertFingerprint, ":", ""))
-		// Pin: accept any chain whose LEAF matches the fingerprint. System
-		// verification is disabled because the pin IS the trust anchor;
-		// VerifyPeerCertificate below enforces the SHA-256 leaf match, so a
-		// mismatched or substituted certificate is still rejected.
-		// #nosec G402 -- deliberate cert pinning; verification is done by the fingerprint callback, not the system trust store
-		tlsCfg.InsecureSkipVerify = true
-		tlsCfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
+		// verifyPin enforces the SHA-256 leaf match, so a mismatched or
+		// substituted certificate is still rejected even though the system
+		// trust store is bypassed — the pin IS the trust anchor.
+		verifyPin := func(raw [][]byte, _ [][]*x509.Certificate) error {
 			if len(raw) == 0 {
 				return fmt.Errorf("controlplane: no peer certificate")
 			}
@@ -65,6 +62,14 @@ func (c *Client) http() *http.Client {
 				return fmt.Errorf("controlplane: certificate fingerprint mismatch")
 			}
 			return nil
+		}
+		// Rebuilt as one composite literal so the gosec G402 suppression
+		// attaches to the flagged node. InsecureSkipVerify is deliberate
+		// cert pinning; verifyPin above performs the real verification.
+		tlsCfg = &tls.Config{ // #nosec G402 -- deliberate cert pinning; verification done by verifyPin, not the system trust store
+			MinVersion:            tls.VersionTLS12,
+			InsecureSkipVerify:    true,
+			VerifyPeerCertificate: verifyPin,
 		}
 	}
 	c.httpc = &http.Client{
