@@ -1388,6 +1388,29 @@ function App() {
 
         {/* PBS Configuration Tab */}
         <div className={`tab-content ${activeTab === 'servers' ? 'active' : ''}`}>
+            <div className="card" style={{marginTop: '16px'}}>
+              <label style={{fontWeight: 'bold'}}>{t('controlServerSection')}</label>
+              <div className="hint-text" style={{margin: '4px 0 8px'}}>{t('controlServerHint')}</div>
+              {cpStatus && cpStatus.configured && (
+                <div className="cp-status">
+                  <span className={'cp-dot ' + (cpStatus.connected ? 'ok' : 'err')}></span>
+                  <span className="mono">{cpStatus.server_host}</span>
+                  <span>
+                    {cpStatus.connected ? t('controlServerConnected') : t('controlServerDisconnected')}
+                    {cpStatus.enrolled ? ` · ${t('controlServerAgentId')} ${cpStatus.agent_id}` : ` · ${t('controlServerNotEnrolled')}`}
+                  </span>
+                  {cpStatus.last_checkin && <span className="hint-text">{t('controlServerLastCheckin')}: {new Date(cpStatus.last_checkin).toLocaleString()}</span>}
+                  {!cpStatus.connected && cpStatus.last_error && <span className="hint-text">{cpStatus.last_error}</span>}
+                </div>
+              )}
+              <label>{t('controlServerUrlLabel')}</label>
+              <input type="text" placeholder="https://nimbus.example.com" value={cpForm.url} onChange={(e) => setCpForm({...cpForm, url: e.target.value})} />
+              <label>{t('controlServerTokenLabel')}</label>
+              <input type="password" placeholder={cpStatus && cpStatus.enrolled ? t('controlServerTokenEnrolledPh') : t('controlServerTokenPh')} value={cpForm.token} onChange={(e) => setCpForm({...cpForm, token: e.target.value})} />
+              <label>{t('controlServerFpLabel')}</label>
+              <input type="text" placeholder={t('controlServerFpPh')} value={cpForm.fp} onChange={(e) => setCpForm({...cpForm, fp: e.target.value})} />
+              <button className="btn btn-secondary" style={{marginTop: '8px'}} onClick={saveControlServer}>{t('controlServerSave')}</button>
+            </div>
           <h2>🖥️ {t('serversTitle')}</h2>
 
           {/* Show form first if no servers configured */}
@@ -1953,29 +1976,6 @@ function App() {
                 onChange={(e) => setConfig({...config, upload_limit_mbps: e.target.value})}
               />
               <div style={{fontSize: '0.85em', color: 'var(--nc-text-dim)', marginTop: '4px'}}>{t('uploadLimitHint')}</div>
-            </div>
-            <div className="card" style={{marginTop: '16px'}}>
-              <label style={{fontWeight: 'bold'}}>{t('controlServerSection')}</label>
-              <div className="hint-text" style={{margin: '4px 0 8px'}}>{t('controlServerHint')}</div>
-              {cpStatus && cpStatus.configured && (
-                <div className="cp-status">
-                  <span className={'cp-dot ' + (cpStatus.connected ? 'ok' : 'err')}></span>
-                  <span className="mono">{cpStatus.server_host}</span>
-                  <span>
-                    {cpStatus.connected ? t('controlServerConnected') : t('controlServerDisconnected')}
-                    {cpStatus.enrolled ? ` · ${t('controlServerAgentId')} ${cpStatus.agent_id}` : ` · ${t('controlServerNotEnrolled')}`}
-                  </span>
-                  {cpStatus.last_checkin && <span className="hint-text">{t('controlServerLastCheckin')}: {new Date(cpStatus.last_checkin).toLocaleString()}</span>}
-                  {!cpStatus.connected && cpStatus.last_error && <span className="hint-text">{cpStatus.last_error}</span>}
-                </div>
-              )}
-              <label>{t('controlServerUrlLabel')}</label>
-              <input type="text" placeholder="https://nimbus.example.com" value={cpForm.url} onChange={(e) => setCpForm({...cpForm, url: e.target.value})} />
-              <label>{t('controlServerTokenLabel')}</label>
-              <input type="password" placeholder={cpStatus && cpStatus.enrolled ? t('controlServerTokenEnrolledPh') : t('controlServerTokenPh')} value={cpForm.token} onChange={(e) => setCpForm({...cpForm, token: e.target.value})} />
-              <label>{t('controlServerFpLabel')}</label>
-              <input type="text" placeholder={t('controlServerFpPh')} value={cpForm.fp} onChange={(e) => setCpForm({...cpForm, fp: e.target.value})} />
-              <button className="btn btn-secondary" style={{marginTop: '8px'}} onClick={saveControlServer}>{t('controlServerSave')}</button>
             </div>
             {exchangeStatus.installed && (
               <div className="form-group" style={exchangeStatus.highlight_setting ? {marginTop:'16px',background:'var(--nc-warn-bg)',border:'1px solid var(--nc-warn-border)',borderRadius:'6px',padding:'10px 14px'} : {marginTop:'16px'}}>

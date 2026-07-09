@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.136] - 2026-07-09
+
+### Fixed
+- **Control server settings moved to the Servers tab** where they belong
+  (they were under Backup — present and working, but where nobody would look
+  for them, which read as "dropped"). Nothing was actually removed.
+
+### Changed
+- **Themes reworked into base mode + accent** (was: six full standalone
+  palettes). The three colors — Pink, Forest, Sky — are now *accent overlays*
+  on top of Light/Dark/Auto, with darker/muted shades on dark mode and
+  brighter ones on light mode, so dark-mode users aren't blinded. Default
+  accent is **Proxmox orange**; the Theme dropdown holds Auto/Light/Dark and
+  the accents are a swatch row inside it. Picking the orange swatch (or any
+  base mode) returns to the default accent.
+- Default accent color for selected fields, buttons, and links is now
+  **Proxmox orange** (`#e57000`), matching PVE, instead of the old blue.
+
 ## [0.2.135] - 2026-07-09
 
 ### Fixed

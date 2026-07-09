@@ -19,8 +19,12 @@ import { useEffect, useRef, useState } from 'react'
  *   ariaLabel — accessible name for the trigger
  *   renderTrigger?(selectedOption) — custom trigger content (used by the
  *              Font Size selector to show a sized "A" instead of text)
+ *   footer? — extra JSX rendered at the bottom of the menu, below the
+ *              options and a divider (used for the Theme dropdown's accent
+ *              swatch row). Clicks inside it do NOT auto-close the menu, so
+ *              the user can try several accents in a row.
  */
-export default function Dropdown({ value, options, onChange, ariaLabel, renderTrigger }) {
+export default function Dropdown({ value, options, onChange, ariaLabel, renderTrigger, footer }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -80,6 +84,7 @@ export default function Dropdown({ value, options, onChange, ariaLabel, renderTr
             ))}
           </div>
         ))}
+        {footer && <div className="nc-dd-footer">{footer}</div>}
       </div>
     </div>
   )

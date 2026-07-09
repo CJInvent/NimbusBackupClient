@@ -297,11 +297,17 @@ staleness), `GetExchangeStatus()` (installed/version/aware/highlight),
   bar, 3px corner radius, no external fonts/CDNs. Full token system lives in
   `gui/frontend/src/index.css`; conceptually shared with the NimbusControl
   portal for a consistent look across both surfaces.
-- **Six themes**, one `data-theme` attribute on `<html>`: `auto` (removes the
-  attribute; OS `prefers-color-scheme` media query takes over), `light`,
-  `dark`, and three "advanced" palettes — `pink`, `forest`, `sky` — all
-  light-based and muted (no neon, no glare) with the same dark app-bar
-  convention as light/dark. Persisted to `localStorage['nimbus.theme']`.
+- **Base theme + accent (two orthogonal axes)**: `data-theme` = light/dark/
+  (absent = auto/OS) sets structural colors; `data-accent` = orange(default,
+  absent)/pink/forest/sky overlays ONLY the accent-family variables. Each
+  accent ships two shades — brighter on light base, darker/muted on dark base
+  — so a dark-mode user is never blinded by a saturated accent. Default accent
+  is **Proxmox orange** (`#e57000`); choosing the orange swatch removes the
+  attribute. Base mode lives in the Theme dropdown; accents are a swatch row
+  in that dropdown's footer. Persisted: `localStorage['nimbus.theme']` +
+  `['nimbus.accent']`. **Do not turn accents back into full standalone
+  palettes** — that blinded the user once (dark-mode fanatic + saturated
+  light accents).
 - **Three font sizes** — small (baseline)/medium/large — applied via CSS
   `zoom` on `<html>` per `data-fontsize` (WebView2/Chromium-only technique;
   this app never runs anywhere else, so it's safe and avoids a risky

@@ -1,10 +1,18 @@
 /* ============================================================================
    Nimbus Backup — Proxmox-flavored theme (shared design language with the
    NimbusControl portal). Utilitarian, dense, bordered; exactly 3px corner
-   radius ("slightly rounded"). Light + dark:
-     <html>                  follows the OS (prefers-color-scheme)
-     <html data-theme="...">  explicit user choice (◐ button, persisted)
-   All colors are custom properties; component rules never hardcode color.
+   radius ("slightly rounded").
+
+   TWO ORTHOGONAL AXES:
+     data-theme = light | dark | (absent = auto/OS)   -> structural colors
+     data-accent = orange(default) | pink | forest | sky -> ACCENT ONLY
+
+   Accent is layered: each base mode ships a default accent (Proxmox orange),
+   and data-accent overrides ONLY the accent-family variables (--nc-accent,
+   --nc-link, --nc-run, hover/selected tints) with a shade tuned for that
+   base mode: darker/muted on dark, brighter on light. Choosing a base mode
+   (light/dark/auto) with no data-accent returns to orange. Component rules
+   never hardcode color — they read the variables.
    ========================================================================== */
 
 :root {
@@ -24,11 +32,11 @@
     --nc-border-soft:  #e4e4e4;
     --nc-text:         #212121;
     --nc-text-dim:     #6b6b6b;
-    --nc-link:         #3892d4;
-    --nc-accent:       #3892d4;
+    --nc-link:         #e57000;   /* Proxmox orange — default accent (light) */
+    --nc-accent:       #e57000;
     --nc-accent-text:  #ffffff;
-    --nc-row-hover:    #eef6fc;
-    --nc-row-selected: #cde6f7;
+    --nc-row-hover:    #fdf1e7;
+    --nc-row-selected: #fbdcc2;
     --nc-input-bg:     #ffffff;
     --nc-ok:           #2fb344;
     --nc-warn:         #b58a1e;
@@ -36,7 +44,7 @@
     --nc-warn-border:  #e2c064;
     --nc-err:          #d64545;
     --nc-err-bg:       #fbeaea;
-    --nc-run:          #3892d4;
+    --nc-run:          #e57000;
 
     color-scheme: light;
 }
@@ -53,11 +61,11 @@
     --nc-border-soft:  #2b2b2b;
     --nc-text:         #d6d6d6;
     --nc-text-dim:     #8f8f8f;
-    --nc-link:         #58a6dd;
-    --nc-accent:       #3892d4;
-    --nc-accent-text:  #ffffff;
-    --nc-row-hover:    #24303a;
-    --nc-row-selected: #2a4a63;
+    --nc-link:         #e08838;   /* Proxmox orange, softened for dark base */
+    --nc-accent:       #d97a28;
+    --nc-accent-text:  #1a1204;
+    --nc-row-hover:    #2c2318;
+    --nc-row-selected: #4a3720;
     --nc-input-bg:     #171717;
     --nc-ok:           #37c74f;
     --nc-warn:         #d9a940;
@@ -65,93 +73,73 @@
     --nc-warn-border:  #6b5a1d;
     --nc-err:          #e05b5b;
     --nc-err-bg:       #3a1d1d;
-    --nc-run:          #58a6dd;
+    --nc-run:          #e08838;
 }
 
-/* ---------------------------------------------------------------- Pink
-   Soft rose — light base, muted (not neon) accent. Dark plum header keeps
-   the PVE dark-appbar convention; body stays light and easy on the eyes. */
-[data-theme="pink"] {
-    color-scheme: light;
-    --nc-bg:           #fbf3f6;
-    --nc-panel:        #ffffff;
-    --nc-panel-head:   #f6e9ee;
-    --nc-header:       #4a2036;
-    --nc-header-text:  #f3e3ec;
-    --nc-border:       #e3c3d1;
-    --nc-border-soft:  #f0dde5;
-    --nc-text:         #3a2530;
-    --nc-text-dim:     #8a6b76;
-    --nc-link:         #b8446f;
+/* ============================================================================
+   ACCENT OVERRIDES (data-accent) — layer ONLY accent-family variables on top
+   of whatever base mode (light/dark/auto) is active. Each accent ships two
+   shades: a brighter one for light base, a darker/muted one for dark base,
+   so a dark-mode user is never blinded by a saturated accent. No structural
+   colors (bg/panel/text/border) are touched here — those stay with the base.
+   Absence of data-accent = the base mode's default (Proxmox orange).
+   ============================================================================ */
+
+/* ---- Pink ---------------------------------------------------------------- */
+[data-accent="pink"] {
     --nc-accent:       #c8577e;
+    --nc-link:         #c8577e;
+    --nc-run:          #c8577e;
     --nc-accent-text:  #ffffff;
     --nc-row-hover:    #fbeaf0;
     --nc-row-selected: #f3cddb;
-    --nc-input-bg:     #ffffff;
-    --nc-ok:           #2f9e5c;
-    --nc-warn:         #a8722a;
-    --nc-warn-bg:      #faeed9;
-    --nc-warn-border:  #dcb877;
-    --nc-err:          #c14a5c;
-    --nc-err-bg:       #f9e6e8;
-    --nc-run:          #b8446f;
+}
+[data-theme="dark"][data-accent="pink"],
+:root:not([data-theme="light"]).os-dark[data-accent="pink"] {
+    --nc-accent:       #c96a8c;   /* muted for dark base */
+    --nc-link:         #d98aa6;
+    --nc-run:          #d98aa6;
+    --nc-accent-text:  #1a0c12;
+    --nc-row-hover:    #2e1e25;
+    --nc-row-selected: #4a2c38;
 }
 
-/* ---------------------------------------------------------------- Forest
-   Muted greens, light base — a nature palette without going dark or
-   saturated; readable at length, easy on the eyes. */
-[data-theme="forest"] {
-    color-scheme: light;
-    --nc-bg:           #eef3ec;
-    --nc-panel:        #ffffff;
-    --nc-panel-head:   #e4ecdf;
-    --nc-header:       #1f3327;
-    --nc-header-text:  #dfe9de;
-    --nc-border:       #c3d3c1;
-    --nc-border-soft:  #dde8da;
-    --nc-text:         #223028;
-    --nc-text-dim:     #5f7568;
-    --nc-link:         #3a7a54;
+/* ---- Forest -------------------------------------------------------------- */
+[data-accent="forest"] {
     --nc-accent:       #3f7d52;
+    --nc-link:         #3a7a54;
+    --nc-run:          #3a7a54;
     --nc-accent-text:  #ffffff;
     --nc-row-hover:    #e6f0e3;
     --nc-row-selected: #c9e0c5;
-    --nc-input-bg:     #ffffff;
-    --nc-ok:           #2f9e5c;
-    --nc-warn:         #a8822a;
-    --nc-warn-bg:      #f5efd8;
-    --nc-warn-border:  #d8c077;
-    --nc-err:          #b8503f;
-    --nc-err-bg:       #f5e5e1;
-    --nc-run:          #3a7a54;
+}
+[data-theme="dark"][data-accent="forest"],
+:root:not([data-theme="light"]).os-dark[data-accent="forest"] {
+    --nc-accent:       #4a9066;   /* muted for dark base */
+    --nc-link:         #6bb085;
+    --nc-run:          #6bb085;
+    --nc-accent-text:  #06120b;
+    --nc-row-hover:    #1c2c22;
+    --nc-row-selected: #294a38;
 }
 
-/* ---------------------------------------------------------------- Sky
-   Light sea/sky blue — soft, airy, muted teal-blue accent. */
-[data-theme="sky"] {
-    color-scheme: light;
-    --nc-bg:           #eef6fa;
-    --nc-panel:        #ffffff;
-    --nc-panel-head:   #e2eff5;
-    --nc-header:       #1f3b4d;
-    --nc-header-text:  #dcebf2;
-    --nc-border:       #bfdae5;
-    --nc-border-soft:  #daebf1;
-    --nc-text:         #1c2e36;
-    --nc-text-dim:     #5c7a87;
-    --nc-link:         #2789ac;
+/* ---- Sky ----------------------------------------------------------------- */
+[data-accent="sky"] {
     --nc-accent:       #2f93b8;
+    --nc-link:         #2789ac;
+    --nc-run:          #2789ac;
     --nc-accent-text:  #ffffff;
     --nc-row-hover:    #e5f2f7;
     --nc-row-selected: #c3e1ec;
-    --nc-input-bg:     #ffffff;
-    --nc-ok:           #2f9e5c;
-    --nc-warn:         #a8822a;
-    --nc-warn-bg:      #f5efd8;
-    --nc-warn-border:  #d8c077;
-    --nc-err:          #c14a4a;
-    --nc-err-bg:       #f7e6e6;
-    --nc-run:          #2789ac;
+}
+[data-theme="dark"][data-accent="sky"],
+:root:not([data-theme="light"]).os-dark[data-accent="sky"] {
+    --nc-accent:       #3a9cc0;   /* muted for dark base */
+    --nc-link:         #5cb8d9;
+    --nc-run:          #5cb8d9;
+    --nc-accent-text:  #04121a;
+    --nc-row-hover:    #182b33;
+    --nc-row-selected: #24485a;
 }
 
 /* OS-follow when no explicit choice is set (attribute absent). */
@@ -503,6 +491,37 @@ tbody tr:hover { background: var(--nc-row-hover); }
 .nc-a-small  { font-size: 12px; }
 .nc-a-medium { font-size: 16px; }
 .nc-a-large  { font-size: 21px; }
+
+/* Accent swatch row (footer of the Theme dropdown) — pick an accent overlay
+   that layers on top of the current base mode. */
+.nc-dd-footer {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--nc-border-soft);
+}
+.nc-accent-row { padding: 2px 8px 4px; }
+.nc-accent-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--nc-text-dim);
+    margin-bottom: 5px;
+}
+.nc-swatches { display: flex; gap: 8px; }
+.nc-swatch {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--nc-border);
+    cursor: pointer;
+    padding: 0;
+    transition: transform var(--nc-fast), border-color var(--nc-fast), box-shadow var(--nc-fast);
+}
+.nc-swatch:hover { transform: scale(1.12); }
+.nc-swatch.selected {
+    border-color: var(--nc-text);
+    box-shadow: 0 0 0 2px var(--nc-panel), 0 0 0 3px var(--nc-text);
+}
 
 /* ---------------------------------------------------------------- tabs visibility
    THE fix for "the 4 buttons at the top do nothing": tab-content panes were

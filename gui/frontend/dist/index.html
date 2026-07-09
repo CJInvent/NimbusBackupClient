@@ -12,15 +12,19 @@
         #root { width: 100%; height: 100vh; }
     </style>
     <script>
-        // Apply the persisted theme and font size to <html> BEFORE first
-        // paint, so there is no flash of the wrong theme/size while React
-        // mounts. Mirrors the logic in components/HeaderControls.jsx —
-        // keep the two in sync if the storage keys ever change.
+        // Apply the persisted theme, accent, and font size to <html> BEFORE
+        // first paint, so there is no flash of the wrong appearance while
+        // React mounts. Mirrors components/HeaderControls.jsx — keep the two
+        // in sync if the storage keys ever change.
         (function () {
             try {
                 var theme = localStorage.getItem('nimbus.theme');
                 if (theme && theme !== 'auto') {
                     document.documentElement.setAttribute('data-theme', theme);
+                }
+                var accent = localStorage.getItem('nimbus.accent');
+                if (accent && accent !== 'orange') {
+                    document.documentElement.setAttribute('data-accent', accent);
                 }
                 var size = localStorage.getItem('nimbus.fontsize');
                 document.documentElement.setAttribute('data-fontsize', size || 'small');
