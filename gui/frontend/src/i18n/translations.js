@@ -1,5 +1,26 @@
 const translations = {
   fr: {
+    themeLabel: "Thème",
+    themeAuto: "Auto (système)",
+    themeLight: "Clair",
+    themeDark: "Sombre",
+    themeAdvancedGroup: "Avancé",
+    themePink: "Rose",
+    themeForest: "Forêt",
+    themeSky: "Ciel",
+    fontSizeLabel: "Taille du texte",
+    fontSizeSmall: "Petit",
+    fontSizeMedium: "Moyen",
+    fontSizeLarge: "Grand",
+    languageLabel: "Langue",
+    testBtn: "Tester",
+    editBtn: "Modifier",
+    setDefaultBtn: "Par défaut",
+    deleteBtn: "Supprimer",
+    statusTesting: "Test...",
+    statusOnline: "En ligne",
+    statusOffline: "Hors ligne",
+    statusNotTested: "Non testé",
     controlServerSection: "Serveur de contrôle (NimbusControl)",
     controlServerHint: "Rattachez cette machine à votre serveur NimbusControl. La supervision, les alertes et les politiques sont gérées côté serveur.",
     controlServerUrlLabel: "URL du serveur",
@@ -15,15 +36,14 @@ const translations = {
     controlServerAgentId: "agent nº",
     controlServerNotEnrolled: "non enrôlé",
     controlServerLastCheckin: "Dernier contact",
-    themeToggle: "Thème : auto / clair / sombre",
     // Header
     appTitle: "Nimbus Backup",
     appSubtitle: "Client de sauvegarde pour Proxmox Backup Server - RDEM Systems",
 
     // Tabs
-    tabServers: "Configuration PBS",
+    tabServers: "Serveurs",
     tabBackup: "Sauvegarde",
-    tabRestore: "Restauration",
+    tabRestore: "Parcourir",
     tabAbout: "À propos",
 
     // Common
@@ -337,6 +357,27 @@ const translations = {
 
   },
   en: {
+    themeLabel: "Theme",
+    themeAuto: "Auto (system)",
+    themeLight: "Light",
+    themeDark: "Dark",
+    themeAdvancedGroup: "Advanced",
+    themePink: "Pink",
+    themeForest: "Forest",
+    themeSky: "Sky",
+    fontSizeLabel: "Text size",
+    fontSizeSmall: "Small",
+    fontSizeMedium: "Medium",
+    fontSizeLarge: "Large",
+    languageLabel: "Language",
+    testBtn: "Test",
+    editBtn: "Edit",
+    setDefaultBtn: "Set default",
+    deleteBtn: "Delete",
+    statusTesting: "Testing...",
+    statusOnline: "Online",
+    statusOffline: "Offline",
+    statusNotTested: "Not tested",
     controlServerSection: "Control server (NimbusControl)",
     controlServerHint: "Attach this machine to your NimbusControl server. Monitoring, alerting, and policies are handled server-side.",
     controlServerUrlLabel: "Server URL",
@@ -352,15 +393,14 @@ const translations = {
     controlServerAgentId: "agent #",
     controlServerNotEnrolled: "not enrolled",
     controlServerLastCheckin: "Last check-in",
-    themeToggle: "Theme: auto / light / dark",
     // Header
     appTitle: "Nimbus Backup",
     appSubtitle: "Backup client for Proxmox Backup Server - RDEM Systems",
 
     // Tabs
-    tabServers: "PBS Configuration",
+    tabServers: "Servers",
     tabBackup: "Backup",
-    tabRestore: "Restore",
+    tabRestore: "Browse",
     tabAbout: "About",
 
     // Common
@@ -674,6 +714,27 @@ const translations = {
 
   },
   es: {
+    themeLabel: "Tema",
+    themeAuto: "Auto (sistema)",
+    themeLight: "Claro",
+    themeDark: "Oscuro",
+    themeAdvancedGroup: "Avanzado",
+    themePink: "Rosa",
+    themeForest: "Bosque",
+    themeSky: "Cielo",
+    fontSizeLabel: "Tamaño del texto",
+    fontSizeSmall: "Pequeño",
+    fontSizeMedium: "Mediano",
+    fontSizeLarge: "Grande",
+    languageLabel: "Idioma",
+    testBtn: "Probar",
+    editBtn: "Editar",
+    setDefaultBtn: "Predeterminado",
+    deleteBtn: "Eliminar",
+    statusTesting: "Probando...",
+    statusOnline: "En línea",
+    statusOffline: "Fuera de línea",
+    statusNotTested: "Sin probar",
     controlServerSection: "Servidor de control (NimbusControl)",
     controlServerHint: "Vincule esta máquina a su servidor NimbusControl. La supervisión, las alertas y las políticas se gestionan en el servidor.",
     controlServerUrlLabel: "URL del servidor",
@@ -689,15 +750,14 @@ const translations = {
     controlServerAgentId: "agente n.º",
     controlServerNotEnrolled: "no inscrito",
     controlServerLastCheckin: "Último contacto",
-    themeToggle: "Tema: auto / claro / oscuro",
     // Header
     appTitle: "Nimbus Backup",
     appSubtitle: "Cliente de copias de seguridad para Proxmox Backup Server - RDEM Systems",
 
     // Tabs
-    tabServers: "Configuración PBS",
+    tabServers: "Servidores",
     tabBackup: "Copia de seguridad",
-    tabRestore: "Restaurar",
+    tabRestore: "Explorar",
     tabAbout: "Acerca de",
 
     // Common

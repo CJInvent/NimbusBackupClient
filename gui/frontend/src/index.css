@@ -8,7 +8,7 @@
    ========================================================================== */
 
 :root {
-    --nc-font:      "Segoe UI", -apple-system, "Liberation Sans", Arial, sans-serif;
+    --nc-font:      "OpenDyslexic", "Segoe UI", -apple-system, "Liberation Sans", Arial, sans-serif;
     --nc-font-mono: "Consolas", "Liberation Mono", monospace;
     --nc-radius:    3px;
     --nc-radius-sm: 2px;
@@ -68,6 +68,92 @@
     --nc-run:          #58a6dd;
 }
 
+/* ---------------------------------------------------------------- Pink
+   Soft rose — light base, muted (not neon) accent. Dark plum header keeps
+   the PVE dark-appbar convention; body stays light and easy on the eyes. */
+[data-theme="pink"] {
+    color-scheme: light;
+    --nc-bg:           #fbf3f6;
+    --nc-panel:        #ffffff;
+    --nc-panel-head:   #f6e9ee;
+    --nc-header:       #4a2036;
+    --nc-header-text:  #f3e3ec;
+    --nc-border:       #e3c3d1;
+    --nc-border-soft:  #f0dde5;
+    --nc-text:         #3a2530;
+    --nc-text-dim:     #8a6b76;
+    --nc-link:         #b8446f;
+    --nc-accent:       #c8577e;
+    --nc-accent-text:  #ffffff;
+    --nc-row-hover:    #fbeaf0;
+    --nc-row-selected: #f3cddb;
+    --nc-input-bg:     #ffffff;
+    --nc-ok:           #2f9e5c;
+    --nc-warn:         #a8722a;
+    --nc-warn-bg:      #faeed9;
+    --nc-warn-border:  #dcb877;
+    --nc-err:          #c14a5c;
+    --nc-err-bg:       #f9e6e8;
+    --nc-run:          #b8446f;
+}
+
+/* ---------------------------------------------------------------- Forest
+   Muted greens, light base — a nature palette without going dark or
+   saturated; readable at length, easy on the eyes. */
+[data-theme="forest"] {
+    color-scheme: light;
+    --nc-bg:           #eef3ec;
+    --nc-panel:        #ffffff;
+    --nc-panel-head:   #e4ecdf;
+    --nc-header:       #1f3327;
+    --nc-header-text:  #dfe9de;
+    --nc-border:       #c3d3c1;
+    --nc-border-soft:  #dde8da;
+    --nc-text:         #223028;
+    --nc-text-dim:     #5f7568;
+    --nc-link:         #3a7a54;
+    --nc-accent:       #3f7d52;
+    --nc-accent-text:  #ffffff;
+    --nc-row-hover:    #e6f0e3;
+    --nc-row-selected: #c9e0c5;
+    --nc-input-bg:     #ffffff;
+    --nc-ok:           #2f9e5c;
+    --nc-warn:         #a8822a;
+    --nc-warn-bg:      #f5efd8;
+    --nc-warn-border:  #d8c077;
+    --nc-err:          #b8503f;
+    --nc-err-bg:       #f5e5e1;
+    --nc-run:          #3a7a54;
+}
+
+/* ---------------------------------------------------------------- Sky
+   Light sea/sky blue — soft, airy, muted teal-blue accent. */
+[data-theme="sky"] {
+    color-scheme: light;
+    --nc-bg:           #eef6fa;
+    --nc-panel:        #ffffff;
+    --nc-panel-head:   #e2eff5;
+    --nc-header:       #1f3b4d;
+    --nc-header-text:  #dcebf2;
+    --nc-border:       #bfdae5;
+    --nc-border-soft:  #daebf1;
+    --nc-text:         #1c2e36;
+    --nc-text-dim:     #5c7a87;
+    --nc-link:         #2789ac;
+    --nc-accent:       #2f93b8;
+    --nc-accent-text:  #ffffff;
+    --nc-row-hover:    #e5f2f7;
+    --nc-row-selected: #c3e1ec;
+    --nc-input-bg:     #ffffff;
+    --nc-ok:           #2f9e5c;
+    --nc-warn:         #a8822a;
+    --nc-warn-bg:      #f5efd8;
+    --nc-warn-border:  #d8c077;
+    --nc-err:          #c14a4a;
+    --nc-err-bg:       #f7e6e6;
+    --nc-run:          #2789ac;
+}
+
 /* OS-follow when no explicit choice is set (attribute absent). */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme]) {
@@ -124,19 +210,7 @@ a { color: var(--nc-link); }
 .header h1 { font-size: 18px; font-weight: 600; letter-spacing: .2px; margin-bottom: 2px; }
 .header p  { opacity: 0.75; font-size: 12px; }
 
-.theme-toggle {
-    position: absolute;
-    top: 10px; right: 12px;
-    background: transparent;
-    color: var(--nc-header-text);
-    border: 1px solid rgba(255,255,255,0.25);
-    border-radius: var(--nc-radius);
-    width: 28px; height: 28px;
-    font-size: 15px;
-    cursor: pointer;
-    transition: border-color var(--nc-fast), background var(--nc-fast);
-}
-.theme-toggle:hover { border-color: var(--nc-accent); background: rgba(56,146,212,0.15); }
+
 
 /* ---------------------------------------------------------------- layout */
 .container {
@@ -320,6 +394,137 @@ tbody tr:hover { background: var(--nc-row-hover); }
 }
 .cp-dot.ok  { background: var(--nc-ok); }
 .cp-dot.err { background: var(--nc-err); }
+
+
+/* ---------------------------------------------------------------- header controls
+   Theme, Font Size, and Language: one row, one element type (Dropdown),
+   same visual layer — replaces the old overlapping absolute toggle button
+   and the mismatched flag-button language switcher. */
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ---------------------------------------------------------------- Dropdown
+   Custom listbox (not native <select>) so Theme/Font Size/Language can share
+   one themed, snappily-animated component. The menu stays mounted at all
+   times; visibility/pointer-events gate interactivity while opacity+
+   transform provide the open/close animation. */
+.nc-dd { position: relative; display: inline-block; }
+
+.nc-dd-trigger {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font: inherit;
+    cursor: pointer;
+    padding: 5px 9px;
+    color: var(--nc-header-text);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.22);
+    border-radius: var(--nc-radius);
+    transition: background var(--nc-fast), border-color var(--nc-fast);
+    white-space: nowrap;
+}
+.nc-dd-trigger:hover { background: rgba(255,255,255,0.14); border-color: var(--nc-accent); }
+.nc-dd-trigger:focus-visible {
+    outline: none;
+    border-color: var(--nc-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--nc-accent) 40%, transparent);
+}
+
+.nc-dd-caret {
+    display: inline-block;
+    font-size: 10px;
+    margin-left: 2px;
+    transition: transform var(--nc-fast);
+}
+.nc-dd-caret.open { transform: rotate(180deg); }
+
+.nc-dd-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 170px;
+    background: var(--nc-panel);
+    color: var(--nc-text);
+    border: 1px solid var(--nc-border);
+    border-radius: var(--nc-radius);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+    padding: 4px;
+    z-index: 50;
+    /* Snappy animated open/close: scale + fade from the top-right corner,
+       the trigger's position, so it visually "drops" from the button. */
+    transform-origin: top right;
+    opacity: 0;
+    transform: scale(0.95) translateY(-4px);
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity var(--nc-fast), transform var(--nc-fast), visibility 0s linear var(--nc-fast);
+}
+.nc-dd-menu.open {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity var(--nc-fast), transform var(--nc-fast), visibility 0s;
+}
+
+.nc-dd-group {
+    padding: 6px 8px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--nc-text-dim);
+    border-top: 1px solid var(--nc-border-soft);
+    margin-top: 4px;
+}
+.nc-dd-group:first-child { border-top: none; margin-top: 0; }
+
+.nc-dd-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--nc-radius-sm);
+    cursor: pointer;
+    transition: background var(--nc-fast);
+    font-size: 12.5px;
+}
+.nc-dd-option:hover { background: var(--nc-row-hover); }
+.nc-dd-option.selected { background: var(--nc-row-selected); font-weight: 600; }
+
+/* Font-size dropdown: the "A" glyph IS the size preview, at three literal
+   sizes, so the symbol communicates the option without needing a caption. */
+.nc-a-icon { font-weight: 700; line-height: 1; }
+.nc-a-small  { font-size: 12px; }
+.nc-a-medium { font-size: 16px; }
+.nc-a-large  { font-size: 21px; }
+
+/* ---------------------------------------------------------------- tabs visibility
+   THE fix for "the 4 buttons at the top do nothing": tab-content panes were
+   always rendered; only this rule (missing since the theme rewrite) hides
+   the inactive ones. Fades in on activation — quick, not showy. */
+.tab-content { display: none; }
+.tab-content.active {
+    display: block;
+    animation: nc-tab-in 150ms ease-out;
+}
+@keyframes nc-tab-in {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------------------------------------------------------------- font size
+   Global scale via CSS zoom (reflows layout, unlike transform:scale, and is
+   fully supported by WebView2/Chromium — this app's only runtime target).
+   OpenDyslexic itself applies at every size via --nc-font above; this only
+   changes the scale. small = current baseline (no change). */
+html[data-fontsize="medium"] { zoom: 1.15; }
+html[data-fontsize="large"]  { zoom: 1.35; }
 
 /* ---------------------------------------------------------------- misc */
 .logo { height: 26px; }

@@ -273,15 +273,64 @@ staleness), `GetExchangeStatus()` (installed/version/aware/highlight),
 ## 9. Internationalization
 
 - Frontend: `gui/frontend/src/i18n/translations.js` — three locales **fr / en /
-  es** at **full key parity** (parity is a hard invariant; keep counts equal).
-  Switcher: `components/LanguageSwitcher.jsx`. Context/fallback:
-  `i18n/i18nContext.jsx`.
+  es** at **full key parity** (parity is a hard invariant; keep counts equal —
+  currently 302/302/302). Switcher: one of three `Dropdown` instances in
+  `components/HeaderControls.jsx` (see #9b — Theme/Font Size/Language are the
+  same component, one row, by design). Context/fallback: `i18n/i18nContext.jsx`.
+- **No hardcoded strings in JSX bypassing `t()`** — this broke once already
+  (the multi-server list table, its status cells, and its Save/Update/Cancel
+  buttons were hardcoded French and did not respond to the language selector
+  at all). Any new user-facing string in `App.jsx` must go through `t()` in
+  all three languages before merge.
 - Backend errors: all user-facing Go errors are canonical `[NB-xxxx]` codes
   (`errcodes.go`): `1xxx` config, `2xxx` backup, `3xxx` restore/search. Logs
   record the code + a stable English base (grep-able, language-independent). The
   GUI's `localizeMessage()` swaps the base for the active language via
   `err_NBxxxx` translation keys, preserving any ` :: <detail>` suffix. **No
   hardcoded French remains in Go** — new user-facing errors must use a code.
+
+---
+
+## 9b. Theming, font size, and accessibility
+
+- **Design language:** Proxmox-flavored — dense bordered panels, dark app
+  bar, 3px corner radius, no external fonts/CDNs. Full token system lives in
+  `gui/frontend/src/index.css`; conceptually shared with the NimbusControl
+  portal for a consistent look across both surfaces.
+- **Six themes**, one `data-theme` attribute on `<html>`: `auto` (removes the
+  attribute; OS `prefers-color-scheme` media query takes over), `light`,
+  `dark`, and three "advanced" palettes — `pink`, `forest`, `sky` — all
+  light-based and muted (no neon, no glare) with the same dark app-bar
+  convention as light/dark. Persisted to `localStorage['nimbus.theme']`.
+- **Three font sizes** — small (baseline)/medium/large — applied via CSS
+  `zoom` on `<html>` per `data-fontsize` (WebView2/Chromium-only technique;
+  this app never runs anywhere else, so it's safe and avoids a risky
+  px-to-rem rewrite of the whole stylesheet). Persisted to
+  `localStorage['nimbus.fontsize']`.
+- **OpenDyslexic** (OFL-1.1, via `@fontsource/opendyslexic`) is the global
+  font at **all three** sizes, not just large. Bundled at build time
+  (`main.jsx` imports `400.css`/`700.css`); zero runtime network dependency,
+  ships inside the MSI.
+- **Zero flash of wrong theme/size**: `index.html` has a small inline
+  `<script>` in `<head>` that reads both localStorage keys and sets the
+  `data-*` attributes on `<html>` before first paint, before React mounts.
+  `components/HeaderControls.jsx` re-applies on mount (keeps React state and
+  the DOM attribute in sync) and owns every subsequent change.
+- **One control type for all three selectors**: `components/Dropdown.jsx` is
+  a themed custom listbox (not native `<select>` — can't be styled/animated
+  cross-platform) used identically for Theme, Font Size, and Language,
+  rendered side by side in `.header-controls` in normal document flow. The
+  font-size trigger shows a literally-sized "A" glyph per option instead of
+  text. **Do not reintroduce `position: absolute` controls in the header** —
+  that caused a real overlap bug (theme toggle drawn on top of the language
+  switcher) once already.
+- **`.tab-content` visibility is load-bearing CSS**: the four top tabs
+  (Servers/Backup/Browse/About) render all panes unconditionally in JSX and
+  rely entirely on `.tab-content{display:none} .tab-content.active{display:
+  block}` in `index.css` to show only the active one. This rule was
+  accidentally dropped during a theme rewrite once (all four tabs rendered
+  stacked on one page, buttons looked inert) — if the tabs ever appear to
+  "do nothing" again, check this rule first, before the click handlers.
 
 ---
 

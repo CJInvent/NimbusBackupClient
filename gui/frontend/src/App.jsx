@@ -1,15 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from './i18n/i18nContext'
 
-// Theme: 'auto' follows the OS; explicit choice persists. Applied via the
-// data-theme attribute the token CSS keys on (Proxmox-style light/dark).
-const applyTheme = (choice) => {
-  const root = document.documentElement
-  if (choice === 'light' || choice === 'dark') root.setAttribute('data-theme', choice)
-  else root.removeAttribute('data-theme')
-}
-applyTheme(localStorage.getItem('nimbus.theme'))
-import LanguageSwitcher from './components/LanguageSwitcher'
+import HeaderControls from './components/HeaderControls'
 
 // Wails runtime imports (will be available when built with Wails)
 let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig
@@ -1360,18 +1352,12 @@ function App() {
   return (
     <>
       <div className="header">
-        <button className="theme-toggle" title={t('themeToggle')} onClick={() => {
-          const cur = localStorage.getItem('nimbus.theme')
-          const next = cur === null ? 'light' : (cur === 'light' ? 'dark' : null)
-          if (next) localStorage.setItem('nimbus.theme', next); else localStorage.removeItem('nimbus.theme')
-          applyTheme(next)
-        }}>◐</button>
         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
           <div>
             <h1>🛡️ {t('appTitle')}</h1>
             <p>{t('appSubtitle')}</p>
           </div>
-          <LanguageSwitcher />
+          <HeaderControls />
         </div>
       </div>
 
@@ -1611,11 +1597,11 @@ function App() {
                 <table style={{width: '100%', marginTop: '15px'}}>
                   <thead>
                     <tr>
-                      <th>Nom</th>
-                      <th>URL</th>
-                      <th>Datastore</th>
-                      <th>Statut</th>
-                      <th>Actions</th>
+                      <th>{t('name')}</th>
+                      <th>{t('url')}</th>
+                      <th>{t('datastore')}</th>
+                      <th>{t('status')}</th>
+                      <th>{t('actions')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1629,25 +1615,25 @@ function App() {
                         <td>{server.baseurl}</td>
                         <td>{server.datastore}/{server.namespace || '-'}</td>
                         <td>
-                          {serverStatus[server.id] === 'testing' && <span style={{color: '#3b82f6'}}>🔄 Test...</span>}
-                          {serverStatus[server.id] === 'online' && <span style={{color: '#10b981'}}>🟢 Online</span>}
-                          {serverStatus[server.id] === 'offline' && <span style={{color: '#ef4444'}}>🔴 Offline</span>}
-                          {!serverStatus[server.id] && <span style={{color: '#999'}}>⚪ Non testé</span>}
+                          {serverStatus[server.id] === 'testing' && <span style={{color: '#3b82f6'}}>🔄 {t('statusTesting')}</span>}
+                          {serverStatus[server.id] === 'online' && <span style={{color: '#10b981'}}>🟢 {t('statusOnline')}</span>}
+                          {serverStatus[server.id] === 'offline' && <span style={{color: '#ef4444'}}>🔴 {t('statusOffline')}</span>}
+                          {!serverStatus[server.id] && <span style={{color: 'var(--nc-text-dim)'}}>⚪ {t('statusNotTested')}</span>}
                         </td>
                         <td>
                           <button onClick={() => handleTestPBSConnection(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
-                            🔍 Tester
+                            🔍 {t('testBtn')}
                           </button>
                           <button onClick={() => handleEditServer(server)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
-                            ✏️ Modifier
+                            ✏️ {t('editBtn')}
                           </button>
                           {server.id !== defaultPBSID && (
                             <button onClick={() => handleSetDefaultPBS(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em', backgroundColor: '#fbbf24'}}>
-                              ⭐ Par défaut
+                              ⭐ {t('setDefaultBtn')}
                             </button>
                           )}
                           <button onClick={() => handleDeletePBSServer(server.id)} style={{padding: '5px 10px', fontSize: '0.9em', backgroundColor: '#ef4444', color: 'white'}}>
-                            🗑️ Supprimer
+                            🗑️ {t('deleteBtn')}
                           </button>
                         </td>
                       </tr>
@@ -1756,10 +1742,10 @@ function App() {
                   {editingServer ? (
                     <>
                       <button onClick={handleUpdatePBSServer} style={{flex: 1}}>
-                        💾 Mettre à jour
+                        💾 {t('update')}
                       </button>
                       <button onClick={handleCancelEdit} style={{flex: 1, backgroundColor: '#999'}}>
-                        ❌ Annuler
+                        ❌ {t('cancel')}
                       </button>
                     </>
                   ) : (

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.135] - 2026-07-09
+
+### Fixed
+- **The four top tabs (Servers/Backup/Browse/About) now actually switch** —
+  a CSS rule needed to hide inactive tab panes was dropped during the
+  Proxmox theme rewrite, so every tab rendered stacked on one page and the
+  buttons appeared to do nothing. Restored.
+- **The server edit form's Save/Cancel buttons (and the rest of the
+  multi-server list — table headers, status text, row action buttons) now
+  respond to the language selector.** They were hardcoded French strings
+  bypassing the i18n system entirely, so switching language never changed
+  them — this is what was meant by "the language selection is not
+  including the Save and Cancel buttons."
+- **Theme toggle no longer overlaps the language switcher** — both were
+  header controls with independent, colliding positioning. Rebuilt as one
+  unified row (see Added).
+
+### Added
+- **Unified header controls**: Theme, Font Size, and Language are now the
+  same control (a themed, animated dropdown — `components/Dropdown.jsx`),
+  rendered side by side in one row, replacing the old absolutely-positioned
+  theme toggle button and the flag-button language switcher.
+- **Six themes**: Auto, Light, Dark, plus three new "Advanced" palettes —
+  Pink, Forest, and Sky — all muted, light-based, and contrast-checked (no
+  neon, no glare).
+- **Three font sizes** (Small/Medium/Large, symbolized by a correspondingly
+  sized "A" in the dropdown) applied globally via CSS zoom, persisted
+  independently of theme.
+- **OpenDyslexic font, globally, at all three sizes** — bundled at build
+  time via `@fontsource/opendyslexic` (OFL-1.1 licensed), zero runtime
+  network dependency.
+- Renamed tabs: "PBS Configuration" -> **Servers**, "Restore" -> **Browse**
+  (all three languages).
+- No flash of the wrong theme or font size on launch — applied before first
+  paint via an inline bootstrap script in `index.html`.
+
 ## [0.2.134] - 2026-07-09
 
 ### Added

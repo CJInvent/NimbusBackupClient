@@ -1,6 +1,7 @@
 # Build artifacts
 dist/
 !gui/frontend/dist/
+node_modules/
 build/
 
 # Binaries
