@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.138] - 2026-07-10
+
+### Fixed
+- **Build:** `download.go` lacked the `!service` build tag, so the Windows
+  service compile pulled in GUI-only download code that references
+  `resolveRestorePBS` (defined in the `!service` `main.go`) and failed.
+  Downloads are a GUI feature; the file is now excluded from service builds.
+  Both Windows variants (GUI + service) were cross-compiled locally to verify
+  before tagging.
+
 ## [0.2.137] - 2026-07-10
 
 ### Added

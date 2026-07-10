@@ -1,3 +1,6 @@
+//go:build !service
+// +build !service
+
 package main
 
 // download.go — "Download" support for the Browse tab: extract a selection
