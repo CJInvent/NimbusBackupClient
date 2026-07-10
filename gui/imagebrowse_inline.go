@@ -201,14 +201,18 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, diskArchive strin
 
 // ListImageContents walks the NTFS tree of one partition (0 = first NTFS)
 // and returns entries shaped like directory-backup listings, so the existing
-// Browse tree renders them unchanged.
-func (a *App) ListImageContents(pbsID, backupID, snapshotID, diskArchive string, partIndex int, forceRefresh bool) (*ImageContents, error) {
+// Browse tree renders them unchanged. Returns the SAME []SnapshotEntry type
+// as ListSnapshotContents (a known-good Wails binding shape) rather than a
+// custom wrapper. Truncation (very large volumes) is exposed separately via
+// LastImageListTruncated so the return signature stays identical.
+func (a *App) ListImageContents(pbsID, backupID, snapshotID, diskArchive string, partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
 	key := strings.Join([]string{pbsID, backupID, snapshotID, diskArchive, fmt.Sprint(partIndex)}, "|")
 	imageTreeMu.Lock()
 	if !forceRefresh {
 		if c, ok := imageTreeCache[key]; ok {
+			a.lastImageTruncated = c.Truncated
 			imageTreeMu.Unlock()
-			return c, nil
+			return c.Entries, nil
 		}
 	}
 	imageTreeMu.Unlock()
@@ -254,9 +258,17 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, diskArchive string,
 	imageTreeMu.Lock()
 	imageTreeCache[key] = result
 	imageTreeMu.Unlock()
+	a.lastImageTruncated = result.Truncated
 	writeBackupLog(fmt.Sprintf("ImageBrowse: listed %d entries (truncated=%v) from %s part %d",
 		len(result.Entries), result.Truncated, diskArchive, partIndex))
-	return result, nil
+	return result.Entries, nil
+}
+
+// LastImageListTruncated reports whether the most recent ListImageContents
+// hit the entry cap (very large volume). Cheap accessor so ListImageContents
+// can keep the exact []SnapshotEntry return shape of ListSnapshotContents.
+func (a *App) LastImageListTruncated() bool {
+	return a.lastImageTruncated
 }
 
 // DownloadImageSelection extracts the selection from a volume backup to

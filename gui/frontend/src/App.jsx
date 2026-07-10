@@ -4,7 +4,7 @@ import { useTranslation } from './i18n/i18nContext'
 import HeaderControls from './components/HeaderControls'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, OpenSaveFileDialog, ListImageContents, DownloadImageSelection
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, OpenSaveFileDialog, ListImageContents, DownloadImageSelection, LastImageListTruncated
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -19,6 +19,7 @@ if (window.go) {
   CheckDownloadSpace = window.go.main.App.CheckDownloadSpace
   DownloadSelection = window.go.main.App.DownloadSelection
   ListImageContents = window.go.main.App.ListImageContents
+  LastImageListTruncated = window.go.main.App.LastImageListTruncated
   DownloadImageSelection = window.go.main.App.DownloadImageSelection
   OpenSaveFileDialog = window.go.main.App.OpenSaveFileDialog
   SaveConfig = window.go.main.App.SaveConfig
@@ -155,6 +156,7 @@ function App() {
   const [snapshotEntries, setSnapshotEntries] = useState([])     // flat list from backend
   const [imageDisk, setImageDisk] = useState(null)                // volume mode: the .img.fidx being browsed
   const [imageTruncated, setImageTruncated] = useState(false)     // volume tree hit the entry cap
+  const [browsingImage, setBrowsingImage] = useState(false)       // image walk in flight (button spinner)
   // Control server (NimbusControl) status + settings form
   const [cpStatus, setCpStatus] = useState(null)
   const [cpForm, setCpForm] = useState({ url: '', token: '', fp: '' })
@@ -1362,12 +1364,25 @@ function App() {
   // first NTFS partition (the Go side errors clearly for BitLocker or
   // non-NTFS). The result feeds the SAME tree UI as directory backups.
   const handleBrowseImageDisk = async (disk, forceRefresh = false) => {
-    if (!ListImageContents || !selectedSnapshot) return
+    if (!selectedSnapshot) {
+      showStatus('❌ No snapshot selected', 'error')
+      return
+    }
+    if (!ListImageContents) {
+      // The Go binding isn't present — surface it unmistakably rather than
+      // silently doing nothing (this is what "the button does nothing" looked
+      // like: an early return with no feedback).
+      const msg = '❌ ' + (t('volumeBindingMissing') || 'Image browsing is unavailable in this build (backend method not found).')
+      showStatus(msg, 'error')
+      try { window.alert(msg) } catch (e) { /* no-op */ }
+      return
+    }
     setSnapshotEntries([])
     setSelectedPaths(new Set())
     setExpandedDirs(new Set())
     setImageDisk(null)
     setImageTruncated(false)
+    setBrowsingImage(true)
     showStatus(`💿 ${t('volumeReadingTree')}`, 'info')
     try {
       const res = await ListImageContents(
@@ -1378,12 +1393,25 @@ function App() {
         0,
         forceRefresh
       )
-      setSnapshotEntries((res && res.entries) || [])
+      const entries = Array.isArray(res) ? res : ((res && res.entries) || [])
+      setSnapshotEntries(entries)
       setImageDisk(disk)
-      setImageTruncated(!!(res && res.truncated))
-      showStatus(`✅ ${((res && res.entries) || []).length} ${t('entriesLoaded')}`, 'success')
+      let truncated = false
+      if (LastImageListTruncated) { try { truncated = await LastImageListTruncated() } catch (e) { /* ignore */ } }
+      setImageTruncated(truncated)
+      if (entries.length === 0) {
+        // Succeeded but empty — say so explicitly instead of snapping back to
+        // the disk list, which reads as "nothing happened".
+        showStatus('⚠️ ' + (t('volumeEmptyTree') || 'No files found on this partition.'), 'info')
+      } else {
+        showStatus(`✅ ${entries.length} ${t('entriesLoaded')}`, 'success')
+      }
     } catch (err) {
-      showStatus(`❌ ${err}`, 'error')
+      const msg = '❌ ' + (err && err.message ? err.message : String(err))
+      showStatus(msg, 'error')
+      try { window.alert(msg) } catch (e) { /* no-op */ }
+    } finally {
+      setBrowsingImage(false)
     }
   }
 
@@ -2729,8 +2757,8 @@ function App() {
                         {snapshotDisks(selectedSnapshot).map((d, i) => (
                           <div key={i} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '3px 0'}}>
                             <span className="mono" style={{fontSize: '12px'}}>💿 {String(d).replace('.img.fidx','')}</span>
-                            <button className="btn" style={{padding: '2px 10px', fontSize: '12px'}} onClick={() => handleBrowseImageDisk(d)}>
-                              📂 {t('volumeBrowseFiles')}
+                            <button className="btn" style={{padding: '2px 10px', fontSize: '12px'}} disabled={browsingImage} onClick={() => handleBrowseImageDisk(d)}>
+                              {browsingImage ? '⏳ ' : '📂 '}{t('volumeBrowseFiles')}
                             </button>
                           </div>
                         ))}

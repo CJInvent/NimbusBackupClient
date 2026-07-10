@@ -1,5 +1,7 @@
 const translations = {
   fr: {
+    volumeBindingMissing: "La navigation dans les images n'est pas disponible dans cette version (méthode backend introuvable).",
+    volumeEmptyTree: "Aucun fichier trouvé sur cette partition.",
     volumeSnapSelected: "Sauvegarde de volume sélectionnée — choisissez un disque à parcourir ci-dessous.",
     volumeSnapExplainV2: "Cette sauvegarde est une image disque brute. Vous pouvez parcourir les fichiers à l'intérieur (partitions NTFS) et télécharger des fichiers ou dossiers sans restaurer l'image entière.",
     volumeBrowseFiles: "Parcourir les fichiers",
@@ -377,6 +379,8 @@ const translations = {
 
   },
   en: {
+    volumeBindingMissing: "Image browsing is unavailable in this build (backend method not found).",
+    volumeEmptyTree: "No files found on this partition.",
     volumeSnapSelected: "Volume backup selected — pick a disk below to browse.",
     volumeSnapExplainV2: "This backup is a raw disk image. You can browse the files inside it (NTFS partitions) and download files or folders without restoring the whole image.",
     volumeBrowseFiles: "Browse files",
@@ -754,6 +758,8 @@ const translations = {
 
   },
   es: {
+    volumeBindingMissing: "La exploración de imágenes no está disponible en esta versión (método de backend no encontrado).",
+    volumeEmptyTree: "No se encontraron archivos en esta partición.",
     volumeSnapSelected: "Copia de volumen seleccionada — elija un disco abajo para explorar.",
     volumeSnapExplainV2: "Esta copia es una imagen de disco sin procesar. Puede explorar los archivos en su interior (particiones NTFS) y descargar archivos o carpetas sin restaurar la imagen completa.",
     volumeBrowseFiles: "Explorar archivos",

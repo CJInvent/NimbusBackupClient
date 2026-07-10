@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.140] - 2026-07-10
+
+### Fixed
+- **Volume-backup "Browse files" button now responds.** The button could
+  appear to do nothing: the handler returned silently when the backend call
+  wasn't available, and `ListImageContents` returned a custom pointer-wrapper
+  type. It now returns the same flat `[]SnapshotEntry` shape as the
+  (working) directory lister, shows a spinner while walking, and surfaces
+  any failure — missing binding, PBS error, or empty partition — as a
+  visible message instead of a no-op. Truncation for very large volumes moved
+  to a separate accessor so the list signature matches the proven one.
+
 ## [0.2.139] - 2026-07-10
 
 ### Added
