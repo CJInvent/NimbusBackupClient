@@ -8,6 +8,7 @@ require (
 	github.com/tizbac/proxmoxbackupclient_go/gui/api v0.0.0
 	clientcommon v0.0.0
 	controlplane v0.0.0
+	imagebrowse v0.0.0
 	pbscommon v0.0.0
 	retry v0.0.0
 	security v0.0.0
@@ -49,6 +50,7 @@ replace (
 	github.com/tizbac/proxmoxbackupclient_go/gui/api => ./api
 	clientcommon => ../clientcommon
 	controlplane => ../controlplane
+	imagebrowse => ../imagebrowse
 	pbscommon => ../pbscommon
 	retry => ../pkg/retry
 	security => ../pkg/security

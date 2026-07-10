@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.139] - 2026-07-10
+
+### Added
+- **File browsing inside volume (disk-image) backups.** Machine/volume
+  backups are raw disk images (fixed-index `*.img.fidx`), so PBS exposes no
+  file tree for them. The Browse tab can now open a disk image, read its
+  partition table (GPT + MBR), and walk the NTFS filesystem to present the
+  same tickable file tree as directory backups — then download individual
+  files, folders (as a zip), or Ctrl/Shift multi-selections (as a zip), all
+  with the same free-space enforcement as directory downloads.
+  - Pure userspace parsing: no kernel mount, no driver, no admin rights.
+    Only the app reads the image, read-only. Implemented as a new
+    `imagebrowse` module (GPT/MBR parser + go-ntfs) layered on a new
+    `pbscommon.FIDXReaderAt` that fetches only the disk blocks a listing or
+    extraction actually touches — browsing a multi-TB image moves megabytes,
+    not terabytes.
+  - BitLocker-encrypted and non-NTFS partitions are detected and reported
+    clearly ("restore the full image instead") rather than failing opaquely.
+  - Very large volumes cap the in-memory tree and show a truncation notice;
+    browse into subfolders to see the rest.
+
+### Notes
+- FAT/exFAT and ext4 browsing are not in this release (NTFS only); the
+  partition parser already identifies them for a later pass.
+
 ## [0.2.138] - 2026-07-10
 
 ### Fixed

@@ -44,6 +44,7 @@ compiled packages back both; which `main`/entrypoint you get is selected by the
 | `snapshot/` | VSS snapshot creation (Windows) via `st-matskevich/go-vss`. `nop_snapshot.go` for non-Windows. |
 | `machinebackup/`, `directorybackup/` | Older standalone CLI backup paths. The GUI's own inline implementations (`gui/backup_inline.go`, `gui/machine_backup_windows.go`) are what the app actually runs. |
 | `nbd/` | Network Block Device tooling for mounting/restoring machine images. |
+| `imagebrowse/` | Userspace file browsing INSIDE volume backups: GPT/MBR partition parser + NTFS reader (go-ntfs) over an `io.ReaderAt`. No mount/driver/admin — only the app reads the image. Fed by `pbscommon.FIDXReaderAt` (lazy, chunk-LRU) so a listing downloads only the blocks it touches. See §7b. |
 | `clientcommon/`, `pkg/` | Shared helpers. |
 
 > The GUI deliberately reimplements backup inline (`gui/*_inline.go`,
@@ -244,6 +245,39 @@ staleness), `GetExchangeStatus()` (installed/version/aware/highlight),
   `service-*.log` / `backup-*.log` (64 KB window), STARTTLS/implicit-TLS, certs
   verified, best-effort/async. The `[NB-2004]` already-running rejection is
   excluded from alerting.
+
+---
+
+## 7b. Browsing files inside volume (image) backups
+
+Directory backups have a pxar catalog (`ListSnapshotContentsInline`); image
+backups do NOT — they are raw disk images (one `*.img.fidx` fixed index per
+disk). Browsing them means parsing the image ourselves:
+
+- **`pbscommon.FIDXReaderAt`** (`fidx_reader.go`) — an `io.ReaderAt` over a
+  fixed index, mirroring `DIDXReaderAt`: downloads the index once, then fetches
+  4 MB image chunks ON DEMAND with an LRU cache, verifying each chunk's SHA-256.
+  Fixed indexes are pure arithmetic (chunk = offset / chunkSize), no binary
+  search. This is the storage primitive; only chunks a read touches are fetched.
+- **`imagebrowse` module** — `partitions.go` parses GPT (authoritative) and MBR
+  (fallback) tables and sniffs each partition's filesystem from its boot sector
+  (NTFS / exFAT / FAT / **BitLocker** via the `-FVE-FS-` OEM id). `ntfs.go`
+  wraps a partition in an `io.SectionReader` and hands it to **go-ntfs**
+  (`www.velocidex.com/golang/go-ntfs`, pure Go, read-only) for `List`, `Walk`,
+  and `ExtractFile`. Output is shaped as `SnapshotEntry` so the SAME Browse tree
+  renders both backup types.
+- **GUI wiring** — `gui/imagebrowse_inline.go` (`!service`): `ListImagePartitions`,
+  `ListImageContents` (cached per session; snapshots are immutable), and
+  `DownloadImageSelection` (single file / folder-zip / multi-select-zip). Space
+  safety is enforced identically to `download.go` — BLOCK if it won't fit,
+  frontend WARNs at ≥90% usage-after. Directory selections expand to their
+  files; an over-cap folder errors rather than silently downloading a partial.
+- **Not a mount**: no WinFsp/Dokan, no kernel NBD (that's the separate Linux-only
+  `nbd/` restore path), no driver, no admin. Pure in-process byte parsing —
+  "only the software needs access."
+- **Scope v1**: GPT/MBR + NTFS, read-only, list + file/folder extraction.
+  BitLocker detected and refused with a clear message; FAT/exFAT/ext4 identified
+  but not yet walked.
 
 ---
 

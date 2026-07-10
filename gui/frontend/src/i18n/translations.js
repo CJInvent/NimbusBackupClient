@@ -1,5 +1,11 @@
 const translations = {
   fr: {
+    volumeSnapSelected: "Sauvegarde de volume sélectionnée — choisissez un disque à parcourir ci-dessous.",
+    volumeSnapExplainV2: "Cette sauvegarde est une image disque brute. Vous pouvez parcourir les fichiers à l'intérieur (partitions NTFS) et télécharger des fichiers ou dossiers sans restaurer l'image entière.",
+    volumeBrowseFiles: "Parcourir les fichiers",
+    volumeReadingTree: "Lecture de la table des fichiers de l'image… (seuls les blocs nécessaires sont téléchargés)",
+    volumeBrowsingBadge: "Parcours des fichiers de l'image — les téléchargements proviennent de ce disque.",
+    volumeTreeTruncated: "Arborescence tronquée (volume très volumineux) — parcourez les sous-dossiers pour voir le reste.",
     typeFile: "Sauvegarde de fichiers (répertoire)",
     typeVolume: "Sauvegarde de volume (image disque)",
     volumeSnapTitle: "Sauvegarde de volume (image disque)",
@@ -371,6 +377,12 @@ const translations = {
 
   },
   en: {
+    volumeSnapSelected: "Volume backup selected — pick a disk below to browse.",
+    volumeSnapExplainV2: "This backup is a raw disk image. You can browse the files inside it (NTFS partitions) and download files or folders without restoring the whole image.",
+    volumeBrowseFiles: "Browse files",
+    volumeReadingTree: "Reading the image's file table… (only the needed blocks are downloaded)",
+    volumeBrowsingBadge: "Browsing files inside the image — downloads come from this disk.",
+    volumeTreeTruncated: "Tree truncated (very large volume) — browse into subfolders to see the rest.",
     typeFile: "File backup (directory)",
     typeVolume: "Volume backup (disk image)",
     volumeSnapTitle: "Volume backup (disk image)",
@@ -742,6 +754,12 @@ const translations = {
 
   },
   es: {
+    volumeSnapSelected: "Copia de volumen seleccionada — elija un disco abajo para explorar.",
+    volumeSnapExplainV2: "Esta copia es una imagen de disco sin procesar. Puede explorar los archivos en su interior (particiones NTFS) y descargar archivos o carpetas sin restaurar la imagen completa.",
+    volumeBrowseFiles: "Explorar archivos",
+    volumeReadingTree: "Leyendo la tabla de archivos de la imagen… (solo se descargan los bloques necesarios)",
+    volumeBrowsingBadge: "Explorando archivos dentro de la imagen — las descargas provienen de este disco.",
+    volumeTreeTruncated: "Árbol truncado (volumen muy grande) — explore las subcarpetas para ver el resto.",
     typeFile: "Copia de archivos (directorio)",
     typeVolume: "Copia de volumen (imagen de disco)",
     volumeSnapTitle: "Copia de volumen (imagen de disco)",

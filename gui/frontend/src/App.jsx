@@ -4,7 +4,7 @@ import { useTranslation } from './i18n/i18nContext'
 import HeaderControls from './components/HeaderControls'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, OpenSaveFileDialog
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, OpenSaveFileDialog, ListImageContents, DownloadImageSelection
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -18,6 +18,8 @@ if (window.go) {
   SetTrayLanguage = window.go.main.App.SetTrayLanguage
   CheckDownloadSpace = window.go.main.App.CheckDownloadSpace
   DownloadSelection = window.go.main.App.DownloadSelection
+  ListImageContents = window.go.main.App.ListImageContents
+  DownloadImageSelection = window.go.main.App.DownloadImageSelection
   OpenSaveFileDialog = window.go.main.App.OpenSaveFileDialog
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
@@ -151,6 +153,8 @@ function App() {
   const [selectedSnapshot, setSelectedSnapshot] = useState(null) // { id, unix, time }
   const [snapshotMeta, setSnapshotMeta] = useState(null)         // .nimbus_backup_meta.json sidecar (null if legacy)
   const [snapshotEntries, setSnapshotEntries] = useState([])     // flat list from backend
+  const [imageDisk, setImageDisk] = useState(null)                // volume mode: the .img.fidx being browsed
+  const [imageTruncated, setImageTruncated] = useState(false)     // volume tree hit the entry cap
   // Control server (NimbusControl) status + settings form
   const [cpStatus, setCpStatus] = useState(null)
   const [cpForm, setCpForm] = useState({ url: '', token: '', fp: '' })
@@ -1031,6 +1035,14 @@ function App() {
     setSnapshotEntries([])
     setSelectedPaths(new Set())
     setExpandedDirs(new Set())
+    setImageDisk(null)
+    setImageTruncated(false)
+    // Volume (disk image) snapshots have no pxar catalog to list — the panel
+    // shows the disks with a Browse-files button per disk instead.
+    if (isVolumeSnapshot(snap)) {
+      showStatus(`💿 ${t('volumeSnapSelected')}`, 'info')
+      return
+    }
     showStatus(`📥 ${t('loadingSnapshotContents')}`, 'info')
     const effectiveBackupId = snap.backup_id || restoreBackupId
     try {
@@ -1346,6 +1358,35 @@ function App() {
   // zip. Pre-flight space check: BLOCK if it cannot fit on the destination
   // drive, WARN (confirm dialog) if it would push the drive to >= 90% used.
   // The Go side re-enforces both rules authoritatively.
+  // Volume mode: load the NTFS file tree of one disk image. Partition 0 =
+  // first NTFS partition (the Go side errors clearly for BitLocker or
+  // non-NTFS). The result feeds the SAME tree UI as directory backups.
+  const handleBrowseImageDisk = async (disk, forceRefresh = false) => {
+    if (!ListImageContents || !selectedSnapshot) return
+    setSnapshotEntries([])
+    setSelectedPaths(new Set())
+    setExpandedDirs(new Set())
+    setImageDisk(null)
+    setImageTruncated(false)
+    showStatus(`💿 ${t('volumeReadingTree')}`, 'info')
+    try {
+      const res = await ListImageContents(
+        restorePBSID || '',
+        selectedSnapshot.backup_id || restoreBackupId,
+        selectedSnapshot.id,
+        disk,
+        0,
+        forceRefresh
+      )
+      setSnapshotEntries((res && res.entries) || [])
+      setImageDisk(disk)
+      setImageTruncated(!!(res && res.truncated))
+      showStatus(`✅ ${((res && res.entries) || []).length} ${t('entriesLoaded')}`, 'success')
+    } catch (err) {
+      showStatus(`❌ ${err}`, 'error')
+    }
+  }
+
   const handleDownloadSelection = async () => {
     if (!DownloadSelection || selectedPaths.size === 0) return
     const paths = Array.from(selectedPaths)
@@ -1382,15 +1423,29 @@ function App() {
 
     setDownloading(true)
     try {
-      await DownloadSelection(
-        restorePBSID || '',
-        selectedSnapshot.backup_id || restoreBackupId,
-        selectedSnapshot.id,
-        paths,
-        dest,
-        !single,
-        selectionBytes || 0
-      )
+      if (imageDisk) {
+        await DownloadImageSelection(
+          restorePBSID || '',
+          selectedSnapshot.backup_id || restoreBackupId,
+          selectedSnapshot.id,
+          imageDisk,
+          0,
+          paths,
+          dest,
+          !single,
+          selectionBytes || 0
+        )
+      } else {
+        await DownloadSelection(
+          restorePBSID || '',
+          selectedSnapshot.backup_id || restoreBackupId,
+          selectedSnapshot.id,
+          paths,
+          dest,
+          !single,
+          selectionBytes || 0
+        )
+      }
       showStatus('✅ ' + t('downloadDone').replace('{dest}', dest), 'success')
     } catch (e) {
       showStatus('❌ ' + (e && e.message ? e.message : String(e)), 'error')
@@ -2667,12 +2722,17 @@ function App() {
                 {snapshotEntries.length === 0 && selectedSnapshot && isVolumeSnapshot(selectedSnapshot) ? (
                   <div style={{padding: '12px'}}>
                     <p style={{margin: 0, fontWeight: 600, color: 'var(--nc-accent)'}}>💿 {t('volumeSnapTitle')}</p>
-                    <p style={{margin: '6px 0 10px', fontSize: '13px', color: 'var(--nc-text-dim)'}}>{t('volumeSnapExplain')}</p>
+                    <p style={{margin: '6px 0 10px', fontSize: '13px', color: 'var(--nc-text-dim)'}}>{t('volumeSnapExplainV2')}</p>
                     {snapshotDisks(selectedSnapshot).length > 0 && (
                       <div>
                         <p style={{margin: '0 0 4px', fontSize: '12px', fontWeight: 600}}>{t('volumeDisksInBackup')}</p>
                         {snapshotDisks(selectedSnapshot).map((d, i) => (
-                          <div key={i} className="mono" style={{fontSize: '12px', padding: '2px 0'}}>💿 {String(d).replace('.img.fidx','')}</div>
+                          <div key={i} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '3px 0'}}>
+                            <span className="mono" style={{fontSize: '12px'}}>💿 {String(d).replace('.img.fidx','')}</span>
+                            <button className="btn" style={{padding: '2px 10px', fontSize: '12px'}} onClick={() => handleBrowseImageDisk(d)}>
+                              📂 {t('volumeBrowseFiles')}
+                            </button>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -2681,11 +2741,20 @@ function App() {
                 ) : snapshotEntries.length === 0 ? (
                   <p style={{padding: '12px', color: 'var(--nc-text-dim)'}}>{t('loadingOrEmpty')}</p>
                 ) : (
-                  (() => {
-                    const tree = buildTree(snapshotEntries)
-                    const roots = tree.get('') || []
-                    return roots.map(e => renderTreeNode(e, tree, 0))
-                  })()
+                  <>
+                    {imageDisk && (
+                      <div style={{padding: '6px 10px', borderBottom: '1px solid var(--nc-border-soft)', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
+                        <span style={{color: 'var(--nc-accent)', fontWeight: 600}}>💿 {String(imageDisk).replace('.img.fidx','')}</span>
+                        <span className="hint-text">{t('volumeBrowsingBadge')}</span>
+                        {imageTruncated && <span style={{color: 'var(--nc-warn)'}}>⚠ {t('volumeTreeTruncated')}</span>}
+                      </div>
+                    )}
+                    {(() => {
+                      const tree = buildTree(snapshotEntries)
+                      const roots = tree.get('') || []
+                      return roots.map(e => renderTreeNode(e, tree, 0))
+                    })()}
+                  </>
                 )}
               </div>
               <p style={{marginTop: '6px', fontSize: '12px', color: 'var(--nc-text-dim)'}}>

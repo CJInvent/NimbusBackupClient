@@ -15,3 +15,5 @@ use ./nbd
 use ./gui
 
 use ./controlplane
+
+use ./imagebrowse
