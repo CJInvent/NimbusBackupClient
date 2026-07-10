@@ -11,6 +11,13 @@ export function I18nProvider({ children }) {
 
   useEffect(() => {
     localStorage.setItem('language', language)
+    // Keep the Windows system-tray menu in the same language as the GUI.
+    // Guarded: bindings are absent in a plain-browser dev session.
+    try {
+      if (window.go && window.go.main && window.go.main.App && window.go.main.App.SetTrayLanguage) {
+        window.go.main.App.SetTrayLanguage(language)
+      }
+    } catch (e) { /* tray unavailable — non-Windows or no binding */ }
   }, [language])
 
   const t = (key) => {

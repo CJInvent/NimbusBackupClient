@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.137] - 2026-07-10
+
+### Added
+- **Download from the Browse tab** — a Download button for the current
+  selection: a single file downloads as-is under its own name; folders and
+  multi-selections are packaged as a zip. Native save-as dialog.
+- **Ctrl/Shift multi-select in the snapshot tree** — Ctrl(⌘)+click toggles a
+  row, Shift+click selects the contiguous visible range (file-manager
+  semantics), alongside the existing checkboxes.
+- **Free-space safety for downloads** — before any bytes move, the drive is
+  checked: the download is **blocked** if it cannot fit (needed > free, on
+  the staging temp drive or the destination), and a **warning** asks for
+  confirmation if it would push the destination drive to >= 90% usage
+  (used_after = total − free + needed). Enforced in Go, pre-flighted in the
+  UI; the math is unit-tested at the boundaries (85/90/100%, overfill).
+- **Volume vs file backup distinction** — snapshot cards now say
+  "File backup (directory)" or "Volume backup (disk image)" instead of the
+  raw PBS type, and a volume snapshot shows its actual disks (from the
+  archive list) with an honest explanation instead of the nonsensical
+  "Loading or empty snapshot" — plus a note that file-level browsing inside
+  images is being finalized.
+- **System tray follows the GUI language** (was hardcoded mixed EN/FR) —
+  live-updates on language change, fr/en/es. Note: the tray *menu chrome*
+  colors are drawn by Windows and cannot be themed by any app.
+
+### Changed
+- **Accent colors do more work**: grid cards carry accent-tinted perimeters
+  that sharpen on hover, the selected tab gets an accent fill + darker accent
+  underline + accent text, informational messages are accent-tinted, and
+  table headers get an accent rule. Selection highlights in the Browse tab
+  (cards, tree rows) now use theme variables — fixing several hardcoded
+  light-mode colors that glowed white in dark mode.
+- The reserved restore checkboxes (NTFS permissions, ADS) are relabeled
+  honestly: they require NTFS *sidecar capture at backup time* — the backup
+  currently doesn't record ACLs/ADS, so a restore-side unlock alone cannot
+  implement them. Capture is the planned prerequisite.
+
 ## [0.2.136] - 2026-07-09
 
 ### Fixed

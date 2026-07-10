@@ -4,7 +4,7 @@ import { useTranslation } from './i18n/i18nContext'
 import HeaderControls from './components/HeaderControls'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, OpenSaveFileDialog
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -15,6 +15,10 @@ if (window.go) {
   GetConfigWithHostname = window.go.main.App.GetConfigWithHostname
   GetControlServerStatus = window.go.main.App.GetControlServerStatus
   SaveControlServerConfig = window.go.main.App.SaveControlServerConfig
+  SetTrayLanguage = window.go.main.App.SetTrayLanguage
+  CheckDownloadSpace = window.go.main.App.CheckDownloadSpace
+  DownloadSelection = window.go.main.App.DownloadSelection
+  OpenSaveFileDialog = window.go.main.App.OpenSaveFileDialog
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
@@ -92,6 +96,17 @@ function App() {
   const [serverStatus, setServerStatus] = useState({}) // Map of server ID -> connection status
 
   const [backupType, setBackupType] = useState('directory')
+  // Volume (disk-image) backup detection: machine backups store one
+  // *.img.fidx per disk (fixed-index raw images) instead of a pxar archive.
+  const isVolumeSnapshot = (snap) => {
+    if (!snap) return false
+    const files = snap.files || []
+    if (files.some(f => String(f).includes('.img.fidx'))) return true
+    return snap.backup_type === 'vm' || snap.backup_type === 'machine'
+  }
+  const snapshotDisks = (snap) => (snap && snap.files ? snap.files.filter(f => String(f).includes('.img.fidx')) : [])
+  const [lastClickedPath, setLastClickedPath] = useState(null) // shift-range anchor
+  const [downloading, setDownloading] = useState(false)
   const [backupDirs, setBackupDirs] = useState('')
   const [selectedDrives, setSelectedDrives] = useState([])
   const [physicalDisks, setPhysicalDisks] = useState([])
@@ -1308,6 +1323,108 @@ function App() {
 
   // Recursive renderer driven by the children map. Depth is only used for the
   // visual indent.
+  // Flatten the visible tree (respecting expanded state) in display order —
+  // the range that shift+click selects, exactly like a file manager.
+  const visibleOrder = () => {
+    const tree = buildTree(snapshotEntries)
+    const out = []
+    const walk = (list) => {
+      for (const e of (list || [])) {
+        out.push(e.path)
+        if (e.is_dir && expandedDirs.has(e.path)) walk(tree.get(e.path))
+      }
+    }
+    walk(tree.get('') || [])
+    return out
+  }
+
+  // Row click semantics: ctrl(⌘)+click toggles the row; shift+click selects
+  // the contiguous visible range from the last clicked row; plain click on a
+  // dir expands/collapses (files: toggles the checkbox).
+  // Download the current selection. One selected FILE downloads directly
+  // under its own name; anything else (folder, or several items) becomes a
+  // zip. Pre-flight space check: BLOCK if it cannot fit on the destination
+  // drive, WARN (confirm dialog) if it would push the drive to >= 90% used.
+  // The Go side re-enforces both rules authoritatively.
+  const handleDownloadSelection = async () => {
+    if (!DownloadSelection || selectedPaths.size === 0) return
+    const paths = Array.from(selectedPaths)
+    // Single regular file? (must exist in entries and not be a dir)
+    const single = paths.length === 1 ? snapshotEntries.find(e => e.path === paths[0] && !e.is_dir) : null
+    const defaultName = single
+      ? (single.path.split('/').pop() || 'download')
+      : `${selectedSnapshot.backup_id}-${(selectedSnapshot.time || '').replace(/[: ]/g, '-')}.zip`
+    let dest
+    try {
+      dest = await OpenSaveFileDialog(defaultName)
+    } catch (e) {
+      showStatus('❌ ' + (e && e.message ? e.message : String(e)), 'error')
+      return
+    }
+    if (!dest) return // user cancelled
+
+    // Pre-flight space math (advisory UX; Go re-checks and enforces).
+    try {
+      const sc = await CheckDownloadSpace(dest, selectionBytes || 0)
+      if (!sc.fits) {
+        showStatus('❌ ' + t('downloadBlockedSpace')
+          .replace('{need}', formatBytes(sc.needed_bytes))
+          .replace('{free}', formatBytes(sc.free_bytes)), 'error')
+        return
+      }
+      if (sc.warn_90) {
+        const msg = t('downloadWarn90')
+          .replace('{pct}', sc.usage_after_pct.toFixed(1))
+          .replace('{free}', formatBytes(sc.free_bytes - sc.needed_bytes))
+        if (!window.confirm(msg)) return
+      }
+    } catch (e) { /* space check unavailable — Go side still enforces */ }
+
+    setDownloading(true)
+    try {
+      await DownloadSelection(
+        restorePBSID || '',
+        selectedSnapshot.backup_id || restoreBackupId,
+        selectedSnapshot.id,
+        paths,
+        dest,
+        !single,
+        selectionBytes || 0
+      )
+      showStatus('✅ ' + t('downloadDone').replace('{dest}', dest), 'success')
+    } catch (e) {
+      showStatus('❌ ' + (e && e.message ? e.message : String(e)), 'error')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  const handleRowClick = (e, entry) => {
+    if (e.shiftKey && lastClickedPath) {
+      e.preventDefault()
+      const order = visibleOrder()
+      const a = order.indexOf(lastClickedPath)
+      const b = order.indexOf(entry.path)
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a]
+        setSelectedPaths(prev => {
+          const next = new Set(prev)
+          for (let i = lo; i <= hi; i++) next.add(order[i])
+          return next
+        })
+        return
+      }
+    }
+    if (e.ctrlKey || e.metaKey) {
+      togglePathSelection(entry.path)
+      setLastClickedPath(entry.path)
+      return
+    }
+    setLastClickedPath(entry.path)
+    if (entry.is_dir) toggleDir(entry.path)
+    else togglePathSelection(entry.path)
+  }
+
   const renderTreeNode = (entry, childrenByDir, depth) => {
     const isExpanded = expandedDirs.has(entry.path)
     const isSelected = selectedPaths.has(entry.path)
@@ -1316,11 +1433,15 @@ function App() {
     const rowTitle = origin ? t('originTooltip').replace('{path}', origin) : entry.path
     return (
       <div key={entry.path}>
-        <div title={rowTitle} style={{ ...indent, display: 'flex', alignItems: 'center', padding: '4px 8px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}>
+        <div
+          title={rowTitle}
+          onClick={(e) => handleRowClick(e, entry)}
+          style={{ ...indent, display: 'flex', alignItems: 'center', padding: '4px 8px', cursor: 'pointer', borderBottom: '1px solid var(--nc-border-soft)', background: isSelected ? 'var(--nc-row-selected)' : undefined }}>
           <input
             type="checkbox"
             checked={isSelected}
-            onChange={() => togglePathSelection(entry.path)}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => { togglePathSelection(entry.path); setLastClickedPath(entry.path) }}
             style={{ marginRight: '8px' }}
           />
           {entry.is_dir ? (
@@ -1337,7 +1458,7 @@ function App() {
             {entry.path.split('/').pop() || entry.path}
           </span>
           {!entry.is_dir && (
-            <span style={{ color: '#64748b', fontSize: '12px', marginLeft: '8px' }}>
+            <span style={{ color: 'var(--nc-text-dim)', fontSize: '12px', marginLeft: '8px' }}>
               {formatBytes(entry.size)}
             </span>
           )}
@@ -2471,15 +2592,17 @@ function App() {
                         className="card"
                         style={{
                           cursor: 'pointer',
-                          border: isActive ? '2px solid #2563eb' : undefined,
-                          backgroundColor: isActive ? '#eff6ff' : undefined
+                          border: isActive ? '2px solid var(--nc-accent)' : undefined,
+                          backgroundColor: isActive ? 'var(--nc-row-selected)' : undefined
                         }}
                         onClick={() => handleSelectSnapshot(snap)}
                       >
                         <h3>📸 {snap.time}</h3>
-                        <p style={{color: '#718096', fontSize: '14px', marginTop: '5px'}}>
+                        <p style={{color: 'var(--nc-text-dim)', fontSize: '14px', marginTop: '5px'}}>
                           {snap.backup_id}<br/>
-                          {t('typeLabel')}: {snap.backup_type || 'N/A'}
+                          {isVolumeSnapshot(snap)
+                            ? <span>💿 {t('typeVolume')}</span>
+                            : <span>📁 {t('typeFile')}</span>}
                         </p>
                         <button className="btn" style={{marginTop: '10px', width: '100%'}}>
                           {isActive ? `✓ ${t('snapshotSelected')}` : t('selectSnapshot')}
@@ -2541,8 +2664,22 @@ function App() {
                 overflowY: 'auto',
                 backgroundColor: '#fff'
               }}>
-                {snapshotEntries.length === 0 ? (
-                  <p style={{padding: '12px', color: '#718096'}}>{t('loadingOrEmpty')}</p>
+                {snapshotEntries.length === 0 && selectedSnapshot && isVolumeSnapshot(selectedSnapshot) ? (
+                  <div style={{padding: '12px'}}>
+                    <p style={{margin: 0, fontWeight: 600, color: 'var(--nc-accent)'}}>💿 {t('volumeSnapTitle')}</p>
+                    <p style={{margin: '6px 0 10px', fontSize: '13px', color: 'var(--nc-text-dim)'}}>{t('volumeSnapExplain')}</p>
+                    {snapshotDisks(selectedSnapshot).length > 0 && (
+                      <div>
+                        <p style={{margin: '0 0 4px', fontSize: '12px', fontWeight: 600}}>{t('volumeDisksInBackup')}</p>
+                        {snapshotDisks(selectedSnapshot).map((d, i) => (
+                          <div key={i} className="mono" style={{fontSize: '12px', padding: '2px 0'}}>💿 {String(d).replace('.img.fidx','')}</div>
+                        ))}
+                      </div>
+                    )}
+                    <p style={{margin: '10px 0 0', fontSize: '12px', color: 'var(--nc-text-dim)'}}>{t('volumeSnapRestoreHint')}</p>
+                  </div>
+                ) : snapshotEntries.length === 0 ? (
+                  <p style={{padding: '12px', color: 'var(--nc-text-dim)'}}>{t('loadingOrEmpty')}</p>
                 ) : (
                   (() => {
                     const tree = buildTree(snapshotEntries)
@@ -2551,13 +2688,24 @@ function App() {
                   })()
                 )}
               </div>
-              <p style={{marginTop: '6px', fontSize: '12px', color: '#64748b'}}>
+              <p style={{marginTop: '6px', fontSize: '12px', color: 'var(--nc-text-dim)'}}>
                 {selectedPaths.size === 0
                   ? t('selectionEmptyAllSize').replace('{size}', formatBytes(selectionBytes))
                   : t('selectionCountSize')
                       .replace('{n}', selectedPaths.size)
                       .replace('{size}', formatBytes(selectionBytes))}
               </p>
+              <div style={{marginTop: '8px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap'}}>
+                <button
+                  className="btn btn-primary"
+                  disabled={selectedPaths.size === 0 || downloading}
+                  onClick={handleDownloadSelection}
+                  title={t('downloadHint')}
+                >
+                  ⬇️ {downloading ? t('downloadInProgress') : t('downloadSelection')}
+                </button>
+                <span className="hint-text">{t('downloadModesHint')}</span>
+              </div>
             </div>
           )}
 

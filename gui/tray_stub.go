@@ -1,3 +1,4 @@
+//go:build !windows
 // +build !windows
 
 package main
@@ -21,3 +22,7 @@ func (a *App) ShowFromTray() {
 func (a *App) UpdateTrayTooltip(message string) {
 	writeDebugLog("UpdateTrayTooltip is only supported on Windows")
 }
+
+// SetTrayLanguage is a no-op off Windows (no system tray). Kept so the
+// Wails binding surface is identical across platforms.
+func (a *App) SetTrayLanguage(lang string) {}

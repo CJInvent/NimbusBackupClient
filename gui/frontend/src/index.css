@@ -232,9 +232,12 @@ a { color: var(--nc-link); }
 }
 .tab:hover { background: var(--nc-row-hover); color: var(--nc-text); }
 .tab.active {
-    color: var(--nc-text);
+    /* Selected tab: readable accent treatment — accent-tinted fill, a darker
+       accent underline, and accent text, so the active tab is unmistakable. */
+    color: var(--nc-accent);
     border-bottom-color: var(--nc-accent);
-    background: var(--nc-panel);
+    background: color-mix(in srgb, var(--nc-accent) 14%, var(--nc-panel));
+    box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--nc-accent) 65%, black);
     font-weight: 600;
 }
 
@@ -245,7 +248,12 @@ a { color: var(--nc-link); }
     border-radius: var(--nc-radius);
     padding: 12px;
     margin-bottom: 12px;
+    transition: border-color var(--nc-fast);
 }
+/* Accent grid perimeters: cards inside a .grid carry a soft accent-tinted
+   border that sharpens on hover — visible structure without shouting. */
+.grid .card { border-color: color-mix(in srgb, var(--nc-accent) 30%, var(--nc-border)); }
+.grid .card:hover { border-color: var(--nc-accent); }
 .card h2, .card h3 {
     font-size: 14px;
     font-weight: 600;
@@ -318,7 +326,7 @@ th, td {
 }
 th {
     background: var(--nc-panel-head);
-    border-bottom: 1px solid var(--nc-border);
+    border-bottom: 2px solid color-mix(in srgb, var(--nc-accent) 45%, var(--nc-border));
     font-weight: 600;
     position: sticky;
     top: 0;
@@ -341,14 +349,17 @@ tbody tr:hover { background: var(--nc-row-hover); }
 }
 
 .info-box {
+    /* Informational messages read in the accent family. */
     padding: 8px 10px;
-    border: 1px solid var(--nc-border);
+    border: 1px solid color-mix(in srgb, var(--nc-accent) 35%, var(--nc-border));
     border-left: 3px solid var(--nc-accent);
     border-radius: var(--nc-radius);
-    background: var(--nc-panel-head);
+    background: color-mix(in srgb, var(--nc-accent) 8%, var(--nc-panel-head));
+    color: color-mix(in srgb, var(--nc-accent) 60%, var(--nc-text));
     margin-bottom: 10px;
     font-size: 12.5px;
 }
+.info-box strong, .info-box b { color: var(--nc-accent); }
 
 .security-warning-banner {
     padding: 8px 10px;
