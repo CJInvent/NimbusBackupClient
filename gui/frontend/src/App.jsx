@@ -1389,6 +1389,7 @@ function App() {
         restorePBSID || '',
         selectedSnapshot.backup_id || restoreBackupId,
         selectedSnapshot.id,
+        selectedSnapshot.backup_type || 'vm',
         disk,
         0,
         forceRefresh
@@ -1456,6 +1457,7 @@ function App() {
           restorePBSID || '',
           selectedSnapshot.backup_id || restoreBackupId,
           selectedSnapshot.id,
+          selectedSnapshot.backup_type || 'vm',
           imageDisk,
           0,
           paths,

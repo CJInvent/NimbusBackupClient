@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.141] - 2026-07-13
+
+### Fixed
+- **Volume browse/download now opens the reader session with the snapshot's
+  ACTUAL backup type.** It was hardcoded to "host" (copied from the
+  directory-restore path), but volume backups are uploaded as "vm" — so PBS
+  rejected the session ("unable to read .../host/<id>/owner - No such file
+  or directory"). The snapshot's backup_type now flows from the UI through
+  every image-browse call.
+- **Image-browse errors are now written to the backup log** (every failure
+  path, with the NB-34xx code), not just shown in the GUI — required for
+  local diagnostics today and control-plane log visibility later. The tree
+  cache key also includes the backup type.
+
 ## [0.2.140] - 2026-07-10
 
 ### Fixed

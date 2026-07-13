@@ -32,6 +32,31 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// ibFail logs an image-browse failure to the backup log (so it is visible in
+// C:\ProgramData\NimbusBackup logs for local and, later, control-plane
+// diagnostics) and returns the error unchanged. EVERY error path in this file
+// goes through it — the v0.2.140 lesson: an error only shown in a GUI alert
+// is invisible to remote support.
+func ibFail(err error) error {
+	if err != nil {
+		writeBackupLog("ImageBrowse ERROR: " + err.Error())
+	}
+	return err
+}
+
+// normalizeImageBackupType validates/defaults the snapshot's backup type for
+// the reader session. Volume backups are uploaded as "vm" (drive-sataN.img);
+// directory backups are "host". The frontend passes the snapshot's own
+// backup_type — this guard only protects against an empty/garbage value.
+func normalizeImageBackupType(bt string) string {
+	switch bt {
+	case "vm", "host", "ct":
+		return bt
+	default:
+		return "vm" // image archives are produced by machine (vm-type) backups
+	}
+}
+
 // imageWalkCap bounds a full-tree listing. 250k entries ≈ tens of MB of JSON;
 // beyond that the UI is unusable anyway and the walk is cut with an honest
 // "truncated" flag rather than an error.
@@ -66,7 +91,7 @@ var (
 // session stays open for the duration of fn (chunks are fetched lazily as fn
 // reads). partIndex is 1-based per imagebrowse.Partition.Index; 0 = first
 // browsable partition.
-func (a *App) withImageVolume(pbsID, backupID, snapshotID, diskArchive string, partIndex int,
+func (a *App) withImageVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	fn func(vol *imagebrowse.Volume, parts []imagebrowse.Partition, chosen imagebrowse.Partition) error) error {
 
 	cfg, err := a.resolveRestorePBS(pbsID)
@@ -75,15 +100,15 @@ func (a *App) withImageVolume(pbsID, backupID, snapshotID, diskArchive string, p
 	}
 	ts, err := time.Parse("2006-01-02T15:04:05Z", snapshotID)
 	if err != nil {
-		return fmt.Errorf("[NB-3410] invalid snapshot ID: %v", err)
+		return ibFail(fmt.Errorf("[NB-3410] invalid snapshot ID: %v", err))
 	}
 	if diskArchive == "" {
-		return errors.New("[NB-3411] disk archive name required")
+		return ibFail(errors.New("[NB-3411] disk archive name required"))
 	}
 	// Only fixed-index images are valid here; the frontend passes the
 	// filename from the snapshot's file list verbatim.
 	if !strings.HasSuffix(diskArchive, ".img.fidx") {
-		return fmt.Errorf("[NB-3412] not a disk image archive: %s", diskArchive)
+		return ibFail(fmt.Errorf("[NB-3412] not a disk image archive: %s", diskArchive))
 	}
 
 	client := &pbscommon.PBSClient{
@@ -100,7 +125,7 @@ func (a *App) withImageVolume(pbsID, backupID, snapshotID, diskArchive string, p
 			BackupTime: ts.Unix(),
 		},
 	}
-	client.Connect(true, "host")
+	client.Connect(true, normalizeImageBackupType(backupType))
 	defer client.Close()
 
 	// The download endpoint serves the index by its stored name (without the
@@ -111,12 +136,12 @@ func (a *App) withImageVolume(pbsID, backupID, snapshotID, diskArchive string, p
 		}
 	})
 	if err != nil {
-		return fmt.Errorf("[NB-3413] open disk image %s: %v", diskArchive, err)
+		return ibFail(fmt.Errorf("[NB-3413] open disk image %s (type %s): %v", diskArchive, normalizeImageBackupType(backupType), err))
 	}
 
 	parts, err := imagebrowse.ListPartitions(ra, size)
 	if err != nil {
-		return fmt.Errorf("[NB-3414] read partition table of %s: %v", diskArchive, err)
+		return ibFail(fmt.Errorf("[NB-3414] read partition table of %s: %v", diskArchive, err))
 	}
 
 	var chosen *imagebrowse.Partition
@@ -132,29 +157,29 @@ func (a *App) withImageVolume(pbsID, backupID, snapshotID, diskArchive string, p
 	}
 	if chosen == nil {
 		if partIndex > 0 {
-			return fmt.Errorf("[NB-3415] partition %d not found", partIndex)
+			return ibFail(fmt.Errorf("[NB-3415] partition %d not found", partIndex))
 		}
-		return errors.New("[NB-3416] no browsable (NTFS) partition found on this disk")
+		return ibFail(errors.New("[NB-3416] no browsable (NTFS) partition found on this disk"))
 	}
 	switch chosen.Filesystem {
 	case "ntfs":
 		// proceed
 	case "bitlocker":
-		return errors.New("[NB-3417] this partition is BitLocker-encrypted and cannot be browsed; restore the full image instead")
+		return ibFail(errors.New("[NB-3417] this partition is BitLocker-encrypted and cannot be browsed; restore the full image instead"))
 	default:
-		return fmt.Errorf("[NB-3418] filesystem %q is not browsable yet (NTFS only); restore the full image instead", chosen.Filesystem)
+		return ibFail(fmt.Errorf("[NB-3418] filesystem %q is not browsable yet (NTFS only); restore the full image instead", chosen.Filesystem))
 	}
 
 	vol, err := imagebrowse.OpenNTFS(ra, chosen.StartOffset, chosen.Length)
 	if err != nil {
-		return fmt.Errorf("[NB-3419] open NTFS filesystem: %v", err)
+		return ibFail(fmt.Errorf("[NB-3419] open NTFS filesystem: %v", err))
 	}
 	return fn(vol, parts, *chosen)
 }
 
 // ListImagePartitions returns the partitions of one disk image in a volume
 // snapshot, for the Browse tab's partition picker.
-func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, diskArchive string) ([]ImagePartition, error) {
+func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]ImagePartition, error) {
 	var out []ImagePartition
 	cfg, err := a.resolveRestorePBS(pbsID)
 	if err != nil {
@@ -162,7 +187,7 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, diskArchive strin
 	}
 	ts, terr := time.Parse("2006-01-02T15:04:05Z", snapshotID)
 	if terr != nil {
-		return nil, fmt.Errorf("[NB-3410] invalid snapshot ID: %v", terr)
+		return nil, ibFail(fmt.Errorf("[NB-3410] invalid snapshot ID: %v", terr))
 	}
 	client := &pbscommon.PBSClient{
 		BaseURL:          cfg.BaseURL,
@@ -175,16 +200,16 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, diskArchive strin
 		CompressionLevel: pbscommon.CompressionFastest,
 		Manifest:         pbscommon.BackupManifest{BackupID: backupID, BackupTime: ts.Unix()},
 	}
-	client.Connect(true, "host")
+	client.Connect(true, normalizeImageBackupType(backupType))
 	defer client.Close()
 
 	ra, size, err := client.NewFIDXReaderAt(diskArchive, 16, nil)
 	if err != nil {
-		return nil, fmt.Errorf("[NB-3413] open disk image %s: %v", diskArchive, err)
+		return nil, ibFail(fmt.Errorf("[NB-3413] open disk image %s (type %s): %v", diskArchive, normalizeImageBackupType(backupType), err))
 	}
 	parts, err := imagebrowse.ListPartitions(ra, size)
 	if err != nil {
-		return nil, fmt.Errorf("[NB-3414] read partition table of %s: %v", diskArchive, err)
+		return nil, ibFail(fmt.Errorf("[NB-3414] read partition table of %s: %v", diskArchive, err))
 	}
 	for _, p := range parts {
 		out = append(out, ImagePartition{
@@ -205,8 +230,8 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, diskArchive strin
 // as ListSnapshotContents (a known-good Wails binding shape) rather than a
 // custom wrapper. Truncation (very large volumes) is exposed separately via
 // LastImageListTruncated so the return signature stays identical.
-func (a *App) ListImageContents(pbsID, backupID, snapshotID, diskArchive string, partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
-	key := strings.Join([]string{pbsID, backupID, snapshotID, diskArchive, fmt.Sprint(partIndex)}, "|")
+func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
+	key := strings.Join([]string{pbsID, backupID, snapshotID, backupType, diskArchive, fmt.Sprint(partIndex)}, "|")
 	imageTreeMu.Lock()
 	if !forceRefresh {
 		if c, ok := imageTreeCache[key]; ok {
@@ -227,7 +252,7 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, diskArchive string,
 	emit(2, "Opening disk image…")
 
 	var result *ImageContents
-	err := a.withImageVolume(pbsID, backupID, snapshotID, diskArchive, partIndex,
+	err := a.withImageVolume(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
 		func(vol *imagebrowse.Volume, _ []imagebrowse.Partition, chosen imagebrowse.Partition) error {
 			emit(10, fmt.Sprintf("Reading file table of partition %d (%s)…", chosen.Index, chosen.Type))
 			entries, werr := vol.Walk("", imageWalkCap, nil)
@@ -274,20 +299,20 @@ func (a *App) LastImageListTruncated() bool {
 // DownloadImageSelection extracts the selection from a volume backup to
 // destPath — single file directly, folders/multi-select as a zip — with the
 // same authoritative space enforcement as directory downloads.
-func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive string, partIndex int,
+func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
 	writeDebugLog(fmt.Sprintf("DownloadImageSelection(pbs=%s backup=%s snap=%s disk=%s part=%d includes=%d dest=%s zip=%v needed=%d)",
 		pbsID, backupID, snapshotID, diskArchive, partIndex, len(includePaths), destPath, asZip, neededBytes))
 
 	if destPath == "" {
-		return errors.New(errDestPathRequired)
+		return ibFail(errors.New(errDestPathRequired))
 	}
 	if len(includePaths) == 0 {
-		return errors.New("nothing selected to download")
+		return ibFail(errors.New("nothing selected to download"))
 	}
 	if !asZip && len(includePaths) != 1 {
-		return errors.New("single-file download requires exactly one selected file")
+		return ibFail(errors.New("single-file download requires exactly one selected file"))
 	}
 	needed := uint64(0)
 	if neededBytes > 0 {
@@ -297,21 +322,21 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive st
 	// ---- space enforcement (authoritative, mirrors download.go) -----------
 	tmpParent := os.TempDir()
 	if sc, err := evaluateSpace(tmpParent, needed); err == nil && !sc.Fits {
-		return fmt.Errorf("[NB-3401] not enough space on the temporary drive (%s): need %s, only %s free",
-			tmpParent, formatBytesGo(needed), formatBytesGo(sc.FreeBytes))
+		return ibFail(fmt.Errorf("[NB-3401] not enough space on the temporary drive (%s): need %s, only %s free",
+			tmpParent, formatBytesGo(needed), formatBytesGo(sc.FreeBytes)))
 	}
 	sc, err := evaluateSpace(destPath, needed)
 	if err != nil {
-		return fmt.Errorf("[NB-3402] cannot check free space for %s: %v", destPath, err)
+		return ibFail(fmt.Errorf("[NB-3402] cannot check free space for %s: %v", destPath, err))
 	}
 	if !sc.Fits {
-		return fmt.Errorf("[NB-3403] not enough space on the destination drive: need %s, only %s free — download blocked",
-			formatBytesGo(needed), formatBytesGo(sc.FreeBytes))
+		return ibFail(fmt.Errorf("[NB-3403] not enough space on the destination drive: need %s, only %s free — download blocked",
+			formatBytesGo(needed), formatBytesGo(sc.FreeBytes)))
 	}
 
 	staging, err := os.MkdirTemp("", "nimbus-imgdl-*")
 	if err != nil {
-		return fmt.Errorf("temp dir: %v", err)
+		return ibFail(fmt.Errorf("temp dir: %v", err))
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
@@ -324,7 +349,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive st
 	}
 
 	// ---- stage: extract the selection out of the NTFS volume ---------------
-	err = a.withImageVolume(pbsID, backupID, snapshotID, diskArchive, partIndex,
+	err = a.withImageVolume(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
 		func(vol *imagebrowse.Volume, _ []imagebrowse.Partition, _ imagebrowse.Partition) error {
 			// Expand directory selections into their files using the cached
 			// tree when available (cheap), else stat/walk on demand.
@@ -333,7 +358,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive st
 				return xerr
 			}
 			if len(files) == 0 {
-				return errors.New("[NB-3420] selection contains no files")
+				return ibFail(errors.New("[NB-3420] selection contains no files"))
 			}
 			for i, f := range files {
 				emit(5+float64(i)/float64(len(files))*80,
@@ -349,7 +374,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive st
 				}
 				if _, eerr := vol.ExtractFile(f, w); eerr != nil {
 					_ = w.Close()
-					return fmt.Errorf("[NB-3421] extract %s: %v", f, eerr)
+					return ibFail(fmt.Errorf("[NB-3421] extract %s: %v", f, eerr))
 				}
 				if cerr := w.Close(); cerr != nil {
 					return cerr
@@ -367,7 +392,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive st
 	if asZip {
 		if err := zipDirectory(staging, destPath); err != nil {
 			emit(100, "Download failed")
-			return fmt.Errorf("[NB-3422] create zip: %v", err)
+			return ibFail(fmt.Errorf("[NB-3422] create zip: %v", err))
 		}
 	} else {
 		src, ferr := findSingleFile(staging)
@@ -377,7 +402,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, diskArchive st
 		}
 		if err := copyFileTo(src, destPath); err != nil {
 			emit(100, "Download failed")
-			return fmt.Errorf("[NB-3423] write file: %v", err)
+			return ibFail(fmt.Errorf("[NB-3423] write file: %v", err))
 		}
 	}
 	emit(100, "Download complete")
@@ -395,7 +420,7 @@ func expandImageSelection(vol *imagebrowse.Volume, selections []string) ([]strin
 		size, isDir, err := vol.StatSize(sel)
 		_ = size
 		if err != nil {
-			return nil, fmt.Errorf("[NB-3424] cannot stat %s: %v", sel, err)
+			return nil, ibFail(fmt.Errorf("[NB-3424] cannot stat %s: %v", sel, err))
 		}
 		if !isDir {
 			files = append(files, sel)
@@ -403,10 +428,10 @@ func expandImageSelection(vol *imagebrowse.Volume, selections []string) ([]strin
 		}
 		entries, werr := vol.Walk(sel, imageWalkCap, nil)
 		if werr != nil && !errors.Is(werr, imagebrowse.ErrTooManyEntries) {
-			return nil, fmt.Errorf("[NB-3425] cannot walk %s: %v", sel, werr)
+			return nil, ibFail(fmt.Errorf("[NB-3425] cannot walk %s: %v", sel, werr))
 		}
 		if errors.Is(werr, imagebrowse.ErrTooManyEntries) {
-			return nil, fmt.Errorf("[NB-3426] folder %s has too many files for a single download; select subfolders instead", sel)
+			return nil, ibFail(fmt.Errorf("[NB-3426] folder %s has too many files for a single download; select subfolders instead", sel))
 		}
 		for _, e := range entries {
 			if !e.IsDir {
