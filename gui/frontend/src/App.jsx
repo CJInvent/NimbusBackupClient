@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from './i18n/i18nContext'
 
 import HeaderControls from './components/HeaderControls'
+import PathPicker from './components/PathPicker'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, OpenRestoreDestDialog, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, OpenSaveFileDialog, ListImageContents, DownloadImageSelection, LastImageListTruncated
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -20,8 +21,13 @@ if (window.go) {
   DownloadSelection = window.go.main.App.DownloadSelection
   ListImageContents = window.go.main.App.ListImageContents
   LastImageListTruncated = window.go.main.App.LastImageListTruncated
+  ListImagePartitions = window.go.main.App.ListImagePartitions
+  RestoreImageSelection = window.go.main.App.RestoreImageSelection
+  ListDrives = window.go.main.App.ListDrives
+  ListFolders = window.go.main.App.ListFolders
+  CreateFolder = window.go.main.App.CreateFolder
+  DefaultSaveDir = window.go.main.App.DefaultSaveDir
   DownloadImageSelection = window.go.main.App.DownloadImageSelection
-  OpenSaveFileDialog = window.go.main.App.OpenSaveFileDialog
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
@@ -29,7 +35,6 @@ if (window.go) {
   ListSnapshotContents = window.go.main.App.ListSnapshotContents
   GetSnapshotMeta = window.go.main.App.GetSnapshotMeta
   RestoreSnapshot = window.go.main.App.RestoreSnapshot
-  OpenRestoreDestDialog = window.go.main.App.OpenRestoreDestDialog
   SearchFiles = window.go.main.App.SearchFiles
   CancelSearch = window.go.main.App.CancelSearch
   ListPhysicalDisks = window.go.main.App.ListPhysicalDisks
@@ -157,6 +162,11 @@ function App() {
   const [imageDisk, setImageDisk] = useState(null)                // volume mode: the .img.fidx being browsed
   const [imageTruncated, setImageTruncated] = useState(false)     // volume tree hit the entry cap
   const [browsingImage, setBrowsingImage] = useState(false)       // image walk in flight (button spinner)
+  const [imagePartitions, setImagePartitions] = useState(null)    // partition picker rows (null = not loaded)
+  const [imagePartIndex, setImagePartIndex] = useState(0)         // which partition is open (0 = none)
+  const [loadingParts, setLoadingParts] = useState(false)
+  // In-app path picker (replaces the native dialogs, which crashed the process)
+  const [picker, setPicker] = useState(null)  // {mode, initialPath, defaultFileName, needBytes, resolve}
   // Control server (NimbusControl) status + settings form
   const [cpStatus, setCpStatus] = useState(null)
   const [cpForm, setCpForm] = useState({ url: '', token: '', fp: '' })
@@ -1074,19 +1084,23 @@ function App() {
     await handleSelectSnapshot(selectedSnapshot, true)
   }
 
+  // The in-app picker, as a promise — call sites read like the old dialog API
+  // but nothing native is involved, so nothing can fault.
+  const pickerApi = { ListDrives, ListFolders, CreateFolder, DefaultSaveDir }
+  const openPicker = (opts) => new Promise((resolve) => {
+    setPicker({ ...opts, resolve })
+  })
+  const closePicker = (value) => {
+    setPicker(p => { if (p && p.resolve) p.resolve(value); return null })
+  }
+
   const handleBrowseRestoreDest = async () => {
-    if (!OpenRestoreDestDialog) {
-      showStatus('❌ Wails runtime non disponible', 'error')
-      return
-    }
-    try {
-      const dir = await OpenRestoreDestDialog()
-      if (dir) setRestoreDestPath(dir)
-    } catch (err) {
-      // In service mode the native picker is unavailable by design — guide the
-      // user to the manual path field instead of flagging it as a failure.
-      showStatus(`ℹ️ ${err}`, 'info')
-    }
+    const dir = await openPicker({
+      mode: 'folder',
+      initialPath: restoreDestPath || '',
+      needBytes: selectionBytes || 0,
+    })
+    if (dir) setRestoreDestPath(dir)
   }
 
   // ===== file search handlers =====
@@ -1216,14 +1230,42 @@ function App() {
       }
     }
 
-    // Empty selection = restore everything in the snapshot
+    // Empty selection = restore everything in the snapshot. For an image
+    // backup that would mean a full-image restore, which is NOT what this
+    // button does — require an explicit selection instead of silently doing
+    // the wrong (and very large) thing.
     const includes = Array.from(selectedPaths)
+    if (imageDisk && includes.length === 0) {
+      showStatus('❌ ' + t('imageRestoreNeedsSelection'), 'error')
+      return
+    }
 
     setRestoreLoading(true)
     setRestoreProgress(0)
     showStatus(`🔄 ${t('statusRestoring').replace('{time}', selectedSnapshot.time)}`, 'info')
 
     try {
+      if (imageDisk) {
+        // Volume backup: restore the selected files OUT of the disk image.
+        // The pxar path cannot serve this — a vm snapshot has no
+        // backup.pxar.didx, which is why the old code 400'd at PBS.
+        await RestoreImageSelection(
+          restorePBSID || '',
+          selectedSnapshot.backup_id || restoreBackupId,
+          selectedSnapshot.id,
+          selectedSnapshot.backup_type || 'vm',
+          imageDisk,
+          imagePartIndex,
+          includes,
+          restoreDestPath,
+          restoreKeepTree,
+          restoreOptions.overwrite,
+          selectionBytes || 0
+        )
+        setRestoreLoading(false)
+        showStatus('✅ ' + t('restoreDone'), 'success')
+        return
+      }
       await RestoreSnapshot(
         restorePBSID || '',
         selectedSnapshot.backup_id || restoreBackupId,
@@ -1363,7 +1405,39 @@ function App() {
   // Volume mode: load the NTFS file tree of one disk image. Partition 0 =
   // first NTFS partition (the Go side errors clearly for BitLocker or
   // non-NTFS). The result feeds the SAME tree UI as directory backups.
-  const handleBrowseImageDisk = async (disk, forceRefresh = false) => {
+  // Step 1: list the disk's partitions. We do NOT auto-open one — picking for
+  // the user dropped them inside the WinRE recovery volume, which looked like
+  // a bug because it was one.
+  const handleListPartitions = async (disk) => {
+    if (!ListImagePartitions || !selectedSnapshot) return
+    setLoadingParts(true)
+    setImagePartitions(null)
+    setImagePartIndex(0)
+    setSnapshotEntries([])
+    setSelectedPaths(new Set())
+    setImageDisk(null)
+    showStatus(`💿 ${t('volumeReadingParts')}`, 'info')
+    try {
+      const parts = await ListImagePartitions(
+        restorePBSID || '',
+        selectedSnapshot.backup_id || restoreBackupId,
+        selectedSnapshot.id,
+        selectedSnapshot.backup_type || 'vm',
+        disk
+      )
+      setImagePartitions({ disk, rows: parts || [] })
+      showStatus(`✅ ${(parts || []).length} ${t('volumePartsFound')}`, 'success')
+    } catch (err) {
+      const msg = '❌ ' + (err && err.message ? err.message : String(err))
+      showStatus(msg, 'error')
+      try { window.alert(msg) } catch (e) { /* no-op */ }
+    } finally {
+      setLoadingParts(false)
+    }
+  }
+
+  // Step 2: open the partition the user chose.
+  const handleBrowseImageDisk = async (disk, partIndex, forceRefresh = false) => {
     if (!selectedSnapshot) {
       showStatus('❌ No snapshot selected', 'error')
       return
@@ -1391,12 +1465,13 @@ function App() {
         selectedSnapshot.id,
         selectedSnapshot.backup_type || 'vm',
         disk,
-        0,
+        partIndex,
         forceRefresh
       )
       const entries = Array.isArray(res) ? res : ((res && res.entries) || [])
       setSnapshotEntries(entries)
       setImageDisk(disk)
+      setImagePartIndex(partIndex)
       let truncated = false
       if (LastImageListTruncated) { try { truncated = await LastImageListTruncated() } catch (e) { /* ignore */ } }
       setImageTruncated(truncated)
@@ -1424,13 +1499,12 @@ function App() {
     const defaultName = single
       ? (single.path.split('/').pop() || 'download')
       : `${selectedSnapshot.backup_id}-${(selectedSnapshot.time || '').replace(/[: ]/g, '-')}.zip`
-    let dest
-    try {
-      dest = await OpenSaveFileDialog(defaultName)
-    } catch (e) {
-      showStatus('❌ ' + (e && e.message ? e.message : String(e)), 'error')
-      return
-    }
+    const dest = await openPicker({
+      mode: 'save',
+      initialPath: restoreDestPath || '',
+      defaultFileName: defaultName,
+      needBytes: selectionBytes || 0,
+    })
     if (!dest) return // user cancelled
 
     // Pre-flight space math (advisory UX; Go re-checks and enforces).
@@ -1459,7 +1533,7 @@ function App() {
           selectedSnapshot.id,
           selectedSnapshot.backup_type || 'vm',
           imageDisk,
-          0,
+          imagePartIndex,
           paths,
           dest,
           !single,
@@ -1510,6 +1584,26 @@ function App() {
     else togglePathSelection(entry.path)
   }
 
+  // Folder size = sum of every file beneath it. Computed once per entry list
+  // (a Map keyed by dir path) so the tree can show a size column for folders
+  // as well as files, for both backup types.
+  const dirSizes = useMemo(() => {
+    const m = new Map()
+    for (const e of snapshotEntries) {
+      if (e.is_dir) continue
+      let d = e.path.substring(0, e.path.lastIndexOf('/'))
+      while (true) {
+        const key = d === '' ? '/' : d
+        m.set(key, (m.get(key) || 0) + (e.size || 0))
+        if (d === '') break
+        d = d.substring(0, d.lastIndexOf('/'))
+      }
+    }
+    return m
+  }, [snapshotEntries])
+
+  const entrySize = (entry) => entry.is_dir ? (dirSizes.get(entry.path) || 0) : (entry.size || 0)
+
   const renderTreeNode = (entry, childrenByDir, depth) => {
     const isExpanded = expandedDirs.has(entry.path)
     const isSelected = selectedPaths.has(entry.path)
@@ -1529,24 +1623,31 @@ function App() {
             onChange={() => { togglePathSelection(entry.path); setLastClickedPath(entry.path) }}
             style={{ marginRight: '8px' }}
           />
+          {/* Explicit expand/collapse control. The folder glyph alone was the
+              only affordance before, and it was not obvious a row could open. */}
           {entry.is_dir ? (
-            <span onClick={() => toggleDir(entry.path)} style={{ cursor: 'pointer', userSelect: 'none', marginRight: '4px' }}>
-              {isExpanded ? '📂' : '📁'}
-            </span>
+            <button
+              type="button"
+              className="nc-caret"
+              aria-label={isExpanded ? t('collapse') : t('expand')}
+              aria-expanded={isExpanded}
+              onClick={(e) => { e.stopPropagation(); toggleDir(entry.path) }}
+            >
+              {isExpanded ? '▾' : '▸'}
+            </button>
           ) : (
-            <span style={{ marginRight: '4px' }}>📄</span>
+            <span className="nc-caret-spacer" />
           )}
+          <span style={{ marginRight: '6px' }}>
+            {entry.is_dir ? (isExpanded ? '📂' : '📁') : '📄'}
+          </span>
           <span
             onClick={() => entry.is_dir && toggleDir(entry.path)}
             style={{ flex: 1, cursor: entry.is_dir ? 'pointer' : 'default', fontSize: '14px' }}
           >
             {entry.path.split('/').pop() || entry.path}
           </span>
-          {!entry.is_dir && (
-            <span style={{ color: 'var(--nc-text-dim)', fontSize: '12px', marginLeft: '8px' }}>
-              {formatBytes(entry.size)}
-            </span>
-          )}
+          <span className="nc-size-col">{formatBytes(entrySize(entry))}</span>
         </div>
         {entry.is_dir && isExpanded && (childrenByDir.get(entry.path) || []).map(child =>
           renderTreeNode(child, childrenByDir, depth + 1)
@@ -1566,6 +1667,18 @@ function App() {
           <HeaderControls />
         </div>
       </div>
+
+      {picker && (
+        <PathPicker
+          mode={picker.mode}
+          initialPath={picker.initialPath}
+          defaultFileName={picker.defaultFileName}
+          needBytes={picker.needBytes}
+          api={pickerApi}
+          onCancel={() => closePicker('')}
+          onConfirm={(path) => closePicker(path)}
+        />
+      )}
 
       <div className="container">
       {securityWarnings.length > 0 && (
@@ -2753,19 +2866,65 @@ function App() {
                   <div style={{padding: '12px'}}>
                     <p style={{margin: 0, fontWeight: 600, color: 'var(--nc-accent)'}}>💿 {t('volumeSnapTitle')}</p>
                     <p style={{margin: '6px 0 10px', fontSize: '13px', color: 'var(--nc-text-dim)'}}>{t('volumeSnapExplainV2')}</p>
-                    {snapshotDisks(selectedSnapshot).length > 0 && (
-                      <div>
-                        <p style={{margin: '0 0 4px', fontSize: '12px', fontWeight: 600}}>{t('volumeDisksInBackup')}</p>
-                        {snapshotDisks(selectedSnapshot).map((d, i) => (
-                          <div key={i} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '3px 0'}}>
-                            <span className="mono" style={{fontSize: '12px'}}>💿 {String(d).replace('.img.fidx','')}</span>
-                            <button className="btn" style={{padding: '2px 10px', fontSize: '12px'}} disabled={browsingImage} onClick={() => handleBrowseImageDisk(d)}>
-                              {browsingImage ? '⏳ ' : '📂 '}{t('volumeBrowseFiles')}
-                            </button>
-                          </div>
-                        ))}
+
+                    {/* Step 1 — pick a disk */}
+                    {snapshotDisks(selectedSnapshot).map((d, i) => (
+                      <div key={i} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '3px 0'}}>
+                        <span className="mono" style={{fontSize: '12px'}}>💿 {String(d).replace('.img.fidx','')}</span>
+                        <button className="btn" style={{padding: '2px 10px', fontSize: '12px'}} disabled={loadingParts} onClick={() => handleListPartitions(d)}>
+                          {loadingParts ? '⏳ ' : '🔍 '}{t('volumeShowParts')}
+                        </button>
+                      </div>
+                    ))}
+
+                    {/* Step 2 — pick a partition. Every partition is listed,
+                        browsable or not, with its filesystem and sizes, so the
+                        user chooses instead of us guessing (we used to open the
+                        first NTFS volume, which was the WinRE partition). */}
+                    {imagePartitions && (
+                      <div style={{marginTop: '12px'}}>
+                        <p style={{margin: '0 0 6px', fontSize: '12px', fontWeight: 600}}>
+                          {t('volumePartsOn')} <span className="mono">{String(imagePartitions.disk).replace('.img.fidx','')}</span>
+                        </p>
+                        <table className="nc-part-table">
+                          <thead>
+                            <tr>
+                              <th>#</th>
+                              <th>{t('partName')}</th>
+                              <th>{t('partType')}</th>
+                              <th>{t('partFs')}</th>
+                              <th style={{textAlign: 'right'}}>{t('partUsed')}</th>
+                              <th style={{textAlign: 'right'}}>{t('partAllocated')}</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {imagePartitions.rows.map(p => (
+                              <tr key={p.index} className={p.index === imagePartIndex ? 'selected' : ''}>
+                                <td>{p.index}</td>
+                                <td>{p.volume_label || p.name || '—'}</td>
+                                <td>{p.type}</td>
+                                <td className="mono">{p.filesystem}</td>
+                                <td style={{textAlign: 'right'}}>{p.used_known ? formatBytes(p.used_bytes) : '—'}</td>
+                                <td style={{textAlign: 'right'}}>{formatBytes(p.allocated_bytes)}</td>
+                                <td style={{textAlign: 'right'}}>
+                                  {p.browsable ? (
+                                    <button className="btn btn-primary" style={{padding: '2px 10px', fontSize: '12px'}}
+                                      disabled={browsingImage}
+                                      onClick={() => handleBrowseImageDisk(imagePartitions.disk, p.index)}>
+                                      {browsingImage ? '⏳ ' : '📂 '}{t('volumeBrowseFiles')}
+                                    </button>
+                                  ) : (
+                                    <span className="hint-text" title={p.reason}>{p.reason}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
+
                     <p style={{margin: '10px 0 0', fontSize: '12px', color: 'var(--nc-text-dim)'}}>{t('volumeSnapRestoreHint')}</p>
                   </div>
                 ) : snapshotEntries.length === 0 ? (
@@ -2774,8 +2933,12 @@ function App() {
                   <>
                     {imageDisk && (
                       <div style={{padding: '6px 10px', borderBottom: '1px solid var(--nc-border-soft)', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
-                        <span style={{color: 'var(--nc-accent)', fontWeight: 600}}>💿 {String(imageDisk).replace('.img.fidx','')}</span>
+                        <span style={{color: 'var(--nc-accent)', fontWeight: 600}}>💿 {String(imageDisk).replace('.img.fidx','')} · {t('partition')} {imagePartIndex}</span>
                         <span className="hint-text">{t('volumeBrowsingBadge')}</span>
+                        <button className="btn" style={{padding: '1px 8px', fontSize: '11px'}}
+                          onClick={() => { setSnapshotEntries([]); setSelectedPaths(new Set()); setImageDisk(null) }}>
+                          ↩ {t('volumeBackToParts')}
+                        </button>
                         {imageTruncated && <span style={{color: 'var(--nc-warn)'}}>⚠ {t('volumeTreeTruncated')}</span>}
                       </div>
                     )}

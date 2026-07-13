@@ -44,7 +44,7 @@ compiled packages back both; which `main`/entrypoint you get is selected by the
 | `snapshot/` | VSS snapshot creation (Windows) via `st-matskevich/go-vss`. `nop_snapshot.go` for non-Windows. |
 | `machinebackup/`, `directorybackup/` | Older standalone CLI backup paths. The GUI's own inline implementations (`gui/backup_inline.go`, `gui/machine_backup_windows.go`) are what the app actually runs. |
 | `nbd/` | Network Block Device tooling for mounting/restoring machine images. |
-| `imagebrowse/` | Userspace file browsing INSIDE volume backups: GPT/MBR partition parser + NTFS reader (go-ntfs) over an `io.ReaderAt`. No mount/driver/admin — only the app reads the image. Fed by `pbscommon.FIDXReaderAt` (lazy, chunk-LRU) so a listing downloads only the blocks it touches. See §7b. |
+| `imagebrowse/` | Userspace file browsing INSIDE volume backups: GPT/MBR partition parser + **NTFS (go-ntfs), FAT12/16/32, exFAT** readers behind one `Filesystem` interface, over an `io.ReaderAt`. No mount/driver/admin — only the app reads the image. Fed by `pbscommon.FIDXReaderAt` (lazy, chunk-LRU) so a listing downloads only the blocks it touches. Real mkfs-made images in `testdata/`. ReFS + BitLocker are detected and refused with a clear reason. See §7b. |
 | `clientcommon/`, `pkg/` | Shared helpers. |
 
 > The GUI deliberately reimplements backup inline (`gui/*_inline.go`,
@@ -275,9 +275,35 @@ disk). Browsing them means parsing the image ourselves:
 - **Not a mount**: no WinFsp/Dokan, no kernel NBD (that's the separate Linux-only
   `nbd/` restore path), no driver, no admin. Pure in-process byte parsing —
   "only the software needs access."
-- **Scope v1**: GPT/MBR + NTFS, read-only, list + file/folder extraction.
-  BitLocker detected and refused with a clear message; FAT/exFAT/ext4 identified
-  but not yet walked.
+- **Filesystems**: NTFS, FAT12/16/32, exFAT — read-only, all behind
+  `imagebrowse.Filesystem` (List/Stat/ExtractFile/UsedBytes), so the GUI has one
+  code path. **ReFS is deliberately NOT supported**: no mature pure-Go parser
+  exists, the format is undocumented and version-dependent, and guessing at
+  structures in a restore tool risks returning corrupt files. ReFS and BitLocker
+  are detected and refused with an actionable message.
+- **The user picks the partition — always.** Auto-selecting the first NTFS
+  volume put people inside WinRE. `ListImagePartitions` returns EVERY partition
+  (browsable or not) with filesystem, used and allocated size; `partIndex < 1`
+  is an error, never a default.
+- **Used vs allocated**: allocated comes from the partition table; used comes
+  from the filesystem ($Bitmap / FAT / exFAT allocation bitmap), bounded, and
+  reported as unknown rather than guessed.
+
+---
+
+## 7c. Why there are no native file dialogs
+
+`OpenSaveFileDialog` and `OpenRestoreDestDialog` are **retired stubs**. The Wails
+native dialogs take an uncatchable **native COM fault** in this app: the process
+dies outright — tray icon and all — with no Go panic, nothing in the logs, and
+nothing `recover()` can intercept. (An earlier session found the same fault in
+the service process and guarded only that case; the GUI hits it too.)
+
+The picker is therefore rendered in the webview (`components/PathPicker.jsx`)
+over three plain Go methods in `pathpicker.go` — `ListDrives`, `ListFolders`,
+`CreateFolder` — plus `DefaultSaveDir`. Pure Go + DOM: no COM, no shell APIs, no
+driver, and no way to fault the process. **Do not reintroduce
+`wailsruntime.SaveFileDialog` / `OpenDirectoryDialog`.**
 
 ---
 

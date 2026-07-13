@@ -1,19 +1,12 @@
 package imagebrowse
 
-// partitions.go — GPT and MBR partition-table parsing over an io.ReaderAt.
+// partitions.go — GPT and MBR partition-table parsing over an io.ReaderAt,
+// plus filesystem identification from each partition's boot sector.
 //
-// Hand-rolled (~stdlib only) rather than pulling a disk library: we need
-// exactly one operation — enumerate partitions with byte offsets/lengths —
-// and both on-disk formats are small, stable, and fully specified. Fewer
-// dependencies means less to verify in CI and a smaller supply-chain surface
-// for a backup agent.
-//
-// Strategy: read LBA 0 (protective/legacy MBR) and LBA 1 (GPT header). If a
-// valid GPT header is present, parse the GPT entry array (authoritative —
-// the MBR is then just the protective stub). Otherwise fall back to the four
-// primary MBR entries. Extended/logical MBR partitions are out of scope for
-// v1 (vanishingly rare on Windows machine images, which is what our volume
-// backups contain).
+// Hand-rolled (stdlib only): we need exactly one thing — enumerate partitions
+// with byte offsets, lengths, and filesystem type — and both on-disk formats
+// are small, stable, and fully specified. Fewer dependencies is less to audit
+// in a backup agent.
 
 import (
 	"bytes"
@@ -23,16 +16,40 @@ import (
 	"unicode/utf16"
 )
 
-const sectorSize = 512 // fixed for our images: PBS machine backups are raw 512n images
+const sectorSize = 512 // PBS machine backups are raw 512n images
+
+// Filesystem identifiers. These strings are displayed by the GUI and switched
+// on by OpenFilesystem, so they are stable API, not internal detail.
+const (
+	FSNTFS      = "ntfs"
+	FSFAT12     = "fat12"
+	FSFAT16     = "fat16"
+	FSFAT32     = "fat32"
+	FSExFAT     = "exfat"
+	FSReFS      = "refs"
+	FSBitLocker = "bitlocker"
+	FSNone      = "none"    // no filesystem (e.g. Microsoft Reserved)
+	FSUnknown   = "unknown" // has a boot sector we don't recognize
+)
+
+// Browsable reports whether we can walk a filesystem's file tree.
+func Browsable(fs string) bool {
+	switch fs {
+	case FSNTFS, FSFAT12, FSFAT16, FSFAT32, FSExFAT:
+		return true
+	}
+	return false
+}
 
 // Partition describes one partition of a disk image in absolute byte terms.
 type Partition struct {
 	Index       int    `json:"index"`        // 1-based, as users expect
-	Name        string `json:"name"`         // GPT partition name (UTF-16 label), if any
-	Type        string `json:"type"`         // human hint: "NTFS/exFAT data", "EFI system", GUID/ID string otherwise
+	Name        string `json:"name"`         // GPT partition name, if any
+	Type        string `json:"type"`         // "Windows data", "EFI system", GUID/ID otherwise
 	StartOffset int64  `json:"start_offset"` // bytes from start of disk
-	Length      int64  `json:"length"`       // bytes
-	Filesystem  string `json:"filesystem"`   // sniffed: "ntfs", "fat", "bitlocker", "unknown"
+	Length      int64  `json:"length"`       // bytes — the ALLOCATED size of the partition
+	Filesystem  string `json:"filesystem"`   // one of the FS* constants
+	VolumeLabel string `json:"volume_label"` // from the filesystem boot sector, when present
 }
 
 // ListPartitions parses the partition table of the disk image behind r.
@@ -42,20 +59,21 @@ func ListPartitions(r io.ReaderAt, diskSize int64) ([]Partition, error) {
 		return nil, fmt.Errorf("read MBR sector: %w", err)
 	}
 	if lba0[510] != 0x55 || lba0[511] != 0xAA {
-		return nil, fmt.Errorf("no partition table: missing MBR boot signature")
+		return nil, fmt.Errorf("no partition table found (missing boot signature) — the image may be a bare volume rather than a whole disk")
 	}
 
-	// GPT? Header lives at LBA 1 with signature "EFI PART".
+	// GPT? Header at LBA 1 with signature "EFI PART". A valid GPT is
+	// authoritative; the MBR is then only a protective stub.
 	lba1 := make([]byte, sectorSize)
 	if _, err := r.ReadAt(lba1, sectorSize); err == nil || err == io.EOF {
 		if bytes.Equal(lba1[0:8], []byte("EFI PART")) {
 			parts, gerr := parseGPT(r, lba1)
-			if gerr == nil {
-				return sniffFilesystems(r, parts), nil
+			if gerr != nil {
+				// A corrupt GPT behind a valid protective MBR is not a healthy
+				// fallback case — report it rather than misparse the stub.
+				return nil, fmt.Errorf("GPT present but unreadable: %w", gerr)
 			}
-			// A corrupt GPT with a valid protective MBR is not a healthy
-			// fallback case — surface the GPT error rather than misparse.
-			return nil, fmt.Errorf("GPT present but unreadable: %w", gerr)
+			return identifyFilesystems(r, parts), nil
 		}
 	}
 
@@ -63,13 +81,13 @@ func ListPartitions(r io.ReaderAt, diskSize int64) ([]Partition, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sniffFilesystems(r, parts), nil
+	return identifyFilesystems(r, parts), nil
 }
 
 // ---- GPT --------------------------------------------------------------------
 
 func parseGPT(r io.ReaderAt, hdr []byte) ([]Partition, error) {
-	// Header layout (little-endian) — offsets per UEFI spec 5.3.2:
+	// UEFI spec 5.3.2 header fields (little-endian):
 	//   0x48 (8) PartitionEntryLBA
 	//   0x50 (4) NumberOfPartitionEntries
 	//   0x54 (4) SizeOfPartitionEntry
@@ -89,8 +107,7 @@ func parseGPT(r io.ReaderAt, hdr []byte) ([]Partition, error) {
 	zeroGUID := make([]byte, 16)
 	for i := uint32(0); i < numEntries; i++ {
 		e := table[i*entrySize : (i+1)*entrySize]
-		typeGUID := e[0:16]
-		if bytes.Equal(typeGUID, zeroGUID) {
+		if bytes.Equal(e[0:16], zeroGUID) {
 			continue // unused slot
 		}
 		firstLBA := binary.LittleEndian.Uint64(e[32:40])
@@ -98,12 +115,14 @@ func parseGPT(r io.ReaderAt, hdr []byte) ([]Partition, error) {
 		if lastLBA < firstLBA {
 			continue
 		}
-		// Partition name: UTF-16LE, up to 36 code units at offset 56.
-		name := decodeUTF16(e[56:min(len(e), 56+72)])
+		nameEnd := 128
+		if len(e) < nameEnd {
+			nameEnd = len(e)
+		}
 		out = append(out, Partition{
 			Index:       len(out) + 1,
-			Name:        name,
-			Type:        gptTypeName(typeGUID),
+			Name:        decodeUTF16(e[56:nameEnd]),
+			Type:        gptTypeName(e[0:16]),
 			StartOffset: int64(firstLBA) * sectorSize,
 			Length:      int64(lastLBA-firstLBA+1) * sectorSize,
 		})
@@ -114,8 +133,8 @@ func parseGPT(r io.ReaderAt, hdr []byte) ([]Partition, error) {
 	return out, nil
 }
 
-// gptTypeName maps the handful of GUIDs we care about to a readable label.
-// GUID mixed-endian encoding: first three fields little-endian on disk.
+// gptTypeName maps the GUIDs we care about to readable labels. GUIDs are
+// mixed-endian on disk: the first three fields are little-endian.
 func gptTypeName(g []byte) string {
 	guid := fmt.Sprintf("%08X-%04X-%04X-%04X-%012X",
 		binary.LittleEndian.Uint32(g[0:4]),
@@ -132,8 +151,12 @@ func gptTypeName(g []byte) string {
 		return "Microsoft reserved"
 	case "DE94BBA4-06D1-4D40-A16A-BFD50179D6AC":
 		return "Windows recovery"
+	case "AF9B60A0-1431-4F62-BC68-3311714A69AD":
+		return "Windows LDM data"
 	case "0FC63DAF-8483-4772-8E79-3D69D8477DE4":
 		return "Linux data"
+	case "21686148-6449-6E6F-744E-656564454649":
+		return "BIOS boot"
 	default:
 		return guid
 	}
@@ -167,7 +190,6 @@ func parseMBR(lba0 []byte, diskSize int64) ([]Partition, error) {
 			continue
 		}
 		start := int64(startLBA) * sectorSize
-		length := int64(numSectors) * sectorSize
 		if diskSize > 0 && start >= diskSize {
 			continue // garbage entry pointing past the image
 		}
@@ -175,7 +197,7 @@ func parseMBR(lba0 []byte, diskSize int64) ([]Partition, error) {
 			Index:       len(out) + 1,
 			Type:        mbrTypeName(ptype),
 			StartOffset: start,
-			Length:      length,
+			Length:      int64(numSectors) * sectorSize,
 		})
 	}
 	if len(out) == 0 {
@@ -190,10 +212,14 @@ func mbrTypeName(t byte) string {
 		return "NTFS/exFAT data"
 	case 0x0B, 0x0C:
 		return "FAT32"
-	case 0x0E, 0x06:
+	case 0x04, 0x06, 0x0E:
 		return "FAT16"
+	case 0x01:
+		return "FAT12"
 	case 0xEE:
 		return "GPT protective"
+	case 0xEF:
+		return "EFI system"
 	case 0x83:
 		return "Linux data"
 	case 0x27:
@@ -203,32 +229,54 @@ func mbrTypeName(t byte) string {
 	}
 }
 
-// ---- filesystem sniffing ------------------------------------------------------
+// ---- filesystem identification -------------------------------------------------
 
-// sniffFilesystems reads each partition's boot sector and tags the filesystem.
-// BitLocker volumes advertise the "-FVE-FS-" OEM ID in place of "NTFS    " —
-// detecting that lets the UI say "encrypted, cannot browse" instead of a
-// confusing parse failure.
-func sniffFilesystems(r io.ReaderAt, parts []Partition) []Partition {
+// identifyFilesystems reads each partition's boot sector and tags the
+// filesystem + volume label.
+func identifyFilesystems(r io.ReaderAt, parts []Partition) []Partition {
 	buf := make([]byte, sectorSize)
 	for i := range parts {
-		parts[i].Filesystem = "unknown"
 		if _, err := r.ReadAt(buf, parts[i].StartOffset); err != nil && err != io.EOF {
+			parts[i].Filesystem = FSUnknown
 			continue
 		}
-		oem := string(buf[3:11])
-		switch {
-		case oem == "NTFS    ":
-			parts[i].Filesystem = "ntfs"
-		case oem == "-FVE-FS-":
-			parts[i].Filesystem = "bitlocker"
-		case oem == "EXFAT   ":
-			parts[i].Filesystem = "exfat"
-		case bytes.Equal(buf[82:87], []byte("FAT32")):
-			parts[i].Filesystem = "fat"
-		case bytes.Equal(buf[54:59], []byte("FAT16")) || bytes.Equal(buf[54:59], []byte("FAT12")):
-			parts[i].Filesystem = "fat"
-		}
+		fs, label := identifyBootSector(buf)
+		parts[i].Filesystem = fs
+		parts[i].VolumeLabel = label
 	}
 	return parts
+}
+
+// identifyBootSector classifies a volume from its first 512 bytes.
+// Order matters: BitLocker and ReFS occupy the same field NTFS's OEM id uses,
+// and exFAT must not be mistaken for FAT (their BPBs overlap, but exFAT
+// deliberately zeroes the legacy fields — which is exactly how we tell them
+// apart).
+func identifyBootSector(b []byte) (string, string) {
+	if len(b) < 512 {
+		return FSUnknown, ""
+	}
+	switch string(b[3:11]) {
+	case "NTFS    ":
+		return FSNTFS, ""
+	case "EXFAT   ":
+		return FSExFAT, exfatLabelFromBoot(b)
+	case "-FVE-FS-":
+		// BitLocker replaces NTFS's OEM id with this. Encrypted: nothing to
+		// parse without the key.
+		return FSBitLocker, ""
+	}
+
+	// ReFS: "ReFS\0\0\0\0" at offset 3 AND the "FSRS" structure signature at
+	// 0x10 — the pair is what distinguishes it from a stray string.
+	if bytes.Equal(b[3:11], []byte{'R', 'e', 'F', 'S', 0, 0, 0, 0}) &&
+		bytes.Equal(b[0x10:0x14], []byte("FSRS")) {
+		return FSReFS, ""
+	}
+
+	// FAT is identified from the BPB, never the OEM string (which is arbitrary).
+	if g, err := parseFATGeometry(b); err == nil {
+		return g.fsName(), g.labelFromBoot(b)
+	}
+	return FSUnknown, ""
 }

@@ -569,3 +569,186 @@ html[data-fontsize="large"]  { zoom: 1.35; }
     border: 2px solid var(--nc-bg);
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--nc-text-dim); }
+
+/* ============================================================================
+   Modal + in-app path picker
+   Replaces the Wails native dialogs, which took an uncatchable native COM
+   fault and killed the whole process. Everything here is plain DOM: it cannot
+   fault, and it looks the same in every theme.
+   ============================================================================ */
+.nc-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    animation: nc-fade-in 120ms ease-out;
+}
+@keyframes nc-fade-in { from { opacity: 0 } to { opacity: 1 } }
+
+.nc-modal {
+    width: min(820px, 94vw);
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--nc-panel);
+    color: var(--nc-text);
+    border: 1px solid var(--nc-border);
+    border-radius: var(--nc-radius);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    animation: nc-modal-in 140ms ease-out;
+}
+@keyframes nc-modal-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.98) }
+    to   { opacity: 1; transform: none }
+}
+
+.nc-modal-head {
+    padding: 10px 14px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--nc-border);
+    background: var(--nc-panel-head);
+    border-radius: var(--nc-radius) var(--nc-radius) 0 0;
+}
+.nc-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--nc-border);
+    background: var(--nc-panel-head);
+    border-radius: 0 0 var(--nc-radius) var(--nc-radius);
+}
+
+.nc-picker-body {
+    display: flex;
+    min-height: 320px;
+    max-height: 60vh;
+}
+.nc-picker-drives {
+    width: 210px;
+    flex: none;
+    border-right: 1px solid var(--nc-border);
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--nc-bg);
+}
+.nc-drive {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    color: var(--nc-text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--nc-radius);
+    transition: background var(--nc-fast), border-color var(--nc-fast);
+}
+.nc-drive:hover:not(:disabled) { background: var(--nc-row-hover); border-color: var(--nc-border); }
+.nc-drive.active { background: var(--nc-row-selected); border-color: var(--nc-accent); font-weight: 600; }
+.nc-drive:disabled { opacity: 0.45; cursor: default; }
+.nc-drive-name  { font-size: 12.5px; }
+.nc-drive-space { font-size: 11px; color: var(--nc-text-dim); }
+
+.nc-picker-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.nc-picker-path {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px;
+    border-bottom: 1px solid var(--nc-border-soft);
+}
+.nc-picker-path input { flex: 1; min-width: 0; }
+.nc-picker-path .btn { flex: none; }
+
+.nc-picker-list { flex: 1; overflow-y: auto; }
+.nc-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--nc-border-soft);
+    transition: background var(--nc-fast);
+}
+.nc-picker-row:hover { background: var(--nc-row-hover); }
+
+.nc-picker-space {
+    padding: 7px 14px;
+    font-size: 12.5px;
+    border-top: 1px solid var(--nc-border-soft);
+    background: var(--nc-panel-head);
+}
+.nc-picker-space.bad { background: var(--nc-err-bg); color: var(--nc-err); }
+.nc-picker-error {
+    padding: 7px 14px;
+    font-size: 12.5px;
+    background: var(--nc-err-bg);
+    color: var(--nc-err);
+    border-top: 1px solid var(--nc-border-soft);
+}
+
+/* ============================================================================
+   Partition picker table (Browse tab, volume backups)
+   ============================================================================ */
+.nc-part-table { width: 100%; border-collapse: collapse; border: 1px solid var(--nc-border); }
+.nc-part-table th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    padding: 5px 8px;
+    background: var(--nc-panel-head);
+    border-bottom: 1px solid var(--nc-border);
+    position: static;
+}
+.nc-part-table td {
+    padding: 5px 8px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--nc-border-soft);
+}
+.nc-part-table tr.selected td { background: var(--nc-row-selected); font-weight: 600; }
+.nc-part-table tr:hover td { background: var(--nc-row-hover); }
+
+/* ============================================================================
+   Browse tree: explicit expand/collapse caret + right-aligned size column
+   ============================================================================ */
+.nc-caret {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin-right: 2px;
+    padding: 0;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--nc-text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--nc-radius-sm);
+    transition: background var(--nc-fast), color var(--nc-fast), border-color var(--nc-fast);
+}
+.nc-caret:hover {
+    background: var(--nc-row-hover);
+    border-color: var(--nc-border);
+    color: var(--nc-accent);
+}
+.nc-caret-spacer { display: inline-block; width: 20px; flex: none; }
+
+.nc-size-col {
+    flex: none;
+    min-width: 76px;
+    text-align: right;
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--nc-text-dim);
+    font-variant-numeric: tabular-nums;
+}

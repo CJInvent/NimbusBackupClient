@@ -75,18 +75,15 @@ func (a *App) CheckDownloadSpace(destPath string, neededBytes int64) (SpaceCheck
 
 // OpenSaveFileDialog is Wails-bound: native "save as" picker. Same headless-
 // service guard as OpenRestoreDestDialog (native pickers fault in session 0).
-func (a *App) OpenSaveFileDialog(defaultName string) (string, error) {
-	if a.ctx == nil {
-		return "", fmt.Errorf("runtime non disponible")
-	}
-	if a.isServiceProcess {
-		return "", errors.New(errFolderPickerSvc)
-	}
-	return wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		DefaultFilename:      defaultName,
-		Title:                "Download",
-		CanCreateDirectories: true,
-	})
+// OpenSaveFileDialog is RETIRED. The Wails native Save dialog takes a native
+// COM fault in this app — the process dies outright (tray icon and all) with
+// no Go panic to log and nothing recover() can catch. A backup tool cannot
+// ship a button that kills the process, so the picker is now rendered in the
+// webview over ListDrives/ListFolders/CreateFolder (see pathpicker.go), which
+// is pure Go and cannot fault. This stub stays so any stale caller gets a
+// clear error instead of resurrecting the crash.
+func (a *App) OpenSaveFileDialog(_ string) (string, error) {
+	return "", errors.New("[NB-3009] the native save dialog is disabled — use the in-app picker")
 }
 
 // DownloadSelection extracts includePaths from a snapshot and writes them to

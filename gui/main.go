@@ -1321,41 +1321,11 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 // so we seed DefaultDirectory with a path we know exists. A recover() turns any
 // Go-level panic into an error instead of taking the process down, and the
 // surrounding logging makes the next failure diagnosable from the debug log.
-func (a *App) OpenRestoreDestDialog() (dir string, err error) {
-	if a.ctx == nil {
-		return "", fmt.Errorf("runtime non disponible")
-	}
-	// Only the headless service process (session 0, LocalSystem, no interactive
-	// desktop) crashes on the native folder picker — a native COM fault that
-	// recover() cannot catch. The interactive GUI process opens it safely and
-	// hands the chosen path to the service, so gate on isServiceProcess, NOT on
-	// a.mode (which is also ModeService in the GUI whenever a service exists —
-	// the previous guard disabled the picker for every GUI user with a service).
-	if a.isServiceProcess {
-		writeDebugLog("OpenRestoreDestDialog: native picker skipped in the headless service process — use manual path entry")
-		return "", errors.New(errFolderPickerSvc)
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("folder picker panic: %v", r)
-			writeDebugLog(fmt.Sprintf("CRITICAL: OpenRestoreDestDialog panic: %v\n%s", r, debug.Stack()))
-		}
-	}()
-
-	// Seed the dialog with a folder that is guaranteed to exist. An empty or
-	// stale DefaultDirectory is a known trigger for native dialog crashes.
-	defaultDir, herr := os.UserHomeDir()
-	if herr != nil || defaultDir == "" {
-		defaultDir = os.TempDir()
-	}
-
-	writeDebugLog(fmt.Sprintf("OpenRestoreDestDialog: opening folder picker (default=%s)", defaultDir))
-	dir, err = runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "Choose the destination folder",
-		DefaultDirectory: defaultDir,
-	})
-	writeDebugLog(fmt.Sprintf("OpenRestoreDestDialog: returned dir=%q err=%v", dir, err))
-	return dir, err
+// OpenRestoreDestDialog is RETIRED — see OpenSaveFileDialog in download.go.
+// The native folder picker faults natively (uncatchable) and took the whole
+// process down. The in-app picker (pathpicker.go) replaces it.
+func (a *App) OpenRestoreDestDialog() (string, error) {
+	return "", errors.New("[NB-3009] the native folder picker is disabled — use the in-app picker")
 }
 
 // SearchFiles scans every backup-id matching hostPrefix over the given period

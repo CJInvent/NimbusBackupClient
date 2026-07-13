@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.142] - 2026-07-13
+
+### Fixed
+- **The GUI no longer dies when you click Download or the destination Browse
+  button.** Both opened a Wails **native** dialog, which takes an uncatchable
+  native COM fault in this app — the process vanished, tray icon and all, with
+  no Go panic to log. A backup tool cannot ship a button that kills the
+  process, so the native dialogs are retired and the picker is now rendered
+  in-app over plain Go filesystem enumeration (`pathpicker.go`): drive rail
+  with free space, folder navigation, New Folder, and a Save-As filename
+  field. It is pure Go + DOM — it *cannot* fault the process.
+- **Restore from a volume backup works.** The Restore button still went down
+  the pxar path (`backup.pxar.didx`, backup type `host`), which a `vm`
+  snapshot does not have — PBS answered 400 "unable to read .../host/<id>/
+  owner". Restoring from an image now extracts the selected files out of the
+  disk image into the destination folder, honouring Keep-structure and
+  Overwrite. An image restore with nothing selected is refused rather than
+  silently attempting a full-image restore.
+
+### Added
+- **Partition picker — no more auto-opening the wrong volume.** Browsing a
+  disk image previously jumped into the first NTFS partition, which on a
+  Windows disk is the WinRE recovery volume. Every partition is now listed
+  with its number, label, type, **filesystem**, **used** and **allocated**
+  size, and the user picks. Partitions we cannot read are still listed, with
+  the reason in plain words.
+- **FAT12/16/32 and exFAT browsing**, alongside NTFS — hand-written readers,
+  no new dependencies. Verified against real images produced by `mkfs.vfat`,
+  `mkfs.exfat` and `mkfs.ntfs` and populated through the kernel drivers, with
+  byte-exact (SHA-256) extraction checks; the fixtures ship in
+  `imagebrowse/testdata/`.
+- **Used vs allocated space per partition**, read from the filesystem itself
+  ($Bitmap on NTFS, the FAT on FAT, the allocation bitmap on exFAT). Shown as
+  "—" rather than guessed when it can't be determined cheaply.
+- **Size column for folders as well as files** in the Browse tree (folder size
+  = sum of everything beneath it), and an explicit **▸/▾ expand caret** — the
+  folder icon changing shape was previously the only hint a row could open.
+
+### Notes
+- **ReFS is detected but not browsable.** There is no mature pure-Go ReFS
+  parser, the format is undocumented and version-dependent, and guessing at
+  on-disk structures in a *restore* tool risks handing back corrupt files.
+  ReFS partitions are listed and clearly labelled; full-image restore remains
+  available. BitLocker volumes are likewise detected and refused with a clear
+  message instead of a confusing parse failure.
+
 ## [0.2.141] - 2026-07-13
 
 ### Fixed

@@ -31,3 +31,10 @@ func driveSpace(path string) (free uint64, total uint64, err error) {
 		p = parent
 	}
 }
+
+// logicalDriveRoots: on non-Windows there is a single root. Exists so the
+// path picker compiles and is testable on the Linux CI build.
+func logicalDriveRoots() []string { return []string{"/"} }
+
+// volumeLabel has no portable meaning off Windows.
+func volumeLabel(_ string) string { return "" }

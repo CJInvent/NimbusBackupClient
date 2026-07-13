@@ -41,3 +41,37 @@ func driveSpace(path string) (free uint64, total uint64, err error) {
 		p = parent
 	}
 }
+
+// logicalDriveRoots enumerates mounted drive roots ("C:\", "D:\", ...) via
+// GetLogicalDrives. Pure syscall — no COM, no shell APIs. The in-app path
+// picker is built on this instead of the native folder dialog, which faults
+// natively in ways recover() cannot catch.
+func logicalDriveRoots() []string {
+	r1, _, _ := syscall.NewLazyDLL("kernel32.dll").NewProc("GetLogicalDrives").Call()
+	mask := uint32(r1)
+	var out []string
+	for i := 0; i < 26; i++ {
+		if mask&(1<<uint(i)) != 0 {
+			out = append(out, string(rune('A'+i))+`:\`)
+		}
+	}
+	return out
+}
+
+// volumeLabel returns the volume label for a drive root, or "" if unavailable.
+func volumeLabel(root string) string {
+	ptr, err := syscall.UTF16PtrFromString(root)
+	if err != nil {
+		return ""
+	}
+	name := make([]uint16, 261)
+	r1, _, _ := syscall.NewLazyDLL("kernel32.dll").NewProc("GetVolumeInformationW").Call(
+		uintptr(unsafe.Pointer(ptr)),
+		uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)),
+		0, 0, 0, 0, 0,
+	)
+	if r1 == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(name)
+}

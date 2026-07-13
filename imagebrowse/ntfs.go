@@ -1,191 +1,181 @@
 package imagebrowse
 
-// ntfs.go — file listing and extraction from an NTFS partition inside a raw
-// disk image, over any io.ReaderAt (in production: pbscommon.FIDXReaderAt, so
-// only the chunks the MFT walk touches are ever downloaded).
+// ntfs.go — read-only NTFS support, layered on go-ntfs
+// (www.velocidex.com/golang/go-ntfs — pure Go, no cgo, read-only).
 //
-// This is the "sandboxed mount": pure userspace parsing, no kernel driver,
-// no admin rights, nothing attached to the host OS. Only this process can
-// see the filesystem, read-only by construction.
+// The volume is presented to go-ntfs as its own io.ReaderAt (a SectionReader
+// over the whole-disk image), so cluster offsets resolve relative to the
+// partition start. Every read ultimately lands on pbscommon.FIDXReaderAt,
+// which pulls only the 4 MB image chunks the MFT walk actually touches.
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"path"
-	"sort"
+	"math/bits"
 	"strings"
 
 	ntfs "www.velocidex.com/golang/go-ntfs/parser"
 )
 
-// Entry is one file or directory in the image, shaped to match the GUI's
-// existing SnapshotEntry so the same tree UI renders both backup types.
-type Entry struct {
-	Path    string `json:"path"` // forward-slash, rooted at the partition ("/Windows/win.ini")
-	IsDir   bool   `json:"is_dir"`
-	Size    uint64 `json:"size"`
-	ModTime int64  `json:"mtime"` // unix seconds
-}
+// ntfsUsedBitmapCap bounds the $Bitmap read used for used-space reporting.
+// $Bitmap is one bit per cluster: at the standard 4 KiB cluster size, 64 MiB
+// of bitmap covers a ~2 TB volume. Past that we report "unknown" rather than
+// pull hundreds of MB from PBS just to draw a number.
+const ntfsUsedBitmapCap = 64 << 20
 
-// ErrCancelled is returned by Walk when the caller's cancel predicate fires.
-var ErrCancelled = errors.New("image walk cancelled")
-
-// ErrTooManyEntries is returned by Walk when maxEntries is exceeded; the
-// entries gathered so far are still returned so the UI can show a truncated
-// tree with an honest banner instead of nothing.
-var ErrTooManyEntries = errors.New("entry cap reached")
-
-// Volume is an open NTFS filesystem within a disk image.
-type Volume struct {
+type ntfsFS struct {
 	ctx *ntfs.NTFSContext
 }
 
-// OpenNTFS opens the NTFS filesystem occupying [partOffset, partOffset+length)
-// within the image. go-ntfs computes cluster offsets relative to its reader's
-// origin (the GetNTFSContext offset parameter positions only the boot
-// sector), so the partition is presented as its own io.ReaderAt via a
-// SectionReader. The page cache inside go-ntfs sits on top of our chunk-level
-// LRU, so repeated MFT record reads are cheap.
-func OpenNTFS(image io.ReaderAt, partOffset, length int64) (*Volume, error) {
-	sect := io.NewSectionReader(image, partOffset, length)
-	ctx, err := ntfs.GetNTFSContext(sect, 0)
+func openNTFS(r io.ReaderAt) (Filesystem, error) {
+	ctx, err := ntfs.GetNTFSContext(r, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open NTFS at offset %d: %w", partOffset, err)
+		return nil, fmt.Errorf("open NTFS volume: %w", err)
 	}
-	return &Volume{ctx: ctx}, nil
+	return &ntfsFS{ctx: ctx}, nil
 }
 
-// root returns the root directory MFT entry (record 5 is defined by NTFS to
-// be the volume root).
-func (v *Volume) root() (*ntfs.MFT_ENTRY, error) {
-	return v.ctx.GetMFT(5)
+func (f *ntfsFS) Kind() string  { return FSNTFS }
+func (f *ntfsFS) Label() string { return "" } // identity comes from the GPT type + size columns
+
+// root returns the root directory. MFT record 5 is defined by NTFS to be the
+// volume root.
+func (f *ntfsFS) root() (*ntfs.MFT_ENTRY, error) {
+	return f.ctx.GetMFT(5)
 }
 
-// skipName filters NTFS metafiles ($MFT, $Bitmap, ...) out of listings —
-// they aren't user data and half of them are unreadable through the normal
-// data path anyway.
-func skipName(name string) bool {
-	return name == "" || name == "." || strings.HasPrefix(name, "$")
+// isMeta filters NTFS metafiles ($MFT, $Bitmap, ...) out of user-facing
+// listings — they are not user data, and several are unreadable through the
+// ordinary data path.
+func isMeta(name string) bool {
+	return name == "" || name == "." || name == ".." || strings.HasPrefix(name, "$")
 }
 
-// List returns the immediate children of dirPath ("" or "/" = root),
-// sorted directories-first then by name, matching the GUI's expectations.
-func (v *Volume) List(dirPath string) ([]Entry, error) {
-	root, err := v.root()
+func (f *ntfsFS) open(p string) (*ntfs.MFT_ENTRY, error) {
+	root, err := f.root()
 	if err != nil {
 		return nil, fmt.Errorf("read MFT root: %w", err)
 	}
-	dir := root
-	clean := strings.Trim(path.Clean("/"+dirPath), "/")
-	if clean != "" && clean != "." {
-		dir, err = root.Open(v.ctx, clean)
-		if err != nil {
-			return nil, fmt.Errorf("open dir %q: %w", clean, err)
-		}
+	rel := strings.Trim(CleanPath(p), "/")
+	if rel == "" {
+		return root, nil
 	}
-	infos := ntfs.ListDir(v.ctx, dir)
+	e, err := root.Open(f.ctx, rel)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", p, err)
+	}
+	return e, nil
+}
+
+func (f *ntfsFS) List(dir string) ([]Entry, error) {
+	d, err := f.open(dir)
+	if err != nil {
+		return nil, err
+	}
+	base := CleanPath(dir)
+	infos := ntfs.ListDir(f.ctx, d)
 	out := make([]Entry, 0, len(infos))
 	for _, fi := range infos {
-		if skipName(fi.Name) {
+		if fi == nil || isMeta(fi.Name) {
 			continue
 		}
 		out = append(out, Entry{
-			Path:    "/" + strings.Trim(clean+"/"+fi.Name, "/"),
+			Path:    joinPath(base, fi.Name),
 			IsDir:   fi.IsDir,
 			Size:    uint64(fi.Size),
 			ModTime: fi.Mtime.Unix(),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IsDir != out[j].IsDir {
-			return out[i].IsDir
-		}
-		return out[i].Path < out[j].Path
-	})
+	sortEntries(out)
 	return out, nil
 }
 
-// Walk gathers the full tree under startPath (breadth-first), for the GUI's
-// prebuilt-tree Browse view. maxEntries bounds memory and chunk downloads on
-// pathological volumes; cancel (optional) aborts between directories.
-func (v *Volume) Walk(startPath string, maxEntries int, cancel func() bool) ([]Entry, error) {
-	if maxEntries <= 0 {
-		maxEntries = 250000
+func (f *ntfsFS) Stat(p string) (Entry, error) {
+	if CleanPath(p) == "/" {
+		return Entry{Path: "/", IsDir: true}, nil
 	}
-	var out []Entry
-	queue := []string{strings.Trim(path.Clean("/"+startPath), "/")}
-	for len(queue) > 0 {
-		if cancel != nil && cancel() {
-			return out, ErrCancelled
-		}
-		dir := queue[0]
-		queue = queue[1:]
-		children, err := v.List(dir)
-		if err != nil {
-			// A single unreadable directory (corrupt record, exotic
-			// attribute) should not kill the whole listing: note and move on.
+	e, err := f.open(p)
+	if err != nil {
+		return Entry{}, err
+	}
+	for _, fi := range ntfs.Stat(f.ctx, e) {
+		if fi == nil {
 			continue
 		}
-		for _, c := range children {
-			out = append(out, c)
-			if len(out) >= maxEntries {
-				return out, ErrTooManyEntries
-			}
-			if c.IsDir {
-				queue = append(queue, strings.TrimPrefix(c.Path, "/"))
-			}
-		}
+		return Entry{
+			Path:    CleanPath(p),
+			IsDir:   fi.IsDir,
+			Size:    uint64(fi.Size),
+			ModTime: fi.Mtime.Unix(),
+		}, nil
 	}
-	return out, nil
+	return Entry{}, fmt.Errorf("no metadata for %q", p)
 }
 
-// ExtractFile streams the contents of filePath into w, returning bytes
-// written. Sparse runs read as zeros (go-ntfs RangeReaderAt semantics),
-// which matches what a filesystem copy would produce.
-func (v *Volume) ExtractFile(filePath string, w io.Writer) (int64, error) {
-	clean := strings.Trim(path.Clean("/"+filePath), "/")
-	if clean == "" {
-		return 0, fmt.Errorf("empty file path")
-	}
-	reader, err := ntfs.GetDataForPath(v.ctx, clean)
-	if err != nil {
-		return 0, fmt.Errorf("open %q: %w", clean, err)
-	}
-	root, err := v.root()
+func (f *ntfsFS) ExtractFile(p string, w io.Writer) (int64, error) {
+	e, err := f.Stat(p)
 	if err != nil {
 		return 0, err
 	}
-	entry, err := root.Open(v.ctx, clean)
+	if e.IsDir {
+		return 0, fmt.Errorf("%s is a directory", p)
+	}
+	rel := strings.Trim(CleanPath(p), "/")
+	reader, err := ntfs.GetDataForPath(f.ctx, rel)
 	if err != nil {
-		return 0, fmt.Errorf("stat %q: %w", clean, err)
+		return 0, fmt.Errorf("open data stream for %q: %w", p, err)
 	}
-	size := int64(0)
-	for _, fi := range ntfs.Stat(v.ctx, entry) {
-		if fi != nil && !fi.IsDir {
-			size = fi.Size
-			break
-		}
+	// Sparse runs read as zeros (go-ntfs RangeReaderAt semantics) — the same
+	// bytes a filesystem-level copy would produce.
+	n, err := io.Copy(w, io.NewSectionReader(reader, 0, int64(e.Size)))
+	if err != nil {
+		return n, fmt.Errorf("read %q: %w", p, err)
 	}
-	return io.Copy(w, io.NewSectionReader(reader, 0, size))
+	if n != int64(e.Size) {
+		return n, fmt.Errorf("%s: read %d bytes, expected %d (corrupt volume?)", p, n, e.Size)
+	}
+	return n, nil
 }
 
-// StatSize returns the file size for filePath (0 for directories), used by
-// the free-space preflight before any bytes are extracted.
-func (v *Volume) StatSize(filePath string) (int64, bool, error) {
-	clean := strings.Trim(path.Clean("/"+filePath), "/")
-	root, err := v.root()
-	if err != nil {
-		return 0, false, err
+// UsedBytes popcounts $Bitmap (one bit per cluster). Bounded by
+// ntfsUsedBitmapCap; beyond that we honestly report "unknown" instead of
+// downloading a huge bitmap just to render a size column.
+func (f *ntfsFS) UsedBytes() (int64, bool) {
+	clusterSize := f.ctx.ClusterSize
+	if clusterSize <= 0 {
+		return 0, false
 	}
-	entry, err := root.Open(v.ctx, clean)
-	if err != nil {
-		return 0, false, fmt.Errorf("stat %q: %w", clean, err)
-	}
-	for _, fi := range ntfs.Stat(v.ctx, entry) {
-		if fi != nil {
-			return fi.Size, fi.IsDir, nil
+	// $Bitmap is MFT record 6, and also reachable by name from the root.
+	info, err := f.Stat("/$Bitmap")
+	size := int64(0)
+	if err == nil {
+		size = int64(info.Size)
+	} else {
+		e, merr := f.ctx.GetMFT(6)
+		if merr != nil {
+			return 0, false
+		}
+		for _, fi := range ntfs.Stat(f.ctx, e) {
+			if fi != nil {
+				size = fi.Size
+				break
+			}
 		}
 	}
-	return 0, false, fmt.Errorf("no stat info for %q", clean)
+	if size <= 0 || size > ntfsUsedBitmapCap {
+		return 0, false
+	}
+	reader, err := ntfs.GetDataForPath(f.ctx, "$Bitmap")
+	if err != nil {
+		return 0, false
+	}
+	raw := make([]byte, size)
+	if _, err := io.ReadFull(io.NewSectionReader(reader, 0, size), raw); err != nil {
+		return 0, false
+	}
+	used := 0
+	for _, b := range raw {
+		used += bits.OnesCount8(b)
+	}
+	return int64(used) * clusterSize, true
 }
