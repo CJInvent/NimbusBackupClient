@@ -901,3 +901,85 @@ button:focus-visible,
     .compact-text-short { display: inline; }
     .compact-text-long  { display: none; }
 }
+
+/* ============================================================================
+   Image directory browser (Browse tab, volume backups)
+   Current-directory view: everything at this level, scrollable, sortable.
+   ============================================================================ */
+.nc-crumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--nc-border-soft);
+    background: var(--nc-panel-head);
+    font-size: 12.5px;
+}
+.nc-crumb {
+    padding: 1px 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--nc-accent);
+    font-weight: 600;
+}
+.nc-crumb:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--nc-accent) 12%, var(--nc-panel));
+    border-color: color-mix(in srgb, var(--nc-accent) 45%, var(--nc-border));
+}
+.nc-crumb-sep { color: var(--nc-text-dim); padding: 0 2px; }
+
+.nc-dir-scroll { max-height: 420px; overflow-y: auto; }
+.nc-dir-table { width: 100%; border-collapse: collapse; }
+.nc-dir-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    padding: 5px 8px;
+    background: var(--nc-panel-head);
+    border-bottom: 1px solid var(--nc-border);
+    user-select: none;
+}
+.nc-dir-table th.sortable { cursor: pointer; }
+.nc-dir-table th.sortable:hover { color: var(--nc-accent); }
+.nc-dir-table td {
+    padding: 4px 8px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--nc-border-soft);
+}
+.nc-dir-table tr:hover td { background: var(--nc-row-hover); }
+.nc-dir-table tr.selected td {
+    background: color-mix(in srgb, var(--nc-accent) 10%, var(--nc-panel));
+}
+.nc-dir-table tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--nc-accent); }
+.nc-dir-table .col-date {
+    white-space: nowrap;
+    color: var(--nc-text-dim);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.nc-dir-table .col-size {
+    text-align: right;
+    white-space: nowrap;
+    color: var(--nc-text-dim);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    min-width: 76px;
+}
+.nc-dirlink {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--nc-text);
+    font-weight: 600;
+}
+.nc-dirlink:hover:not(:disabled) {
+    background: transparent;
+    border: none;
+    color: var(--nc-accent);
+    text-decoration: underline;
+}

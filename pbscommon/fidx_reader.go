@@ -20,6 +20,7 @@ package pbscommon
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -27,6 +28,8 @@ import (
 	"io"
 	"slices"
 	"sync"
+
+	"golang.org/x/time/rate"
 )
 
 var fidxMagic = []byte{47, 127, 65, 237, 145, 253, 15, 205}
@@ -60,8 +63,111 @@ type FIDXReaderAt struct {
 	inflightMu sync.Mutex
 	inflight   map[int]chan struct{} // chunk index -> closed when its fetch finishes
 
+	// limiter, when set, paces chunk downloads to the configured bandwidth so
+	// image browsing honours the same network limits as backups.
+	limiter *rate.Limiter
+
 	mu      sync.Mutex
 	fetched int
+}
+
+// SetRateLimitMbps caps chunk-download bandwidth in megabits/s (<= 0 removes
+// the cap). Applies across all concurrent fetches: the whole pipeline shares
+// one token bucket, so parallelism never multiplies past the limit.
+func (r *FIDXReaderAt) SetRateLimitMbps(mbps float64) {
+	if mbps <= 0 {
+		r.limiter = nil
+		return
+	}
+	bytesPerSec := mbps * 1000 * 1000 / 8
+	// Burst of one chunk (of THIS index's chunk size) keeps WaitN legal for
+	// chunk-sized requests without granting a free multi-chunk head start.
+	burst := int(r.chunkSize)
+	if burst < 1 {
+		burst = 1
+	}
+	r.limiter = rate.NewLimiter(rate.Limit(bytesPerSec), burst)
+}
+
+// PlanPrefetch downloads exactly the chunks covering the given IMAGE-space
+// byte ranges, in order, with `workers` concurrent requests — and nothing
+// else. This is for consumers that know their read pattern up front (the
+// NTFS $MFT scan hands its run list here): on a fragmented volume, image-
+// linear read-ahead drags in unrelated data between fragments, while a plan
+// moves only the bytes the scan will actually read. Fetches are best-effort
+// (the real read retries and surfaces errors) and dedupe against the read
+// path via the same in-flight table. The returned stop function cancels
+// outstanding work and blocks until the workers exit.
+func (r *FIDXReaderAt) PlanPrefetch(ranges [][2]int64, workers int) (stop func()) {
+	if workers <= 0 {
+		workers = 4
+	}
+	if workers > 16 {
+		workers = 16
+	}
+	// Expand ranges to an ordered, de-duplicated chunk index list.
+	seen := make(map[int]bool)
+	var order []int
+	for _, rg := range ranges {
+		if rg[1] <= 0 {
+			continue
+		}
+		first := int(rg[0] / int64(r.chunkSize))
+		last := int((rg[0] + rg[1] - 1) / int64(r.chunkSize))
+		for ci := first; ci <= last && ci < len(r.digests); ci++ {
+			if ci >= 0 && !seen[ci] {
+				seen[ci] = true
+				order = append(order, ci)
+			}
+		}
+	}
+	r.cache.ensureCapacity(workers * 4)
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	work := make(chan int)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ci := range work {
+				if r.cancel != nil && r.cancel() {
+					return
+				}
+				if _, ok := r.cache.get(ci); ok {
+					continue
+				}
+				r.inflightMu.Lock()
+				if _, busy := r.inflight[ci]; busy {
+					r.inflightMu.Unlock()
+					continue
+				}
+				ch := make(chan struct{})
+				r.inflight[ci] = ch
+				r.inflightMu.Unlock()
+				_, _ = r.fetchAndCache(ci) // best-effort by design
+				r.inflightMu.Lock()
+				delete(r.inflight, ci)
+				close(ch)
+				r.inflightMu.Unlock()
+			}
+		}()
+	}
+	go func() {
+		defer close(work)
+		for _, ci := range order {
+			select {
+			case work <- ci:
+			case <-done:
+				return
+			}
+		}
+	}()
+	var stopOnce sync.Once
+	return func() {
+		stopOnce.Do(func() { close(done) })
+		wg.Wait()
+	}
 }
 
 // SetPrefetch enables read-ahead: up to depth chunks beyond the current read
@@ -204,6 +310,15 @@ func (r *FIDXReaderAt) ensureChunk(ci int) ([]byte, error) {
 // stores it in the cache.
 func (r *FIDXReaderAt) fetchAndCache(ci int) ([]byte, error) {
 	digest := r.digests[ci]
+	if lim := r.limiter; lim != nil {
+		n := int(r.chunkSpan(ci))
+		if b := lim.Burst(); n > b {
+			n = b
+		}
+		if err := lim.WaitN(context.Background(), n); err != nil {
+			return nil, fmt.Errorf("rate limit wait: %w", err)
+		}
+	}
 	chunk, err := r.fetchFn(digest)
 	if err != nil {
 		return nil, fmt.Errorf("fetch chunk %s (index %d/%d): %w", digest, ci, len(r.digests), err)

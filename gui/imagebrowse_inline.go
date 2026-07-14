@@ -71,6 +71,8 @@ type ImagePartition struct {
 	AllocatedBytes int64  `json:"allocated_bytes"`
 	UsedBytes      int64  `json:"used_bytes"`
 	UsedKnown      bool   `json:"used_known"`
+	FileTableBytes int64  `json:"file_table_bytes"` // $MFT size on NTFS — the download cost of Browse
+	FileTableFrags int    `json:"file_table_frags"` // how many on-disk fragments it is in
 	Browsable      bool   `json:"browsable"`
 	Reason         string `json:"reason"` // why it is not browsable, in plain words
 }
@@ -79,17 +81,76 @@ type ImagePartition struct {
 // session. Snapshots are immutable, so the only invalidation is process exit.
 var (
 	imageTreeMu    sync.Mutex
-	imageTreeCache = map[string]imageTree{}
+	imageTreeCache = map[string]*imageTree{}
 )
 
+// imageTree is the Go-side cache of one partition scan: every entry, plus a
+// per-directory child index and rolled-up directory sizes, built once.
 type imageTree struct {
-	Entries   []SnapshotEntry
-	Truncated bool
+	entries  []SnapshotEntry
+	byDir    map[string][]int  // parent dir -> indices of children
+	dirSize  map[string]uint64 // dir path -> sum of all file bytes beneath
+	dirCount map[string]int    // dir path -> number of files beneath
+}
+
+func imgParentDir(p string) string {
+	i := strings.LastIndex(p, "/")
+	if i <= 0 {
+		return "/"
+	}
+	return p[:i]
+}
+
+func newImageTree(entries []SnapshotEntry) *imageTree {
+	t := &imageTree{
+		entries:  entries,
+		byDir:    make(map[string][]int, len(entries)/8+1),
+		dirSize:  make(map[string]uint64),
+		dirCount: make(map[string]int),
+	}
+	for i, e := range entries {
+		d := imgParentDir(e.Path)
+		t.byDir[d] = append(t.byDir[d], i)
+		if !e.IsDir {
+			// Roll the file's size up every ancestor.
+			for anc := d; ; anc = imgParentDir(anc) {
+				t.dirSize[anc] += e.Size
+				t.dirCount[anc]++
+				if anc == "/" {
+					break
+				}
+			}
+		}
+	}
+	return t
+}
+
+// children returns dir's immediate children; directories carry their
+// rolled-up size so the size column is meaningful at every level.
+func (t *imageTree) children(dir string) []SnapshotEntry {
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" {
+		dir = "/"
+	}
+	idx := t.byDir[dir]
+	out := make([]SnapshotEntry, 0, len(idx))
+	for _, i := range idx {
+		e := t.entries[i]
+		if e.IsDir {
+			e.Size = t.dirSize[e.Path]
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // openImageReader opens a PBS reader session and returns a lazy io.ReaderAt
 // over one disk image, plus its size and a closer for the session.
-func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive string) (*pbscommon.FIDXReaderAt, int64, func(), error) {
+// lookahead=true enables image-linear read-ahead (right for extraction of
+// mostly-contiguous files); the $MFT scan passes false and uses an exact
+// PlanPrefetch from the run list instead — on a fragmented volume, linear
+// read-ahead between fragments drags in gigabytes of unrelated disk.
+func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive string, lookahead bool) (*pbscommon.FIDXReaderAt, int64, func(), error) {
 	cfg, err := a.resolveRestorePBS(pbsID)
 	if err != nil {
 		return nil, 0, nil, err
@@ -124,13 +185,15 @@ func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchi
 		return nil, 0, nil, ibFail(fmt.Errorf("[NB-3413] open disk image %s (type %s): %v",
 			diskArchive, normalizeImageBackupType(backupType), err))
 	}
-	// A single HTTP stream is latency-bound (~120 Mbps observed on a LAN):
-	// each 4 MB chunk waits out a full round trip before the next request
-	// starts. Sequential consumers — the $MFT scan, file extraction — telegraph
-	// exactly which chunks come next, so read ahead with concurrent requests.
-	// 6 workers x 16 chunks ahead ≈ 64 MB in flight window; verified race-free
-	// and dedup-exact by the pbscommon prefetch tests.
-	ra.SetPrefetch(6, 16)
+	if lookahead {
+		// Image-linear read-ahead: 6 workers, 16 chunks (~64 MB) ahead.
+		ra.SetPrefetch(6, 16)
+	}
+	// Browsing and file downloads honour the same configurable network limit
+	// as the rest of the client (one shared bucket across all fetch workers).
+	if cfgAll := a.GetConfig(); cfgAll != nil && cfgAll.DownloadLimitMbps > 0 {
+		ra.SetRateLimitMbps(cfgAll.DownloadLimitMbps)
+	}
 	return ra, size, func() { client.Close() }, nil
 }
 
@@ -138,13 +201,13 @@ func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchi
 // partIndex is the 1-based index from ListImagePartitions — there is NO
 // auto-selection: picking a partition for the user landed them inside the
 // WinRE recovery volume and looked like a bug, because it was one.
-func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
-	fn func(fs imagebrowse.Filesystem, p imagebrowse.Partition) error) error {
+func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int, lookahead bool,
+	fn func(fs imagebrowse.Filesystem, p imagebrowse.Partition, ra *pbscommon.FIDXReaderAt) error) error {
 
 	if partIndex < 1 {
 		return ibFail(errors.New("[NB-3415] no partition selected — choose a partition to browse"))
 	}
-	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive)
+	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive, lookahead)
 	if err != nil {
 		return err
 	}
@@ -171,14 +234,14 @@ func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive
 		// volume — restore the full image instead"), so pass them through.
 		return ibFail(fmt.Errorf("[NB-3419] partition %d (%s): %v", partIndex, chosen.Filesystem, err))
 	}
-	return fn(fs, *chosen)
+	return fn(fs, *chosen, ra)
 }
 
 // ListImagePartitions enumerates every partition on a disk image — regardless
 // of whether we can browse it — with its filesystem, allocated size, and used
 // size. The user chooses; we never choose for them.
 func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]ImagePartition, error) {
-	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive)
+	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive, false)
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +273,15 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskA
 				if lbl := fs.Label(); lbl != "" && ip.VolumeLabel == "" {
 					ip.VolumeLabel = lbl
 				}
+				// File-table size (the $MFT on NTFS): what a Browse will
+				// actually download, shown next to the button so the user
+				// knows the cost before clicking.
+				if pl, ok := fs.(imagebrowse.Planner); ok {
+					if mftSize, extents, perr := pl.StoragePlan(); perr == nil {
+						ip.FileTableBytes = mftSize
+						ip.FileTableFrags = len(extents)
+					}
+				}
 			} else {
 				ip.Browsable = false
 				ip.Reason = ferr.Error()
@@ -232,9 +304,11 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskA
 	return out, nil
 }
 
-// ListImageContents walks one partition's file tree. Returns the same flat
-// []SnapshotEntry shape as ListSnapshotContents so the Browse tree renders
-// both backup types with one code path.
+// ListImageContents scans one partition's file table and returns the ROOT
+// directory listing. The full tree stays in the Go-side session cache —
+// shipping 1.2M entries of JSON into the webview is what forced the old
+// 250k-entry truncation; per-directory listing (ListImageDirectory) has no
+// such limit. Directory entries carry rolled-up sizes.
 func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
 
@@ -242,9 +316,10 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	imageTreeMu.Lock()
 	if !forceRefresh {
 		if c, ok := imageTreeCache[key]; ok {
-			a.lastImageTruncated = c.Truncated
 			imageTreeMu.Unlock()
-			return c.Entries, nil
+			a.lastImageKey = key
+			a.lastImageTruncated = false
+			return c.children("/"), nil
 		}
 	}
 	imageTreeMu.Unlock()
@@ -258,40 +333,43 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	}
 	emit(2, "Opening disk image…")
 
-	var result imageTree
-	err := a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
-		func(fs imagebrowse.Filesystem, p imagebrowse.Partition) error {
-			emit(10, fmt.Sprintf("Reading the file table of partition %d (%s)…", p.Index, fs.Kind()))
-			// FullTree takes the fast path when the filesystem has one: on NTFS
-			// that is ONE sequential read of the $MFT (the WizTree technique)
-			// instead of random directory reads scattered across the volume —
-			// over the PBS chunk reader, ~the MFT's size downloaded instead of
-			// a large fraction of the partition.
-			entries, werr := imagebrowse.FullTree(fs, imageWalkCap, nil, func(done, total int64) {
+	var result *imageTree
+	err := a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, false,
+		func(fs imagebrowse.Filesystem, p imagebrowse.Partition, ra *pbscommon.FIDXReaderAt) error {
+			// Fetch EXACTLY the file table's on-disk extents, concurrently —
+			// never linear read-ahead, which on a fragmented volume drags in
+			// unrelated disk between fragments.
+			if pl, ok := fs.(imagebrowse.Planner); ok {
+				if mftSize, extents, perr := pl.StoragePlan(); perr == nil {
+					abs := make([][2]int64, 0, len(extents))
+					for _, e := range extents {
+						abs = append(abs, [2]int64{p.StartOffset + e.Offset, e.Length})
+					}
+					stopPlan := ra.PlanPrefetch(abs, 6)
+					defer stopPlan()
+					emit(6, fmt.Sprintf("Downloading file table: %s in %d fragment(s)…",
+						formatBytesGo(uint64(mftSize)), len(extents)))
+					writeBackupLog(fmt.Sprintf("ImageBrowse: $MFT plan %s across %d fragment(s) on %s partition %d",
+						formatBytesGo(uint64(mftSize)), len(extents), diskArchive, p.Index))
+				}
+			}
+			entries, werr := imagebrowse.FullTree(fs, 0, nil, func(done, total int64) {
 				if total > 0 {
-					pct := 10 + 85*float64(done)/float64(total)
+					pct := 8 + 87*float64(done)/float64(total)
 					emit(pct, fmt.Sprintf("Scanning file table: %d / %d records", done, total))
 				}
 			})
-			truncated := false
-			if werr != nil {
-				if errors.Is(werr, imagebrowse.ErrTooManyEntries) {
-					truncated = true
-				} else {
-					return werr
-				}
+			if werr != nil && !errors.Is(werr, imagebrowse.ErrTooManyEntries) {
+				return werr
 			}
-			out := make([]SnapshotEntry, 0, len(entries))
+			converted := make([]SnapshotEntry, 0, len(entries))
 			for _, e := range entries {
-				out = append(out, SnapshotEntry{
-					Path:    e.Path,
-					IsDir:   e.IsDir,
-					Size:    e.Size,
-					ModTime: e.ModTime,
+				converted = append(converted, SnapshotEntry{
+					Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime,
 				})
 			}
-			result = imageTree{Entries: out, Truncated: truncated}
-			emit(100, fmt.Sprintf("Listed %d entries", len(out)))
+			result = newImageTree(converted)
+			emit(100, fmt.Sprintf("Listed %d entries", len(converted)))
 			return nil
 		})
 	if err != nil {
@@ -301,10 +379,26 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	imageTreeMu.Lock()
 	imageTreeCache[key] = result
 	imageTreeMu.Unlock()
-	a.lastImageTruncated = result.Truncated
-	writeBackupLog(fmt.Sprintf("ImageBrowse: listed %d entries (truncated=%v) from %s partition %d",
-		len(result.Entries), result.Truncated, diskArchive, partIndex))
-	return result.Entries, nil
+	a.lastImageKey = key
+	a.lastImageTruncated = false
+	writeBackupLog(fmt.Sprintf("ImageBrowse: cached %d entries from %s partition %d",
+		len(result.entries), diskArchive, partIndex))
+	return result.children("/"), nil
+}
+
+// ListImageDirectory returns the immediate children of dir from the cached
+// scan — the whole point of keeping the tree in Go: the webview only ever
+// holds one directory's worth of rows, so nothing needs truncating.
+func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
+	partIndex int, dir string) ([]SnapshotEntry, error) {
+	key := strings.Join([]string{pbsID, backupID, snapshotID, backupType, diskArchive, fmt.Sprint(partIndex)}, "|")
+	imageTreeMu.Lock()
+	c, ok := imageTreeCache[key]
+	imageTreeMu.Unlock()
+	if !ok {
+		return nil, ibFail(errors.New("[NB-3428] no scan cached for this partition — open it with Browse files first"))
+	}
+	return c.children(dir), nil
 }
 
 // LastImageListTruncated reports whether the last ListImageContents hit the
@@ -318,8 +412,8 @@ func (a *App) LastImageListTruncated() bool { return a.lastImageTruncated }
 func (a *App) extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, stageDir string, emit func(float64, string)) error {
 
-	return a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
-		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition) error {
+	return a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
+		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
 			files, err := expandImageSelection(fs, includePaths)
 			if err != nil {
 				return err

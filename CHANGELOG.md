@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.145] - 2026-07-14
+
+### Performance
+- **Fragmented-MFT fix: the scan now downloads exactly the file table, nothing
+  else.** The v0.2.144 read-ahead was image-linear, but a decade-old volume's
+  $MFT is sequential only in FILE space — at every fragment boundary the
+  prefetcher pulled ~64 MB of unrelated disk, which is how a ~1.2 GB file
+  table turned into 4-6 minutes at 300 Mbps. The reader now takes the $MFT's
+  **run list** from record 0 first (a tiny read), converts it to the exact
+  set of image chunks, and downloads only those, concurrently
+  (`PlanPrefetch`) — verified by a test that a plan fetches every covered
+  chunk and **nothing outside it**. Expected transfer on that volume: roughly
+  the MFT's size, fragmentation irrelevant.
+- **Download bandwidth is now governed.** New `download_limit_mbps` config
+  (0 = unlimited) alongside the existing upload limit; enforced as ONE shared
+  token bucket across all concurrent chunk fetches, so prefetch parallelism
+  can never exceed the configured cap. Race-detector verified.
+
+### Added
+- **File-table size shown before you click Browse** — each NTFS partition row
+  now shows "File table: 1.2 GB · 47 fragments" next to its Browse button, so
+  the download cost is visible up front.
+- **Per-directory browsing — the 250k truncation is gone.** The full scan
+  (all 1.2M+ entries) stays in the Go side; the webview now shows ONE
+  directory at a time: breadcrumb navigation, a scrollable listing of
+  everything at the current level, and **sortable columns — Name, Modified
+  (new column), Size** — with folders carrying rolled-up sizes and click-to-
+  enter navigation. Selections persist across navigation and folder
+  selections count their full rolled-up size for the space preflight.
+
 ## [0.2.144] - 2026-07-13
 
 ### Performance

@@ -333,3 +333,42 @@ func pickBestName(names []string) string {
 	}
 	return best
 }
+
+// StoragePlan implements Planner: the $MFT's actual size and its on-disk run
+// list, straight from record 0's unnamed $DATA attribute. A decade-old volume
+// can hold the MFT in hundreds of fragments; sequential-in-file is then
+// scattered-on-disk, and any image-linear read-ahead drags in unrelated data.
+// This plan is what lets the reader fetch exactly the MFT's chunks instead.
+func (f *ntfsFS) StoragePlan() (int64, []Extent, error) {
+	e0, err := f.ctx.GetMFT(0)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read $MFT record: %w", err)
+	}
+	const attrData = 128
+	attr, err := e0.GetAttribute(f.ctx, attrData, -1, "")
+	if err != nil {
+		return 0, nil, fmt.Errorf("$MFT $DATA attribute: %w", err)
+	}
+	size := int64(attr.Actual_size())
+	if size <= 0 {
+		return 0, nil, fmt.Errorf("implausible $MFT size %d", size)
+	}
+	cs := f.ctx.ClusterSize
+	if cs <= 0 {
+		return 0, nil, fmt.Errorf("unknown cluster size")
+	}
+	var extents []Extent
+	for _, r := range attr.RunList() {
+		if r == nil || r.Length <= 0 {
+			continue
+		}
+		if r.Offset <= 0 {
+			continue // sparse/unallocated run — nothing on disk to fetch
+		}
+		extents = append(extents, Extent{Offset: r.Offset * cs, Length: r.Length * cs})
+	}
+	if len(extents) == 0 {
+		return 0, nil, fmt.Errorf("$MFT has no allocated runs")
+	}
+	return size, extents, nil
+}

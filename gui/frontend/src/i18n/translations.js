@@ -1,5 +1,10 @@
 const translations = {
   fr: {
+    colModified: "Modifié",
+    colSize: "Taille",
+    fileTableLabel: "Table des fichiers :",
+    fileTableFrags: "fragments",
+    fileTableHint: "Volume à télécharger pour lister les fichiers (la table \$MFT). Fortement fragmentée sur les vieux volumes — seuls ces octets sont téléchargés.",
     pickerFolderTitle: "Choisir un dossier de destination",
     pickerSaveTitle: "Enregistrer sous",
     pickerUp: "Remonter",
@@ -413,6 +418,11 @@ const translations = {
 
   },
   en: {
+    colModified: "Modified",
+    colSize: "Size",
+    fileTableLabel: "File table:",
+    fileTableFrags: "fragments",
+    fileTableHint: "How much will be downloaded to list files (the \$MFT). Heavily fragmented on old volumes — only these bytes are fetched.",
     pickerFolderTitle: "Choose a destination folder",
     pickerSaveTitle: "Save as",
     pickerUp: "Up",
@@ -826,6 +836,11 @@ const translations = {
 
   },
   es: {
+    colModified: "Modificado",
+    colSize: "Tamaño",
+    fileTableLabel: "Tabla de archivos:",
+    fileTableFrags: "fragmentos",
+    fileTableHint: "Cuánto se descargará para listar los archivos (la \$MFT). Muy fragmentada en volúmenes antiguos — solo se descargan estos bytes.",
     pickerFolderTitle: "Elegir una carpeta de destino",
     pickerSaveTitle: "Guardar como",
     pickerUp: "Subir",

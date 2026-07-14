@@ -1,8 +1,8 @@
 package main
 
 import (
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +40,10 @@ type Config struct {
 	// UploadLimitMbps caps backup upload bandwidth in megabits/s (0 = unlimited).
 	// Applied at the PBS session socket, so it covers all backup types.
 	UploadLimitMbps float64 `json:"upload_limit_mbps,omitempty"`
+	// DownloadLimitMbps caps restore/browse download bandwidth in megabits/s
+	// (0 = unlimited). Enforced as ONE shared token bucket across all
+	// concurrent chunk fetches, so prefetch parallelism cannot exceed it.
+	DownloadLimitMbps float64 `json:"download_limit_mbps,omitempty"`
 
 	// ==================== EMAIL NOTIFICATIONS ====================
 	// ==================== CONTROL SERVER (NimbusControl) ====================
@@ -48,13 +52,13 @@ type Config struct {
 	ControlServerURL   string `json:"control_server_url,omitempty"`
 	ControlEnrollToken string `json:"control_enroll_token,omitempty"` // one-time; wiped after enrollment
 	ControlAgentID     int64  `json:"control_agent_id,omitempty"`
-	ControlSecret      string `json:"control_secret,omitempty"` // sealed via encryptSecret (DEK/TPM)
+	ControlSecret      string `json:"control_secret,omitempty"`  // sealed via encryptSecret (DEK/TPM)
 	ControlCertFP      string `json:"control_cert_fp,omitempty"` // optional SHA-256 leaf pin
 
-	ExchangeAware bool `json:"exchange_aware,omitempty"` // run app-aware Exchange post-backup tasks; control-server togglable
-	ExchangeLogTruncation bool `json:"exchange_log_truncation,omitempty"` // truncate Exchange transaction logs after a successful backup; control-server togglable
-	EmailFrom    string `json:"email_from,omitempty"`
-	EmailTo      string `json:"email_to,omitempty"`
+	ExchangeAware         bool   `json:"exchange_aware,omitempty"`          // run app-aware Exchange post-backup tasks; control-server togglable
+	ExchangeLogTruncation bool   `json:"exchange_log_truncation,omitempty"` // truncate Exchange transaction logs after a successful backup; control-server togglable
+	EmailFrom             string `json:"email_from,omitempty"`
+	EmailTo               string `json:"email_to,omitempty"`
 }
 
 // sanitized returns a copy of the config with all secrets stripped (legacy PBS

@@ -178,3 +178,20 @@ func FullTree(fs Filesystem, maxEntries int, cancel func() bool, progress func(d
 	}
 	return Walk(fs, "/", maxEntries, cancel)
 }
+
+// Extent is one on-disk run of a file, in PARTITION byte space.
+type Extent struct {
+	Offset int64
+	Length int64
+}
+
+// Planner is an optional interface a Filesystem provides when it can report
+// WHERE its file table lives on disk before reading it. The caller can then
+// download exactly those byte ranges — no read-ahead into unrelated disk
+// space, which on a fragmented volume is the difference between fetching the
+// file table's size and fetching gigabytes of noise around it.
+type Planner interface {
+	// StoragePlan returns the file table's logical size and its on-disk
+	// extents in partition byte space, ordered as they will be read.
+	StoragePlan() (size int64, extents []Extent, err error)
+}

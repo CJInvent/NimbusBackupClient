@@ -5,7 +5,7 @@ import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -27,6 +27,7 @@ if (window.go) {
   ListFolders = window.go.main.App.ListFolders
   CreateFolder = window.go.main.App.CreateFolder
   DefaultSaveDir = window.go.main.App.DefaultSaveDir
+  ListImageDirectory = window.go.main.App.ListImageDirectory
   DownloadImageSelection = window.go.main.App.DownloadImageSelection
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
@@ -167,6 +168,9 @@ function App() {
   const [loadingParts, setLoadingParts] = useState(false)
   // In-app path picker (replaces the native dialogs, which crashed the process)
   const [picker, setPicker] = useState(null)  // {mode, initialPath, defaultFileName, needBytes, resolve}
+  const [imageCwd, setImageCwd] = useState('/')                  // current directory inside the image
+  const [imageSort, setImageSort] = useState({ key: 'name', dir: 1 }) // dir: 1 asc, -1 desc
+  const [selectedInfo, setSelectedInfo] = useState(new Map())    // path -> {size} for cross-directory selections
   // Control server (NimbusControl) status + settings form
   const [cpStatus, setCpStatus] = useState(null)
   const [cpForm, setCpForm] = useState({ url: '', token: '', fp: '' })
@@ -1362,6 +1366,14 @@ function App() {
   // lives under a selected path. An empty selection means "restore everything",
   // so we sum the whole snapshot. Memoized — snapshots can hold 100k+ entries.
   const selectionBytes = useMemo(() => {
+    if (imageDisk) {
+      // Image mode: the webview only holds the current directory, so sizes of
+      // selections (files AND folders — folders carry rolled-up sizes) are
+      // tracked at click time in selectedInfo.
+      let sum = 0
+      for (const v of selectedInfo.values()) sum += (v.size || 0)
+      return sum
+    }
     if (!snapshotEntries.length) return 0
     if (selectedPaths.size === 0) {
       return snapshotEntries.reduce((sum, e) => e.is_dir ? sum : sum + (e.size || 0), 0)
@@ -1375,7 +1387,7 @@ function App() {
       }
     }
     return sum
-  }, [snapshotEntries, selectedPaths])
+  }, [snapshotEntries, selectedPaths, imageDisk, selectedInfo])
 
   // Recursive renderer driven by the children map. Depth is only used for the
   // visual indent.
@@ -1472,6 +1484,8 @@ function App() {
       setSnapshotEntries(entries)
       setImageDisk(disk)
       setImagePartIndex(partIndex)
+      setImageCwd('/')
+      setSelectedInfo(new Map())
       let truncated = false
       if (LastImageListTruncated) { try { truncated = await LastImageListTruncated() } catch (e) { /* ignore */ } }
       setImageTruncated(truncated)
@@ -1489,6 +1503,42 @@ function App() {
     } finally {
       setBrowsingImage(false)
     }
+  }
+
+  // Navigate to a directory inside the image: fetch just that level from the
+  // Go-side cache. The webview never holds more than one directory of rows,
+  // so there is nothing to truncate.
+  const handleImageNavigate = async (dir) => {
+    if (!ListImageDirectory || !selectedSnapshot || !imageDisk) return
+    try {
+      const rows = await ListImageDirectory(
+        restorePBSID || '',
+        selectedSnapshot.backup_id || restoreBackupId,
+        selectedSnapshot.id,
+        selectedSnapshot.backup_type || 'vm',
+        imageDisk,
+        imagePartIndex,
+        dir
+      )
+      setSnapshotEntries(rows || [])
+      setImageCwd(dir)
+    } catch (err) {
+      showStatus('❌ ' + (err && err.message ? err.message : String(err)), 'error')
+    }
+  }
+
+  const toggleImageSelect = (entry) => {
+    const next = new Set(selectedPaths)
+    const info = new Map(selectedInfo)
+    if (next.has(entry.path)) {
+      next.delete(entry.path)
+      info.delete(entry.path)
+    } else {
+      next.add(entry.path)
+      info.set(entry.path, { size: entry.size || 0 })
+    }
+    setSelectedPaths(next)
+    setSelectedInfo(info)
   }
 
   const handleDownloadSelection = async () => {
@@ -2881,11 +2931,18 @@ function App() {
                                 <td style={{textAlign: 'right'}}>{formatBytes(p.allocated_bytes)}</td>
                                 <td style={{textAlign: 'right'}}>
                                   {p.browsable ? (
-                                    <button className="btn btn-primary" style={{padding: '2px 10px', fontSize: '12px'}}
-                                      disabled={browsingImage}
-                                      onClick={() => handleBrowseImageDisk(imagePartitions.disk, p.index)}>
-                                      {browsingImage ? '⏳ ' : '📂 '}{t('volumeBrowseFiles')}
-                                    </button>
+                                    <span style={{display: 'inline-flex', alignItems: 'center', gap: '8px'}}>
+                                      {p.file_table_bytes > 0 && (
+                                        <span className="hint-text" title={t('fileTableHint')}>
+                                          {t('fileTableLabel')} {formatBytes(p.file_table_bytes)}{p.file_table_frags > 1 ? ` · ${p.file_table_frags} ${t('fileTableFrags')}` : ''}
+                                        </span>
+                                      )}
+                                      <button className="btn btn-primary" style={{padding: '2px 10px', fontSize: '12px'}}
+                                        disabled={browsingImage}
+                                        onClick={() => handleBrowseImageDisk(imagePartitions.disk, p.index)}>
+                                        {browsingImage ? '⏳ ' : '📂 '}{t('volumeBrowseFiles')}
+                                      </button>
+                                    </span>
                                   ) : (
                                     <span className="hint-text" title={p.reason}>{p.reason}</span>
                                   )}
@@ -2901,25 +2958,82 @@ function App() {
                   </div>
                 ) : snapshotEntries.length === 0 ? (
                   <p style={{padding: '12px', color: 'var(--nc-text-dim)'}}>{t('loadingOrEmpty')}</p>
-                ) : (
+                ) : imageDisk ? (
                   <>
-                    {imageDisk && (
-                      <div style={{padding: '6px 10px', borderBottom: '1px solid var(--nc-border-soft)', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
-                        <span style={{color: 'var(--nc-accent)', fontWeight: 600}}>💿 {String(imageDisk).replace('.img.fidx','')} · {t('partition')} {imagePartIndex}</span>
-                        <span className="hint-text">{t('volumeBrowsingBadge')}</span>
-                        <button className="btn" style={{padding: '1px 8px', fontSize: '11px'}}
-                          onClick={() => { setSnapshotEntries([]); setSelectedPaths(new Set()); setImageDisk(null) }}>
-                          ↩ {t('volumeBackToParts')}
-                        </button>
-                        {imageTruncated && <span style={{color: 'var(--nc-warn)'}}>⚠ {t('volumeTreeTruncated')}</span>}
-                      </div>
-                    )}
-                    {(() => {
-                      const tree = buildTree(snapshotEntries)
-                      const roots = tree.get('') || []
-                      return roots.map(e => renderTreeNode(e, tree, 0))
-                    })()}
+                    <div style={{padding: '6px 10px', borderBottom: '1px solid var(--nc-border-soft)', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
+                      <span style={{color: 'var(--nc-accent)', fontWeight: 600}}>💿 {String(imageDisk).replace('.img.fidx','')} · {t('partition')} {imagePartIndex}</span>
+                      <button className="btn" style={{padding: '1px 8px', fontSize: '11px'}}
+                        onClick={() => { setSnapshotEntries([]); setSelectedPaths(new Set()); setSelectedInfo(new Map()); setImageDisk(null); setImageCwd('/') }}>
+                        ↩ {t('volumeBackToParts')}
+                      </button>
+                    </div>
+                    {/* breadcrumb: every segment navigates */}
+                    <div className="nc-crumbs">
+                      <button className="nc-crumb" onClick={() => handleImageNavigate('/')}>💿 /</button>
+                      {imageCwd.split('/').filter(Boolean).map((seg, i, arr) => {
+                        const target = '/' + arr.slice(0, i + 1).join('/')
+                        return (
+                          <span key={target}>
+                            <span className="nc-crumb-sep">›</span>
+                            <button className="nc-crumb" onClick={() => handleImageNavigate(target)}>{seg}</button>
+                          </span>
+                        )
+                      })}
+                    </div>
+                    {/* directory table: everything at this level, scrollable, sortable */}
+                    <div className="nc-dir-scroll">
+                      <table className="nc-dir-table">
+                        <thead>
+                          <tr>
+                            <th style={{width: '30px'}}></th>
+                            <th className="sortable" onClick={() => setImageSort(sv => ({key: 'name', dir: sv.key === 'name' ? -sv.dir : 1}))}>
+                              {t('partName')}{imageSort.key === 'name' ? (imageSort.dir > 0 ? ' ▲' : ' ▼') : ''}
+                            </th>
+                            <th className="sortable col-date" onClick={() => setImageSort(sv => ({key: 'mtime', dir: sv.key === 'mtime' ? -sv.dir : -1}))}>
+                              {t('colModified')}{imageSort.key === 'mtime' ? (imageSort.dir > 0 ? ' ▲' : ' ▼') : ''}
+                            </th>
+                            <th className="sortable col-size" onClick={() => setImageSort(sv => ({key: 'size', dir: sv.key === 'size' ? -sv.dir : -1}))}>
+                              {t('colSize')}{imageSort.key === 'size' ? (imageSort.dir > 0 ? ' ▲' : ' ▼') : ''}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...snapshotEntries].sort((a, b) => {
+                            if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+                            let c = 0
+                            if (imageSort.key === 'size') c = (a.size || 0) - (b.size || 0)
+                            else if (imageSort.key === 'mtime') c = (a.mtime || 0) - (b.mtime || 0)
+                            else c = a.path.localeCompare(b.path, undefined, { sensitivity: 'base' })
+                            return c * imageSort.dir
+                          }).map(e => (
+                            <tr key={e.path} className={selectedPaths.has(e.path) ? 'selected' : ''}>
+                              <td>
+                                <input type="checkbox" checked={selectedPaths.has(e.path)} onChange={() => toggleImageSelect(e)} />
+                              </td>
+                              <td>
+                                {e.is_dir ? (
+                                  <button className="nc-dirlink" onClick={() => handleImageNavigate(e.path)}>
+                                    📁 {e.path.split('/').pop()}
+                                  </button>
+                                ) : (
+                                  <span>📄 {e.path.split('/').pop()}</span>
+                                )}
+                              </td>
+                              <td className="col-date">{e.mtime ? new Date(e.mtime * 1000).toLocaleString() : '—'}</td>
+                              <td className="col-size">{formatBytes(e.size || 0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {snapshotEntries.length === 0 && <div className="hint-text" style={{padding: '10px'}}>{t('pickerNoSubfolders')}</div>}
+                    </div>
                   </>
+                ) : (
+                  (() => {
+                    const tree = buildTree(snapshotEntries)
+                    const roots = tree.get('') || []
+                    return roots.map(e => renderTreeNode(e, tree, 0))
+                  })()
                 )}
               </div>
               <p style={{marginTop: '6px', fontSize: '12px', color: 'var(--nc-text-dim)'}}>

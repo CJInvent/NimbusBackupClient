@@ -389,3 +389,38 @@ func TestNTFSFastTreeMatchesWalk(t *testing.T) {
 		t.Fatalf("dispatcher returned %d entries, direct fast path %d", len(viaDispatch), len(fast))
 	}
 }
+
+// TestNTFSStoragePlan: the $MFT plan must exist, be sane, and its extents must
+// cover at least the MFT's logical size.
+func TestNTFSStoragePlan(t *testing.T) {
+	vol := loadFixture(t, "ntfs.img.gz")
+	disk := wrapMBR(vol, 0x07)
+	r := bytes.NewReader(disk)
+	parts, _ := ListPartitions(r, int64(len(disk)))
+	fs, err := OpenFilesystem(r, parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl, ok := fs.(Planner)
+	if !ok {
+		t.Fatal("NTFS must implement Planner")
+	}
+	size, extents, err := pl.StoragePlan()
+	if err != nil {
+		t.Fatalf("StoragePlan: %v", err)
+	}
+	if size <= 0 || len(extents) == 0 {
+		t.Fatalf("empty plan: size=%d extents=%d", size, len(extents))
+	}
+	var covered int64
+	for _, e := range extents {
+		if e.Offset <= 0 || e.Length <= 0 || e.Offset+e.Length > parts[0].Length {
+			t.Fatalf("extent out of partition bounds: %+v", e)
+		}
+		covered += e.Length
+	}
+	if covered < size {
+		t.Fatalf("extents cover %d bytes < MFT size %d", covered, size)
+	}
+	t.Logf("$MFT: %d bytes in %d extent(s), %d bytes allocated", size, len(extents), covered)
+}

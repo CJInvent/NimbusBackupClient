@@ -276,3 +276,115 @@ func TestFIDXPrefetchErrorSurfaces(t *testing.T) {
 		t.Fatalf("wrong data after prefetch retry: %d", p[0])
 	}
 }
+
+// TestFIDXPlanPrefetch: a plan must fetch exactly the chunks covering its
+// ranges — every one of them, nothing outside them — and dedupe against the
+// read path. This is the property that fixes fragmented-$MFT browsing: no
+// read-ahead into unrelated disk space.
+func TestFIDXPlanPrefetch(t *testing.T) {
+	const size, cs = 100 * 4096, 4096 // 100 chunks
+	raw, chunks := buildFIDX(t, size, cs, func(i int, b []byte) {
+		for j := range b {
+			b[j] = byte(i)
+		}
+	})
+	r, err := parseFIDX(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.cache = newChunkCache(64)
+	r.inflight = make(map[int]chan struct{})
+
+	var mu sync.Mutex
+	fetchedIdx := map[string]int{}
+	r.fetchFn = func(digest string) ([]byte, error) {
+		mu.Lock()
+		fetchedIdx[digest]++
+		mu.Unlock()
+		time.Sleep(time.Millisecond)
+		return chunks[digest], nil
+	}
+
+	// Fragmented "MFT": three scattered extents -> chunks 2-3, 40-42, 97-99.
+	stop := r.PlanPrefetch([][2]int64{
+		{2 * cs, 2 * cs},          // chunks 2,3
+		{40*cs + 100, 2*cs + 500}, // chunks 40,41,42 (unaligned on purpose)
+		{97 * cs, 3 * cs},         // chunks 97,98,99
+	}, 4)
+	defer stop()
+
+	want := map[int]bool{2: true, 3: true, 40: true, 41: true, 42: true, 97: true, 98: true, 99: true}
+	// Wait for the plan to drain (small, bounded).
+	deadline := time.After(3 * time.Second)
+	for {
+		mu.Lock()
+		n := len(fetchedIdx)
+		mu.Unlock()
+		if n >= len(want) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("plan did not finish: fetched %d of %d", n, len(want))
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	digestToIdx := map[string]int{}
+	for i, d := range r.digests {
+		digestToIdx[d] = i
+	}
+	for d, n := range fetchedIdx {
+		ci := digestToIdx[d]
+		if !want[ci] {
+			t.Errorf("fetched chunk %d which is OUTSIDE the plan", ci)
+		}
+		if n != 1 {
+			t.Errorf("chunk %d fetched %d times (dedupe broken)", ci, n)
+		}
+	}
+	if len(fetchedIdx) != len(want) {
+		t.Errorf("fetched %d chunks, plan covers %d", len(fetchedIdx), len(want))
+	}
+	// The planned chunks are now cache hits for the real read.
+	p := make([]byte, cs)
+	if _, err := r.ReadAt(p, 41*cs); err != nil {
+		t.Fatalf("read planned chunk: %v", err)
+	}
+	if p[0] != 41 {
+		t.Fatalf("wrong data from planned chunk: %d", p[0])
+	}
+}
+
+// TestFIDXRateLimit: with the shared token bucket set, total throughput must
+// stay near the cap even with concurrent fetches.
+func TestFIDXRateLimit(t *testing.T) {
+	const size, cs = 20 * 4096, 4096
+	raw, chunks := buildFIDX(t, size, cs, func(i int, b []byte) {})
+	r, err := parseFIDX(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.cache = newChunkCache(32)
+	r.inflight = make(map[int]chan struct{})
+	r.fetchFn = func(digest string) ([]byte, error) { return chunks[digest], nil }
+	// 4096-byte chunks at ~3.3 Mbit/s ≈ 100 chunks/s -> 20 chunks ≥ ~190 ms.
+	r.SetRateLimitMbps(3.3)
+
+	start := time.Now()
+	stop := r.PlanPrefetch([][2]int64{{0, size}}, 8)
+	// Drain by reading everything (reads dedupe against the plan).
+	buf := make([]byte, size)
+	if _, err := r.ReadAt(buf, 0); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	stop()
+	elapsed := time.Since(start)
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("rate limit not applied: 20 chunks in %v", elapsed)
+	}
+	t.Logf("20 rate-limited chunks took %v (expected >= ~190ms)", elapsed)
+}
