@@ -281,6 +281,11 @@ disk). Browsing them means parsing the image ourselves:
   exists, the format is undocumented and version-dependent, and guessing at
   structures in a restore tool risks returning corrupt files. ReFS and BitLocker
   are detected and refused with an actionable message.
+- **Full-tree listing is a sequential $MFT scan on NTFS** (`TreeLister` fast
+  path, the WizTree technique): stream $MFT once, rebuild paths in memory from
+  parent references. Over the chunk reader this moves ~the MFT's size instead
+  of a large fraction of the volume. FAT/exFAT use the generic walk (small).
+  The fast path is tested to produce the identical tree to the walk.
 - **The user picks the partition — always.** Auto-selecting the first NTFS
   volume put people inside WinRE. `ListImagePartitions` returns EVERY partition
   (browsable or not) with filesystem, used and allocated size; `partIndex < 1`

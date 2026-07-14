@@ -752,3 +752,152 @@ html[data-fontsize="large"]  { zoom: 1.35; }
     color: var(--nc-text-dim);
     font-variant-numeric: tabular-nums;
 }
+
+/* ============================================================================
+   Theme conformance pass (v0.2.143)
+   One design language everywhere: every control derives its hover, focus and
+   selection treatment from the CURRENT accent + base theme via color-mix, so
+   all 8 combinations (light/dark x 4 accents) come out right with no
+   hardcoded palette anywhere. Selection = accent perimeter with an OUTWARD
+   glow, matching the control-server text fields.
+   ============================================================================ */
+
+/* ---- bare controls: no more Chromium UA defaults (the "blueish hover") ---- */
+button {
+    font: inherit;
+    cursor: pointer;
+    padding: 5px 14px;
+    color: var(--nc-text);
+    background: var(--nc-panel);
+    border: 1px solid var(--nc-border);
+    border-radius: var(--nc-radius);
+    transition: background var(--nc-fast), border-color var(--nc-fast), box-shadow var(--nc-fast);
+}
+button:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- accent-derived hover: 2 themes x 4 accents = 8 tones, computed ------- */
+button:hover:not(:disabled),
+.btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--nc-accent) 14%, var(--nc-panel));
+    border-color: color-mix(in srgb, var(--nc-accent) 55%, var(--nc-border));
+}
+.btn-primary:hover:not(:disabled),
+button.btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--nc-accent) 86%, var(--nc-panel));
+    border-color: var(--nc-accent);
+    filter: none;
+}
+
+/* ---- outward focus glow, same treatment as the themed text fields --------- */
+button:focus-visible,
+.btn:focus-visible,
+.tab:focus-visible {
+    outline: none;
+    border-color: var(--nc-accent);
+    box-shadow: 0 0 0 1px var(--nc-accent),
+                0 0 9px 1px color-mix(in srgb, var(--nc-accent) 55%, transparent);
+}
+
+/* ---- semantic button variants (replace the hardcoded red/amber/grey) ------ */
+.btn-danger, button.btn-danger {
+    background: var(--nc-err);
+    border-color: var(--nc-err);
+    color: #ffffff;
+}
+.btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--nc-err) 85%, var(--nc-panel));
+    border-color: var(--nc-err);
+}
+.btn-warn, button.btn-warn {
+    background: var(--nc-warn);
+    border-color: var(--nc-warn);
+    color: #201500;
+}
+.btn-warn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--nc-warn) 85%, var(--nc-panel));
+    border-color: var(--nc-warn);
+}
+
+/* ---- selection = accent perimeter + outward glow --------------------------- */
+.nc-selected {
+    border-color: var(--nc-accent) !important;
+    box-shadow: 0 0 0 1px var(--nc-accent),
+                0 0 10px 1px color-mix(in srgb, var(--nc-accent) 45%, transparent);
+}
+.card.selectable { cursor: pointer; transition: border-color var(--nc-fast), box-shadow var(--nc-fast), background var(--nc-fast); }
+.card.selectable:hover { border-color: color-mix(in srgb, var(--nc-accent) 55%, var(--nc-border)); }
+.card.selectable.nc-selected { background: color-mix(in srgb, var(--nc-accent) 9%, var(--nc-panel)); }
+
+.nc-part-table tr.selected td {
+    background: color-mix(in srgb, var(--nc-accent) 12%, var(--nc-panel));
+    font-weight: 600;
+}
+.nc-part-table tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--nc-accent); }
+
+/* active tab: give it the outward glow too */
+.tab.active {
+    box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--nc-accent) 65%, black),
+                0 0 8px color-mix(in srgb, var(--nc-accent) 30%, transparent);
+}
+
+/* ---- segmented control (Backup execution mode) ----------------------------- */
+.nc-seg { display: flex; gap: 0; border: 1px solid var(--nc-border); border-radius: var(--nc-radius); overflow: hidden; }
+.nc-seg button {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+    padding: 9px 12px;
+    font-weight: 600;
+    background: var(--nc-panel-head);
+    color: var(--nc-text-dim);
+}
+.nc-seg button + button { border-left: 1px solid var(--nc-border); }
+.nc-seg button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--nc-accent) 12%, var(--nc-panel-head));
+    color: var(--nc-text);
+}
+.nc-seg button.active {
+    background: color-mix(in srgb, var(--nc-accent) 88%, var(--nc-panel));
+    color: var(--nc-accent-text);
+    box-shadow: inset 0 0 0 1px var(--nc-accent),
+                0 0 9px color-mix(in srgb, var(--nc-accent) 45%, transparent);
+}
+
+/* ---- info bubbles: warn / error variants of the accent .info-box ----------- */
+.warn-box {
+    padding: 8px 10px;
+    border: 1px solid var(--nc-warn-border);
+    border-left: 3px solid var(--nc-warn);
+    border-radius: var(--nc-radius);
+    background: var(--nc-warn-bg);
+    color: var(--nc-text);
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+.warn-box strong, .warn-box b { color: var(--nc-warn); }
+.err-box {
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--nc-err) 45%, var(--nc-border));
+    border-left: 3px solid var(--nc-err);
+    border-radius: var(--nc-radius);
+    background: var(--nc-err-bg);
+    color: var(--nc-text);
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+.err-box strong, .err-box b { color: var(--nc-err); }
+.panel-sub {
+    padding: 10px;
+    background: var(--nc-panel-head);
+    border: 1px solid var(--nc-border-soft);
+    border-radius: var(--nc-radius);
+}
+
+/* ---- responsive label pair: the "Scheduled 📅 Schedule" duplication -------- */
+/* These were meant to swap by width but only set font sizes, so BOTH rendered. */
+.compact-text-short { display: none; font-size: 12px; }
+.compact-text-long  { display: inline; font-size: inherit; color: inherit; }
+@media (max-width: 720px) {
+    .compact-text-short { display: inline; }
+    .compact-text-long  { display: none; }
+}

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.143] - 2026-07-13
+
+### Performance
+- **Browsing a big NTFS partition no longer reads through the volume.** The
+  file tree was built by recursive directory walking — random reads scattered
+  across the partition, each pulling a 4 MB chunk from PBS, which on a 930 GB
+  C: drive effectively meant downloading much of the disk. The tree is now
+  built the way WizTree does it: **one sequential read of the $MFT stream**,
+  with the tree reconstructed in memory from parent references. Network moved
+  drops to roughly the MFT's size (typically well under 1 GB even on large
+  volumes), with live "Scanning file table: N / M records" progress. Verified
+  to produce the identical tree to the walk on a real NTFS image. FAT/exFAT
+  volumes keep the walk — they're small.
+
+### Fixed / Changed (theming)
+- **One design language, derived from the theme.** Every hover, focus, and
+  selection treatment is now computed from the current accent and base theme
+  (via `color-mix`), so all 8 combinations (light/dark x 4 accents) come out
+  right with no hardcoded palette. The Bootstrap-era hex colors (~60 of them)
+  are gone from the markup entirely.
+- **The "blueish hover" is dead.** Bare `<button>` elements had no theme
+  styling at all and fell back to Chromium's UA defaults. All buttons now
+  share the themed base, with accent-derived hover tones and an **outward
+  focus glow** matching the control-server text fields.
+- **Selections glow.** The selected snapshot card, the selected partition
+  row, and the active tab all get an accent perimeter with an outward glow.
+- **Info bubbles unified** on the accent style used by the Multi-PBS notice
+  (`.info-box`), with themed `warn-box` / `err-box` variants for the VSS,
+  split-backup, beta, and history notices. The Browse BETA box and the volume
+  panel no longer render white in dark mode.
+- **PBS action buttons** (Test/Edit/Delete/Set-default), **Add-server**,
+  search-cancel and cancel-edit buttons now use themed semantic variants
+  (danger = err color, default-star = warn color) instead of raw hex.
+- **Execution mode is a proper segmented control**, themed, with the active
+  side glowing — and the "Scheduled 📅 Schedule" double label is fixed (the
+  responsive short/long label pair never actually swapped; both rendered).
+- Backup history cards use themed ok/warn/err tints; the About call-to-action
+  uses the accent.
+
 ## [0.2.142] - 2026-07-13
 
 ### Fixed

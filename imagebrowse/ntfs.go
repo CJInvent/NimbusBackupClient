@@ -9,6 +9,7 @@ package imagebrowse
 // which pulls only the 4 MB image chunks the MFT walk actually touches.
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math/bits"
@@ -178,4 +179,157 @@ func (f *ntfsFS) UsedBytes() (int64, bool) {
 		used += bits.OnesCount8(b)
 	}
 	return int64(used) * clusterSize, true
+}
+
+// ---- fast full-tree via sequential $MFT scan (the WizTree technique) ---------
+
+// mftRec is the in-memory skeleton of one MFT record: just enough to rebuild
+// the tree without touching the disk again.
+type mftRec struct {
+	parent uint64
+	name   string
+	isDir  bool
+	size   uint64
+	mtime  int64
+}
+
+// ntfsMaxRecords bounds the in-memory record map (~100 bytes/record; 4M
+// records ≈ 400 MB worst case). A volume past this is beyond what a prebuilt
+// GUI tree can present anyway.
+const ntfsMaxRecords = 4_000_000
+
+// FullTree implements TreeLister: ONE sequential read of the $MFT stream,
+// then the tree is rebuilt in memory from parent references. No per-directory
+// disk reads at all — this is how WizTree lists a volume in seconds, and over
+// a PBS chunk reader it means fetching ~the MFT's size instead of most of the
+// volume.
+func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done, total int64)) ([]Entry, error) {
+	if maxEntries <= 0 {
+		maxEntries = 250000
+	}
+
+	// The $MFT is itself a file (record 0); read it as a stream.
+	mftReader, err := ntfs.GetDataForPath(f.ctx, "$MFT")
+	if err != nil {
+		return nil, fmt.Errorf("open $MFT: %w", err)
+	}
+	var mftSize int64
+	if e0, err := f.ctx.GetMFT(0); err == nil {
+		for _, fi := range ntfs.Stat(f.ctx, e0) {
+			if fi != nil && fi.Size > 0 {
+				mftSize = fi.Size
+				break
+			}
+		}
+	}
+	if mftSize <= 0 {
+		return nil, fmt.Errorf("cannot determine $MFT size")
+	}
+	recordSize := f.ctx.RecordSize
+	if recordSize <= 0 {
+		recordSize = 1024
+	}
+	totalRecords := mftSize / recordSize
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	records := make(map[uint64]mftRec, 1024)
+	var done int64
+	for hl := range ntfs.ParseMFTFile(ctx, mftReader, mftSize, f.ctx.ClusterSize, recordSize) {
+		done++
+		if progress != nil && done%50000 == 0 {
+			progress(done, totalRecords)
+		}
+		if cancel != nil && cancel() {
+			stop()
+			return nil, ErrCancelled
+		}
+		if hl == nil || !hl.InUse {
+			continue
+		}
+		entry := uint64(hl.EntryNumber)
+		// One highlight per named stream can appear; keep the first (the
+		// default data stream) per entry.
+		if _, dup := records[entry]; dup {
+			continue
+		}
+		name := pickBestName(hl.FileNames)
+		if name == "" {
+			continue
+		}
+		if len(records) >= ntfsMaxRecords {
+			return nil, fmt.Errorf("volume has more than %d MFT records — too large for a full tree listing", ntfsMaxRecords)
+		}
+		records[entry] = mftRec{
+			parent: hl.ParentEntryNumber,
+			name:   name,
+			isDir:  hl.IsDir,
+			size:   uint64(hl.FileSize),
+			mtime:  hl.LastModified0x10.Unix(),
+		}
+	}
+	if progress != nil {
+		progress(totalRecords, totalRecords)
+	}
+
+	// Rebuild paths from parent references, memoized. Entries whose chain does
+	// not reach the root (5), cycles, orphans of deleted trees, and anything
+	// under a $-metafile are dropped — same shape the directory walk produces.
+	const rootEntry = 5
+	paths := make(map[uint64]string, len(records))
+	paths[rootEntry] = ""
+	var resolve func(e uint64, depth int) (string, bool)
+	resolve = func(e uint64, depth int) (string, bool) {
+		if p, ok := paths[e]; ok {
+			return p, p != "\x00"
+		}
+		if depth > 512 { // deeper than any real filesystem: cycle guard
+			return "", false
+		}
+		r, ok := records[e]
+		if !ok || strings.HasPrefix(r.name, "$") {
+			paths[e] = "\x00" // memoize the failure
+			return "", false
+		}
+		parentPath, ok := resolve(r.parent, depth+1)
+		if !ok {
+			paths[e] = "\x00"
+			return "", false
+		}
+		p := parentPath + "/" + r.name
+		paths[e] = p
+		return p, true
+	}
+
+	out := make([]Entry, 0, min(len(records), maxEntries))
+	for e, r := range records {
+		if e == rootEntry {
+			continue
+		}
+		p, ok := resolve(e, 0)
+		if !ok || p == "" {
+			continue
+		}
+		out = append(out, Entry{Path: p, IsDir: r.isDir, Size: r.size, ModTime: r.mtime})
+		if len(out) >= maxEntries {
+			sortEntries(out)
+			return out, ErrTooManyEntries
+		}
+	}
+	sortEntries(out)
+	return out, nil
+}
+
+// pickBestName chooses the display name among an entry's hard-linked names:
+// the longest one wins, which drops DOS 8.3 aliases (FILENA~1.TXT) in favour
+// of the Win32 long name.
+func pickBestName(names []string) string {
+	best := ""
+	for _, n := range names {
+		if len(n) > len(best) {
+			best = n
+		}
+	}
+	return best
 }

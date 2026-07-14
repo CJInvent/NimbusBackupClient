@@ -255,7 +255,17 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	err := a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
 		func(fs imagebrowse.Filesystem, p imagebrowse.Partition) error {
 			emit(10, fmt.Sprintf("Reading the file table of partition %d (%s)…", p.Index, fs.Kind()))
-			entries, werr := imagebrowse.Walk(fs, "/", imageWalkCap, nil)
+			// FullTree takes the fast path when the filesystem has one: on NTFS
+			// that is ONE sequential read of the $MFT (the WizTree technique)
+			// instead of random directory reads scattered across the volume —
+			// over the PBS chunk reader, ~the MFT's size downloaded instead of
+			// a large fraction of the partition.
+			entries, werr := imagebrowse.FullTree(fs, imageWalkCap, nil, func(done, total int64) {
+				if total > 0 {
+					pct := 10 + 85*float64(done)/float64(total)
+					emit(pct, fmt.Sprintf("Scanning file table: %d / %d records", done, total))
+				}
+			})
 			truncated := false
 			if werr != nil {
 				if errors.Is(werr, imagebrowse.ErrTooManyEntries) {

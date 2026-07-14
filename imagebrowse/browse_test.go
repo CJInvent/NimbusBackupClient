@@ -320,3 +320,72 @@ func TestNoPartitionTable(t *testing.T) {
 		t.Fatal("expected an error for a disk with no boot signature")
 	}
 }
+
+// TestNTFSFastTreeMatchesWalk: the sequential-$MFT fast path must return the
+// same tree as the recursive walk — same paths, same sizes, same dirness.
+func TestNTFSFastTreeMatchesWalk(t *testing.T) {
+	vol := loadFixture(t, "ntfs.img.gz")
+	disk := wrapMBR(vol, 0x07)
+	r := bytes.NewReader(disk)
+	parts, err := ListPartitions(r, int64(len(disk)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := OpenFilesystem(r, parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl, ok := fs.(TreeLister)
+	if !ok {
+		t.Fatal("NTFS filesystem must implement TreeLister")
+	}
+
+	var progressed bool
+	fast, err := tl.FullTree(0, nil, func(done, total int64) { progressed = true })
+	if err != nil {
+		t.Fatalf("FullTree: %v", err)
+	}
+	_ = progressed // small fixture may finish before the first progress tick
+
+	walked, err := Walk(fs, "/", 0, nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+
+	type meta struct {
+		isDir bool
+		size  uint64
+	}
+	fastM := map[string]meta{}
+	for _, e := range fast {
+		fastM[e.Path] = meta{e.IsDir, e.Size}
+	}
+	for _, w := range walked {
+		f, ok := fastM[w.Path]
+		if !ok {
+			t.Errorf("fast tree missing %s", w.Path)
+			continue
+		}
+		if f.isDir != w.IsDir || (!w.IsDir && f.size != w.Size) {
+			t.Errorf("%s: fast{dir:%v size:%d} != walk{dir:%v size:%d}",
+				w.Path, f.isDir, f.size, w.IsDir, w.Size)
+		}
+	}
+	if len(fast) < len(walked) {
+		t.Errorf("fast tree has %d entries, walk found %d", len(fast), len(walked))
+	}
+
+	// Cancel propagation on the fast path too.
+	if _, err := tl.FullTree(0, func() bool { return true }, nil); err != ErrCancelled {
+		t.Fatalf("fast-path cancel not propagated: %v", err)
+	}
+
+	// FullTree dispatcher picks the fast path for NTFS.
+	viaDispatch, err := FullTree(fs, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("FullTree dispatch: %v", err)
+	}
+	if len(viaDispatch) != len(fast) {
+		t.Fatalf("dispatcher returned %d entries, direct fast path %d", len(viaDispatch), len(fast))
+	}
+}

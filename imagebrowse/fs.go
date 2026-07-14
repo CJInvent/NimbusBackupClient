@@ -155,3 +155,26 @@ func OpenFilesystem(image io.ReaderAt, p Partition) (Filesystem, error) {
 		return nil, fmt.Errorf("%w: %s — restore the full image instead", ErrUnsupportedFS, p.Filesystem)
 	}
 }
+
+// TreeLister is an optional fast path a Filesystem can provide when it can
+// enumerate its ENTIRE tree cheaper than a recursive directory walk. NTFS
+// implements it by streaming the $MFT sequentially (the WizTree technique):
+// one linear read of a single file instead of random reads scattered across
+// the volume — which over a chunk-fetching PBS reader is the difference
+// between ~1 GB moved and touching most of a 930 GB partition.
+type TreeLister interface {
+	// FullTree returns every entry, capped at maxEntries (ErrTooManyEntries,
+	// entries so far still returned). progress, when non-nil, receives
+	// (records processed, records total) as the scan advances.
+	FullTree(maxEntries int, cancel func() bool, progress func(done, total int64)) ([]Entry, error)
+}
+
+// FullTree lists the whole tree of fs the fastest way it supports: the
+// TreeLister fast path when present, the generic breadth-first Walk otherwise
+// (FAT/exFAT volumes are small enough that walking them is fine).
+func FullTree(fs Filesystem, maxEntries int, cancel func() bool, progress func(done, total int64)) ([]Entry, error) {
+	if tl, ok := fs.(TreeLister); ok {
+		return tl.FullTree(maxEntries, cancel, progress)
+	}
+	return Walk(fs, "/", maxEntries, cancel)
+}

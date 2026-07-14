@@ -1735,7 +1735,7 @@ function App() {
           {/* Show form first if no servers configured */}
           {pbsServers.length === 0 ? (
             <>
-              <div className="info-box" style={{marginBottom: '20px', backgroundColor: '#eef2ff', borderLeft: '4px solid #667eea'}}>
+              <div className="info-box" style={{marginBottom: '20px', backgroundColor: 'color-mix(in srgb, var(--nc-accent) 8%, var(--nc-panel-head))', borderLeft: '4px solid var(--nc-accent)'}}>
                 👋 <strong>{t('welcomeMessage')}</strong> {t('welcomeText')}<br/>
                 {!config.baseurl && (
                   <>
@@ -1745,7 +1745,7 @@ function App() {
                       href={`${t('chooseBackupUrl')}?utm_source=NimbusGui&utm_medium=tooling&utm_campaign=version-${appVersion}&utm_content=first-setup`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      style={{color: '#667eea', fontWeight: 'bold', textDecoration: 'underline'}}
+                      style={{color: 'var(--nc-accent)', fontWeight: 'bold', textDecoration: 'underline'}}
                     >
                       {t('orderStorage')} →
                     </a>
@@ -1771,16 +1771,16 @@ function App() {
                     <tr key={server.id}>
                       <td>
                         <strong>{server.name}</strong>
-                        {server.id === defaultPBSID && <span style={{marginLeft: '5px', color: '#fbbf24'}}>⭐ {t('default')}</span>}
-                        {server.description && <div style={{fontSize: '0.85em', color: '#999'}}>{server.description}</div>}
+                        {server.id === defaultPBSID && <span style={{marginLeft: '5px', color: 'var(--nc-warn)'}}>⭐ {t('default')}</span>}
+                        {server.description && <div style={{fontSize: '0.85em', color: 'var(--nc-text-dim)'}}>{server.description}</div>}
                       </td>
                       <td>{server.baseurl}</td>
                       <td>{server.datastore}/{server.namespace || '-'}</td>
                       <td>
-                        {serverStatus[server.id] === 'testing' && <span style={{color: '#3b82f6'}}>🔄 {t('testing')}</span>}
-                        {serverStatus[server.id] === 'online' && <span style={{color: '#10b981'}}>🟢 {t('online')}</span>}
-                        {serverStatus[server.id] === 'offline' && <span style={{color: '#ef4444'}}>🔴 {t('offline')}</span>}
-                        {!serverStatus[server.id] && <span style={{color: '#999'}}>⚪ {t('untested')}</span>}
+                        {serverStatus[server.id] === 'testing' && <span style={{color: 'var(--nc-accent)'}}>🔄 {t('testing')}</span>}
+                        {serverStatus[server.id] === 'online' && <span style={{color: 'var(--nc-ok)'}}>🟢 {t('online')}</span>}
+                        {serverStatus[server.id] === 'offline' && <span style={{color: 'var(--nc-err)'}}>🔴 {t('offline')}</span>}
+                        {!serverStatus[server.id] && <span style={{color: 'var(--nc-text-dim)'}}>⚪ {t('untested')}</span>}
                       </td>
                       <td>
                         <button onClick={() => handleTestPBSConnection(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
@@ -1790,11 +1790,11 @@ function App() {
                           ✏️ {t('edit')}
                         </button>
                         {server.id !== defaultPBSID && (
-                          <button onClick={() => handleSetDefaultPBS(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em', backgroundColor: '#fbbf24'}}>
+                          <button className="btn btn-warn" onClick={() => handleSetDefaultPBS(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
                             ⭐ {t('setAsDefault')}
                           </button>
                         )}
-                        <button onClick={() => handleDeletePBSServer(server.id)} style={{padding: '5px 10px', fontSize: '0.9em', backgroundColor: '#ef4444', color: 'white'}}>
+                        <button className="btn btn-danger" onClick={() => handleDeletePBSServer(server.id)} style={{padding: '5px 10px', fontSize: '0.9em'}}>
                           🗑️ {t('delete')}
                         </button>
                       </td>
@@ -1907,7 +1907,7 @@ function App() {
                   <button onClick={handleUpdatePBSServer} style={{flex: 1}}>
                     💾 {t('update')}
                   </button>
-                  <button onClick={handleCancelEdit} style={{flex: 1, backgroundColor: '#999'}}>
+                  <button className="btn btn-secondary" onClick={handleCancelEdit} style={{flex: 1}}>
                     ❌ {t('cancel')}
                   </button>
                 </>
@@ -1951,15 +1951,15 @@ function App() {
                       <tr key={server.id}>
                         <td>
                           <strong>{server.name}</strong>
-                          {server.id === defaultPBSID && <span style={{marginLeft: '5px', color: '#fbbf24'}}>⭐ {t('default')}</span>}
-                          {server.description && <div style={{fontSize: '0.85em', color: '#999'}}>{server.description}</div>}
+                          {server.id === defaultPBSID && <span style={{marginLeft: '5px', color: 'var(--nc-warn)'}}>⭐ {t('default')}</span>}
+                          {server.description && <div style={{fontSize: '0.85em', color: 'var(--nc-text-dim)'}}>{server.description}</div>}
                         </td>
                         <td>{server.baseurl}</td>
                         <td>{server.datastore}/{server.namespace || '-'}</td>
                         <td>
-                          {serverStatus[server.id] === 'testing' && <span style={{color: '#3b82f6'}}>🔄 {t('statusTesting')}</span>}
-                          {serverStatus[server.id] === 'online' && <span style={{color: '#10b981'}}>🟢 {t('statusOnline')}</span>}
-                          {serverStatus[server.id] === 'offline' && <span style={{color: '#ef4444'}}>🔴 {t('statusOffline')}</span>}
+                          {serverStatus[server.id] === 'testing' && <span style={{color: 'var(--nc-accent)'}}>🔄 {t('statusTesting')}</span>}
+                          {serverStatus[server.id] === 'online' && <span style={{color: 'var(--nc-ok)'}}>🟢 {t('statusOnline')}</span>}
+                          {serverStatus[server.id] === 'offline' && <span style={{color: 'var(--nc-err)'}}>🔴 {t('statusOffline')}</span>}
                           {!serverStatus[server.id] && <span style={{color: 'var(--nc-text-dim)'}}>⚪ {t('statusNotTested')}</span>}
                         </td>
                         <td>
@@ -1970,11 +1970,11 @@ function App() {
                             ✏️ {t('editBtn')}
                           </button>
                           {server.id !== defaultPBSID && (
-                            <button onClick={() => handleSetDefaultPBS(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em', backgroundColor: '#fbbf24'}}>
+                            <button className="btn btn-warn" onClick={() => handleSetDefaultPBS(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
                               ⭐ {t('setDefaultBtn')}
                             </button>
                           )}
-                          <button onClick={() => handleDeletePBSServer(server.id)} style={{padding: '5px 10px', fontSize: '0.9em', backgroundColor: '#ef4444', color: 'white'}}>
+                          <button className="btn btn-danger" onClick={() => handleDeletePBSServer(server.id)} style={{padding: '5px 10px', fontSize: '0.9em'}}>
                             🗑️ {t('deleteBtn')}
                           </button>
                         </td>
@@ -2086,7 +2086,7 @@ function App() {
                       <button onClick={handleUpdatePBSServer} style={{flex: 1}}>
                         💾 {t('update')}
                       </button>
-                      <button onClick={handleCancelEdit} style={{flex: 1, backgroundColor: '#999'}}>
+                      <button className="btn btn-secondary" onClick={handleCancelEdit} style={{flex: 1}}>
                         ❌ {t('cancel')}
                       </button>
                     </>
@@ -2120,35 +2120,19 @@ function App() {
           {/* Backup Mode Toggle */}
           <div className="form-group">
             <label>{t('executionMode')}</label>
-            <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
+            <div className="nc-seg" style={{marginTop: '10px'}}>
               <button
+                type="button"
+                className={backupMode === 'oneshot' ? 'active' : ''}
                 onClick={() => setBackupMode('oneshot')}
-                style={{
-                  flex: 1,
-                  padding: '10px',
-                  backgroundColor: backupMode === 'oneshot' ? '#667eea' : '#e2e8f0',
-                  color: backupMode === 'oneshot' ? 'white' : '#4a5568',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontWeight: 'bold'
-                }}
               >
                 <span className="compact-text-long">⚡ {t('oneshotMode')}</span>
                 <span className="compact-text-short">⚡ {t('oneshotModeShort')}</span>
               </button>
               <button
+                type="button"
+                className={backupMode === 'scheduled' ? 'active' : ''}
                 onClick={() => setBackupMode('scheduled')}
-                style={{
-                  flex: 1,
-                  padding: '10px',
-                  backgroundColor: backupMode === 'scheduled' ? '#667eea' : '#e2e8f0',
-                  color: backupMode === 'scheduled' ? 'white' : '#4a5568',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontWeight: 'bold'
-                }}
               >
                 <span className="compact-text-long">📅 {t('scheduledMode')}</span>
                 <span className="compact-text-short">📅 {t('scheduledModeShort')}</span>
@@ -2162,7 +2146,7 @@ function App() {
               <h3 style={{marginTop: 0}}>⏰ {t('schedulingConfig')}</h3>
 
               {editingJobId && (
-                <div className="info-box" style={{backgroundColor: '#fff3cd', borderColor: '#ffc107', marginBottom: '15px'}}>
+                <div className="info-box" style={{backgroundColor: 'var(--nc-warn-bg)', borderColor: 'var(--nc-warn-border)', marginBottom: '15px'}}>
                   ✏️ <strong>{t('editMode')}</strong> - {t('editModeText')}
                 </div>
               )}
@@ -2189,7 +2173,7 @@ function App() {
                 </label>
               </div>
 
-              <div className="info-box" style={{backgroundColor: '#eef2ff'}}>
+              <div className="info-box" style={{backgroundColor: 'color-mix(in srgb, var(--nc-accent) 8%, var(--nc-panel-head))'}}>
                 💡 {t('schedulingInfo')} <strong>{scheduleTime}</strong>
                 {runAtStartup && <><br/>{t('andAtStartup')}</>}
               </div>
@@ -2213,7 +2197,7 @@ function App() {
             </div>
           ) : (
             <>
-              <div className="info-box" style={{backgroundColor: '#fff3cd', borderColor: '#ffc107'}}>
+              <div className="info-box" style={{backgroundColor: 'var(--nc-warn-bg)', borderColor: 'var(--nc-warn-border)'}}>
                 ⚠️ <strong>{t('machineBackupWarning')}</strong><br/>
                 {t('machineBackupWarningHint')}
               </div>
@@ -2221,15 +2205,15 @@ function App() {
               <div className="form-group">
                 <label>{t('physicalDisksToBackup')}</label>
                 {disksLoading ? (
-                  <div style={{padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
+                  <div style={{padding: '10px', backgroundColor: 'var(--nc-panel-head)', borderRadius: '4px'}}>
                     🔍 {t('loadingDisks')}
                   </div>
                 ) : disksError ? (
-                  <div style={{padding: '10px', backgroundColor: '#f8d7da', borderRadius: '4px'}}>
+                  <div style={{padding: '10px', backgroundColor: 'var(--nc-err-bg)', borderRadius: '4px'}}>
                     ❌ {t('diskDetectionError')}: {disksError}
                   </div>
                 ) : physicalDisks.length === 0 ? (
-                  <div style={{padding: '10px', backgroundColor: '#fff3cd', borderRadius: '4px'}}>
+                  <div style={{padding: '10px', backgroundColor: 'var(--nc-warn-bg)', borderRadius: '4px'}}>
                     ⚠️ {t('noDisksDetected')}
                   </div>
                 ) : (
@@ -2324,13 +2308,13 @@ function App() {
               </div>
             )}
             {config.usevss && systemInfo.mode === 'Standalone' && !systemInfo.is_admin && (
-              <div className="info-box" style={{marginTop: '10px', backgroundColor: '#fff3cd', borderColor: '#ffc107'}}>
+              <div className="info-box" style={{marginTop: '10px', backgroundColor: 'var(--nc-warn-bg)', borderColor: 'var(--nc-warn-border)'}}>
                 ⚠️ <strong>{t('vssAdminRequired')}</strong><br/>
                 {t('vssAdminHint')}
               </div>
             )}
             {config.usevss && systemInfo.service_available && (
-              <div className="info-box" style={{marginTop: '10px', backgroundColor: '#d1ecf1', borderColor: '#bee5eb'}}>
+              <div className="info-box" style={{marginTop: '10px', backgroundColor: 'color-mix(in srgb, var(--nc-accent) 8%, var(--nc-panel-head))', borderColor: 'color-mix(in srgb, var(--nc-accent) 35%, var(--nc-border))'}}>
                 ℹ️ <strong>{t('vssServiceAvailable')}</strong><br/>
                 {t('vssServiceHint')}
               </div>
@@ -2347,17 +2331,17 @@ function App() {
                 />
                 {t('splitFirstBackup')}
               </label>
-              <div className="info-box" style={{marginTop: '10px', backgroundColor: '#f8f9fa', borderColor: '#dee2e6'}}>
+              <div className="info-box" style={{marginTop: '10px', backgroundColor: 'var(--nc-panel-head)', borderColor: 'var(--nc-border)'}}>
                 ℹ️ {t('splitFirstBackupHint')}
               </div>
             </div>
           )}
 
           {progress > 0 && progress < 100 && (
-            <div style={{marginTop: '20px', marginBottom: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #dee2e6'}}>
+            <div style={{marginTop: '20px', marginBottom: '20px', padding: '15px', backgroundColor: 'var(--nc-panel-head)', borderRadius: '8px', border: '1px solid var(--nc-border)'}}>
               <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '10px'}}>
                 <strong style={{fontSize: '15px'}}>📊 {t('backupProgress')}</strong>
-                <span style={{fontSize: '18px', fontWeight: 'bold', color: '#0066cc'}}>{progress}%</span>
+                <span style={{fontSize: '18px', fontWeight: 'bold', color: 'var(--nc-accent)'}}>{progress}%</span>
               </div>
 
               <div className="progress" style={{height: '30px', marginBottom: '12px'}}>
@@ -2377,43 +2361,43 @@ function App() {
 
               <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px'}}>
                 {backupStats.eta !== null && (
-                  <div style={{fontSize: '13px', color: '#495057'}}>
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
                     ⏱️ <strong>{t('timeRemaining')}</strong> {Math.floor(backupStats.eta / 60)}m {backupStats.eta % 60}s
                   </div>
                 )}
                 {backupStats.speed > 0 && (
-                  <div style={{fontSize: '13px', color: '#495057'}}>
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
                     ⚡ <strong>{t('speed')}</strong> {backupStats.speed.toFixed(1)}%/s
                   </div>
                 )}
                 {backupStats.startTime && (
-                  <div style={{fontSize: '13px', color: '#495057'}}>
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
                     ⏰ <strong>{t('elapsedTime')}</strong> {Math.floor((Date.now() - backupStats.startTime) / 1000)}s
                   </div>
                 )}
                 {backupStats.bytesDone > 0 && (
-                  <div style={{fontSize: '13px', color: '#495057'}}>
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
                     📦 <strong>Données :</strong> {Math.round(backupStats.bytesDone / 1048576)}
                     {backupStats.bytesTotal > 0 ? ` / ${Math.round(backupStats.bytesTotal / 1048576)}` : ''} MB
                   </div>
                 )}
                 {(backupStats.newChunks > 0 || backupStats.reusedChunks > 0) && (
-                  <div style={{fontSize: '13px', color: '#495057'}}>
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
                     🧩 <strong>Chunks :</strong> {backupStats.newChunks} new · {backupStats.reusedChunks} reused
                     {backupStats.failedChunks > 0 ? (
-                      <span style={{color: '#c0392b', fontWeight: 'bold'}}> · {backupStats.failedChunks} échoués</span>
+                      <span style={{color: 'var(--nc-err)', fontWeight: 'bold'}}> · {backupStats.failedChunks} échoués</span>
                     ) : ''}
                   </div>
                 )}
                 {backupStats.currentDir && (
-                  <div style={{fontSize: '13px', color: '#495057', gridColumn: '1 / -1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)', gridColumn: '1 / -1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                     📁 <strong>Dossier :</strong> {backupStats.currentDir}
                   </div>
                 )}
               </div>
 
               {status.message && status.type === 'info' && (
-                <div style={{marginTop: '10px', padding: '8px', backgroundColor: '#fff', borderRadius: '4px', fontSize: '13px', color: 'var(--nc-text-dim)', border: '1px solid #e9ecef'}}>
+                <div style={{marginTop: '10px', padding: '8px', backgroundColor: 'var(--nc-panel)', borderRadius: '4px', fontSize: '13px', color: 'var(--nc-text-dim)', border: '1px solid var(--nc-border-soft)'}}>
                   {status.message}
                 </div>
               )}
@@ -2452,17 +2436,17 @@ function App() {
                 <div key={job.id} style={{
                   padding: '15px',
                   marginBottom: '10px',
-                  backgroundColor: '#f8f9fa',
+                  backgroundColor: 'var(--nc-panel-head)',
                   borderRadius: '8px',
-                  border: '1px solid #dee2e6'
+                  border: '1px solid var(--nc-border)'
                 }}>
                   <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                     <div>
                       <strong>{job.name}</strong>
-                      <div style={{fontSize: '14px', color: '#6c757d', marginTop: '5px'}}>
+                      <div style={{fontSize: '14px', color: 'var(--nc-text-dim)', marginTop: '5px'}}>
                         ⏰ {job.scheduleTime} {job.runAtStartup && '• 🚀 Au démarrage'}
                       </div>
-                      <div style={{fontSize: '13px', color: '#6c757d', marginTop: '3px'}}>
+                      <div style={{fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: '3px'}}>
                         📁 {job.backupDirs.join(', ')}
                       </div>
                     </div>
@@ -2524,9 +2508,9 @@ function App() {
                   <div key={job.id} style={{
                     padding: '15px',
                     marginBottom: '10px',
-                    backgroundColor: job.status === 'success' ? '#d4edda' : job.status === 'failed' ? '#f8d7da' : '#fff3cd',
-                    borderRadius: '8px',
-                    border: `1px solid ${job.status === 'success' ? '#c3e6cb' : job.status === 'failed' ? '#f5c6cb' : '#ffeaa7'}`
+                    backgroundColor: job.status === 'success' ? 'color-mix(in srgb, var(--nc-ok) 12%, var(--nc-panel))' : job.status === 'failed' ? 'var(--nc-err-bg)' : 'var(--nc-warn-bg)',
+                    borderRadius: 'var(--nc-radius)',
+                    border: `1px solid ${job.status === 'success' ? 'color-mix(in srgb, var(--nc-ok) 45%, var(--nc-border))' : job.status === 'failed' ? 'color-mix(in srgb, var(--nc-err) 45%, var(--nc-border))' : 'var(--nc-warn-border)'}`
                   }}>
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                       <div style={{flex: 1}}>
@@ -2536,11 +2520,11 @@ function App() {
                           </span>
                           <strong>{job.name}</strong>
                         </div>
-                        <div style={{fontSize: '13px', color: '#6c757d', marginTop: '5px', marginLeft: '30px'}}>
+                        <div style={{fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: '5px', marginLeft: '30px'}}>
                           🕐 {new Date(job.timestamp).toLocaleString('fr-FR')}
                         </div>
                         {job.message && (
-                          <div style={{fontSize: '13px', color: '#495057', marginTop: '5px', marginLeft: '30px'}}>
+                          <div style={{fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: '5px', marginLeft: '30px'}}>
                             💬 {localizeMessage(job.message)}
                           </div>
                         )}
@@ -2577,14 +2561,7 @@ function App() {
           <h2>{t('restoreTitle')}</h2>
 
           {/* BETA Warning */}
-          <div style={{
-            backgroundColor: '#FEF3C7',
-            border: '2px solid #F59E0B',
-            borderRadius: '8px',
-            padding: '12px',
-            marginBottom: '20px',
-            color: '#92400E'
-          }}>
+          <div className="warn-box" style={{marginBottom: '20px'}}>
             <strong>⚠️ {t('restoreBetaTitle')}</strong>
             <p style={{margin: '8px 0 0 0', fontSize: '14px'}}>
               {t('restoreBetaIntro')}
@@ -2641,11 +2618,11 @@ function App() {
             <div style={{
               marginTop: '16px',
               padding: '14px',
-              border: '1px solid #cbd5e1',
+              border: '1px solid var(--nc-border)',
               borderRadius: '8px',
-              backgroundColor: '#f8fafc'
+              backgroundColor: 'var(--nc-panel-head)'
             }}>
-              <p style={{fontSize: '13px', color: '#64748b', marginTop: 0}}>
+              <p style={{fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: 0}}>
                 {t('searchHint').replace('{prefix}', (restoreBackupId || hostname || '?'))}
               </p>
 
@@ -2694,12 +2671,12 @@ function App() {
                   {searchRunning ? `⏳ ${t('searching')}` : `🔎 ${t('searchButton')}`}
                 </button>
                 {searchRunning && (
-                  <button className="btn" type="button" onClick={handleCancelSearch} style={{backgroundColor: '#ef4444'}}>
+                  <button className="btn btn-danger" type="button" onClick={handleCancelSearch}>
                     ✖ {t('cancel')}
                   </button>
                 )}
                 {searchRunning && (
-                  <span style={{fontSize: '13px', color: '#64748b'}}>
+                  <span style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
                     {searchProgress.percent}% — {searchProgress.message}
                   </span>
                 )}
@@ -2707,7 +2684,7 @@ function App() {
 
               {searchResult && (
                 <div style={{marginTop: '14px'}}>
-                  <p style={{fontSize: '13px', color: '#334155', margin: '0 0 6px 0'}}>
+                  <p style={{fontSize: '13px', color: 'var(--nc-text)', margin: '0 0 6px 0'}}>
                     {t('searchSummary')
                       .replace('{hits}', searchResult.hits ? searchResult.hits.length : 0)
                       .replace('{searched}', searchResult.snapshots_searched || 0)
@@ -2716,25 +2693,25 @@ function App() {
                     {searchResult.cancelled ? ` ⚠️ ${t('searchCancelled')}` : ''}
                   </p>
                   {searchResult.snapshots_in_range === 0 && (
-                    <p style={{fontSize: '12px', color: '#b45309', margin: '0 0 8px 0'}}>
+                    <p style={{fontSize: '12px', color: 'var(--nc-warn)', margin: '0 0 8px 0'}}>
                       💡 {t('searchNoSnapshotsInRange')}
                     </p>
                   )}
                   {(searchResult.snapshots_skipped > 0 && !searchAssembleMissing) && (
-                    <p style={{fontSize: '12px', color: '#b45309', margin: '0 0 8px 0'}}>
+                    <p style={{fontSize: '12px', color: 'var(--nc-warn)', margin: '0 0 8px 0'}}>
                       ⚠️ {t('searchSkippedWarning').replace('{n}', searchResult.snapshots_skipped)}
                     </p>
                   )}
 
                   <div style={{
-                    border: '1px solid #cbd5e1',
+                    border: '1px solid var(--nc-border)',
                     borderRadius: '8px',
                     maxHeight: '320px',
                     overflowY: 'auto',
-                    backgroundColor: '#fff'
+                    backgroundColor: 'var(--nc-panel)'
                   }}>
                     {(!searchResult.hits || searchResult.hits.length === 0) ? (
-                      <p style={{padding: '12px', color: '#718096'}}>{t('searchNoResults')}</p>
+                      <p style={{padding: '12px', color: 'var(--nc-text-dim)'}}>{t('searchNoResults')}</p>
                     ) : (
                       searchResult.hits.map((hit, idx) => (
                         <div
@@ -2742,7 +2719,7 @@ function App() {
                           title={hit.origin_path || hit.path}
                           style={{
                             display: 'flex', alignItems: 'center', gap: '10px',
-                            padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontSize: '13px'
+                            padding: '6px 10px', borderBottom: '1px solid var(--nc-border-soft)', fontSize: '13px'
                           }}
                         >
                           <span style={{fontSize: '15px'}}>{hit.is_dir ? '📁' : '📄'}</span>
@@ -2750,10 +2727,10 @@ function App() {
                             <div style={{fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                               {hit.path.split('/').pop() || hit.path}
                             </div>
-                            <div style={{color: '#64748b', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                            <div style={{color: 'var(--nc-text-dim)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                               {hit.origin_path || hit.path}
                             </div>
-                            <div style={{color: '#94a3b8', fontSize: '11px'}}>
+                            <div style={{color: 'var(--nc-text-dim)', fontSize: '11px'}}>
                               {hit.backup_id} · {new Date(hit.snapshot_time * 1000).toLocaleString()}
                               {hit.is_dir ? '' : ` · ${formatBytes(hit.size)}`}
                             </div>
@@ -2780,19 +2757,14 @@ function App() {
               <h3>{t('availableSnapshots')}</h3>
               <div className="grid">
                 {snapshots.length === 0 ? (
-                  <p style={{color: '#718096'}}>{t('noSnapshotFound')}</p>
+                  <p style={{color: 'var(--nc-text-dim)'}}>{t('noSnapshotFound')}</p>
                 ) : (
                   snapshots.map((snap, idx) => {
                     const isActive = selectedSnapshot && selectedSnapshot.id === snap.id && selectedSnapshot.backup_id === snap.backup_id
                     return (
                       <div
                         key={idx}
-                        className="card"
-                        style={{
-                          cursor: 'pointer',
-                          border: isActive ? '2px solid var(--nc-accent)' : undefined,
-                          backgroundColor: isActive ? 'var(--nc-row-selected)' : undefined
-                        }}
+                        className={'card selectable' + (isActive ? ' nc-selected' : '')}
                         onClick={() => handleSelectSnapshot(snap)}
                       >
                         <h3>📸 {snap.time}</h3>
@@ -2818,11 +2790,11 @@ function App() {
             <div style={{
               marginTop: '20px',
               padding: '10px 14px',
-              border: '1px solid #c7d2fe',
-              backgroundColor: '#eef2ff',
+              border: '1px solid color-mix(in srgb, var(--nc-accent) 35%, var(--nc-border))',
+              backgroundColor: 'color-mix(in srgb, var(--nc-accent) 8%, var(--nc-panel-head))',
               borderRadius: '8px',
               fontSize: '13px',
-              color: '#1e293b',
+              color: 'var(--nc-text)',
               display: 'grid',
               gridTemplateColumns: 'auto 1fr',
               columnGap: '12px',
@@ -2852,15 +2824,15 @@ function App() {
                   🔄 {t('reloadTree') || 'Recharger'}
                 </button>
               </div>
-              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '8px', marginTop: '6px'}}>
+              <p style={{fontSize: '13px', color: 'var(--nc-text-dim)', marginBottom: '8px', marginTop: '6px'}}>
                 {t('treeHint')}
               </p>
               <div style={{
-                border: '1px solid #cbd5e1',
+                border: '1px solid var(--nc-border)',
                 borderRadius: '8px',
                 maxHeight: '360px',
                 overflowY: 'auto',
-                backgroundColor: '#fff'
+                backgroundColor: 'var(--nc-panel)'
               }}>
                 {snapshotEntries.length === 0 && selectedSnapshot && isVolumeSnapshot(selectedSnapshot) ? (
                   <div style={{padding: '12px'}}>
@@ -2986,9 +2958,9 @@ function App() {
                   gap: '20px',
                   marginBottom: '14px',
                   padding: '10px 14px',
-                  border: '1px solid #cbd5e1',
+                  border: '1px solid var(--nc-border)',
                   borderRadius: '8px',
-                  backgroundColor: '#f8fafc'
+                  backgroundColor: 'var(--nc-panel-head)'
                 }}>
                   <label
                     title={blockerTooltip}
@@ -3007,7 +2979,7 @@ function App() {
                       onChange={() => setRestoreMode('original')}
                     />
                     <strong>{t('restoreModeInPlace') || 'Restaurer in-place'}</strong>
-                    {blocker && <span style={{fontSize: '11px', color: '#dc2626'}}> ({blockerTooltip})</span>}
+                    {blocker && <span style={{fontSize: '11px', color: 'var(--nc-err)'}}> ({blockerTooltip})</span>}
                   </label>
                   <label style={{display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer'}}>
                     <input
@@ -3026,16 +2998,16 @@ function App() {
                   <div style={{
                     marginBottom: '14px',
                     padding: '10px 14px',
-                    border: '1px solid #fca5a5',
-                    backgroundColor: '#fef2f2',
+                    border: '1px solid color-mix(in srgb, var(--nc-err) 45%, var(--nc-border))',
+                    backgroundColor: 'var(--nc-err-bg)',
                     borderRadius: '8px',
                     fontSize: '13px'
                   }}>
-                    <div style={{color: '#991b1b', marginBottom: '6px'}}>
+                    <div style={{color: 'var(--nc-err)', marginBottom: '6px'}}>
                       ⚠️ {t('inPlaceWarning').replace('{path}', snapshotMeta?.original_path || '?')}
                     </div>
                     {crossHost && (
-                      <label style={{display: 'flex', alignItems: 'center', gap: '6px', color: '#7c2d12'}}>
+                      <label style={{display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--nc-text)'}}>
                         <input
                           type="checkbox"
                           checked={restoreAllowCrossHost}
@@ -3074,7 +3046,7 @@ function App() {
                         onChange={(e) => setRestoreKeepTree(e.target.checked)}
                       />
                       {t('keepTreeLabel') || 'Conserver l\'arborescence d\'origine'}
-                      <span style={{fontSize: '12px', color: '#64748b'}}>
+                      <span style={{fontSize: '12px', color: 'var(--nc-text-dim)'}}>
                         {restoreKeepTree
                           ? (t('keepTreeOnHint') || '(dest/Users/alice/doc.txt)')
                           : (t('keepTreeOffHint') || '(dest/doc.txt — recommandé pour un fichier seul)')}
@@ -3122,15 +3094,15 @@ function App() {
 
                 {restoreLoading && (
                   <div style={{marginTop: '12px'}}>
-                    <div style={{height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden'}}>
+                    <div style={{height: '8px', backgroundColor: 'var(--nc-border-soft)', borderRadius: '4px', overflow: 'hidden'}}>
                       <div style={{
                         height: '100%',
                         width: `${restoreProgress}%`,
-                        backgroundColor: '#2563eb',
+                        backgroundColor: 'var(--nc-accent)',
                         transition: 'width 0.3s ease'
                       }}/>
                     </div>
-                    <p style={{textAlign: 'center', fontSize: '13px', color: '#64748b', marginTop: '4px'}}>
+                    <p style={{textAlign: 'center', fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: '4px'}}>
                       {restoreProgress}%
                     </p>
                   </div>
@@ -3162,7 +3134,7 @@ function App() {
 
           <div style={{textAlign: 'center', marginTop: '30px'}}>
             <h3>Nimbus Backup</h3>
-            <p style={{color: '#718096', margin: '10px 0'}}>{t('version')} {appVersion}</p>
+            <p style={{color: 'var(--nc-text-dim)', margin: '10px 0'}}>{t('version')} {appVersion}</p>
 
             {/* Upsell CTA */}
             <div style={{margin: '20px 0'}}>
@@ -3173,15 +3145,15 @@ function App() {
                 style={{
                   display: 'inline-block',
                   padding: '12px 24px',
-                  backgroundColor: '#667eea',
-                  color: 'white',
+                  backgroundColor: 'var(--nc-accent)',
+                  color: 'var(--nc-accent-text)',
                   textDecoration: 'none',
-                  borderRadius: '8px',
+                  borderRadius: 'var(--nc-radius)',
                   fontWeight: 'bold',
-                  transition: 'background-color 0.3s'
+                  transition: 'filter 0.2s'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#5568d3'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#667eea'}
+                onMouseEnter={(e) => e.target.style.filter = 'brightness(1.1)'}
+                onMouseLeave={(e) => e.target.style.filter = ''}
               >
                 📦 {t('orderStorageCTA')}
               </a>
@@ -3214,10 +3186,10 @@ function App() {
 
             <p style={{marginTop: '30px'}}>
               <strong>{t('copyright')}</strong><br/>
-              <a href="https://nimbus.rdem-systems.com" style={{color: '#667eea'}}>nimbus.rdem-systems.com</a>
+              <a href="https://nimbus.rdem-systems.com" style={{color: 'var(--nc-accent)'}}>nimbus.rdem-systems.com</a>
             </p>
 
-            <p style={{marginTop: '20px', color: '#718096', fontSize: '12px'}}>
+            <p style={{marginTop: '20px', color: 'var(--nc-text-dim)', fontSize: '12px'}}>
               {t('basedOn')}<br/>
               {t('techStack')}
             </p>
