@@ -199,3 +199,13 @@ func (c *chunkCache) put(idx int, data []byte) {
 		delete(c.items, oldest.Value.(*chunkCacheEntry).idx)
 	}
 }
+
+// ensureCapacity grows the cache's capacity when a prefetch window needs more
+// room than it was built with. Never shrinks.
+func (c *chunkCache) ensureCapacity(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n > c.cap {
+		c.cap = n
+	}
+}

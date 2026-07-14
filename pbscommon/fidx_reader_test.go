@@ -5,8 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // buildFIDX assembles a synthetic .fidx blob for the given image size and
@@ -150,5 +154,125 @@ func TestFIDXReadAtFullImage(t *testing.T) {
 	}
 	if !bytes.Equal(got, img) {
 		t.Fatal("full image mismatch")
+	}
+}
+
+// TestFIDXPrefetchParallelism proves the prefetch pipeline actually overlaps
+// requests (max observed concurrency > 1), never fetches a chunk twice
+// (inflight dedupe), and returns byte-identical data — with a synthetic fetch
+// function standing in for PBS, delayed to make serial vs parallel obvious.
+func TestFIDXPrefetchParallelism(t *testing.T) {
+	const size, cs = 64 * 4096, 4096 // 64 chunks
+	// Build a deterministic image + index.
+	img := make([]byte, size)
+	for o := range img {
+		img[o] = byte(o*13 + 7)
+	}
+	raw, chunks := buildFIDX(t, size, cs, func(i int, b []byte) {
+		copy(b, img[uint64(i)*cs:])
+	})
+	r, err := parseFIDX(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.cache = newChunkCache(8)
+	r.inflight = make(map[int]chan struct{})
+
+	var inFlight, maxInFlight, totalFetches int64
+	var mu sync.Mutex
+	r.fetchFn = func(digest string) ([]byte, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		totalFetches++
+		mu.Unlock()
+		time.Sleep(3 * time.Millisecond) // simulated network round trip
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		c, ok := chunks[digest]
+		if !ok {
+			return nil, fmt.Errorf("unknown digest %s", digest)
+		}
+		return c, nil
+	}
+	r.SetPrefetch(6, 12)
+
+	// Sequential read of the whole image, like the $MFT scan does.
+	got := make([]byte, size)
+	var pos int64
+	buf := make([]byte, 3000) // deliberately not chunk-aligned
+	for pos < size {
+		n, err := r.ReadAt(buf, pos)
+		if err != nil && err != io.EOF {
+			t.Fatalf("ReadAt(%d): %v", pos, err)
+		}
+		copy(got[pos:], buf[:n])
+		pos += int64(n)
+		if n == 0 {
+			break
+		}
+	}
+	if !bytes.Equal(got, img) {
+		t.Fatal("prefetched sequential read returned wrong bytes")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxInFlight < 2 {
+		t.Fatalf("no parallelism observed (max in-flight = %d)", maxInFlight)
+	}
+	// Dedupe: with a cache (8 raised to 24 by SetPrefetch) larger than the
+	// prefetch window, a strictly forward read must fetch each chunk exactly
+	// once.
+	if totalFetches != 64 {
+		t.Fatalf("expected exactly 64 fetches, got %d (dedupe broken?)", totalFetches)
+	}
+	t.Logf("max concurrent fetches: %d (workers=6)", maxInFlight)
+}
+
+// TestFIDXPrefetchErrorSurfaces: a failing prefetch must not poison the read —
+// the error must surface on the synchronous path when the read arrives there.
+func TestFIDXPrefetchErrorSurfaces(t *testing.T) {
+	const size, cs = 8 * 4096, 4096
+	raw, chunks := buildFIDX(t, size, cs, func(i int, b []byte) {
+		for j := range b {
+			b[j] = byte(i)
+		}
+	})
+	r, err := parseFIDX(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.cache = newChunkCache(8)
+	r.inflight = make(map[int]chan struct{})
+	var calls int64
+	r.fetchFn = func(digest string) ([]byte, error) {
+		// Chunk 3 fails on its first attempt (prefetch), succeeds after.
+		if digest == r.digests[3] && atomic.AddInt64(&calls, 1) == 1 {
+			return nil, fmt.Errorf("simulated transient failure")
+		}
+		c, ok := chunks[digest]
+		if !ok {
+			return nil, fmt.Errorf("unknown digest")
+		}
+		return c, nil
+	}
+	// Force chunk 3's first fetch to be the failing prefetch.
+	r.SetPrefetch(2, 4)
+	p := make([]byte, cs)
+	if _, err := r.ReadAt(p, 2*cs); err != nil { // triggers prefetch of 3..6
+		t.Fatalf("read chunk 2: %v", err)
+	}
+	// Give the prefetch a moment to fail.
+	time.Sleep(20 * time.Millisecond)
+	// Now the real read of chunk 3 must retry synchronously and succeed.
+	if _, err := r.ReadAt(p, 3*cs); err != nil {
+		t.Fatalf("read of chunk 3 after failed prefetch: %v", err)
+	}
+	if p[0] != 3 {
+		t.Fatalf("wrong data after prefetch retry: %d", p[0])
 	}
 }

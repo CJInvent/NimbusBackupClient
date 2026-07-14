@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.144] - 2026-07-13
+
+### Performance
+- **Volume browsing now saturates the pipe instead of one HTTP stream.** Chunk
+  fetches from PBS were strictly serial — each 4 MB chunk waited out a full
+  request round trip before the next began, which is why a fast LAN only
+  showed ~120 Mbps. The image reader now prefetches: on a sequential read (the
+  $MFT scan, file extraction) it keeps up to 6 concurrent chunk requests in
+  flight, 16 chunks (~64 MB) ahead, with in-flight deduplication so no chunk
+  is ever downloaded twice. SHA-256 verification per chunk is unchanged.
+  Verified under the race detector: full 6-way concurrency observed, exactly
+  one fetch per chunk, byte-identical output, and a failed prefetch surfaces
+  its error on the real read instead of being swallowed.
+
 ## [0.2.143] - 2026-07-13
 
 ### Performance

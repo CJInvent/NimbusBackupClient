@@ -41,8 +41,48 @@ type FIDXReaderAt struct {
 	progress  func(fetched, total int)
 	cancel    func() bool
 
+	// fetchFn retrieves one chunk's plaintext by digest. Defaults to
+	// pbs.GetChunkData; injectable so the prefetch machinery is unit-testable
+	// without a PBS server.
+	fetchFn func(digest string) ([]byte, error)
+
+	// Prefetch pipeline. A single HTTP stream is LATENCY-bound (~120 Mbps on a
+	// LAN): every 4 MB chunk costs a full request round trip before the next
+	// starts. Sequential readers (the $MFT scan, file extraction) tell us
+	// exactly which chunks come next, so on each miss the reader also fetches
+	// the next prefetchDepth chunks with up to prefetchWorkers concurrent
+	// requests. GetChunkData is safe concurrently: fresh request + fresh zstd
+	// decoder per call over net/http's pooled, thread-safe client.
+	prefetchWorkers int
+	prefetchDepth   int
+	prefetchSem     chan struct{}
+
+	inflightMu sync.Mutex
+	inflight   map[int]chan struct{} // chunk index -> closed when its fetch finishes
+
 	mu      sync.Mutex
 	fetched int
+}
+
+// SetPrefetch enables read-ahead: up to depth chunks beyond the current read
+// are fetched with up to workers concurrent requests. Call before reading;
+// pass (0, 0) to disable (the default). The chunk cache must be larger than
+// depth or prefetched data would evict itself — capacity is raised if needed.
+func (r *FIDXReaderAt) SetPrefetch(workers, depth int) {
+	if workers <= 0 || depth <= 0 {
+		r.prefetchWorkers, r.prefetchDepth, r.prefetchSem = 0, 0, nil
+		return
+	}
+	if workers > 16 {
+		workers = 16
+	}
+	if depth > 64 {
+		depth = 64
+	}
+	r.prefetchWorkers = workers
+	r.prefetchDepth = depth
+	r.prefetchSem = make(chan struct{}, workers)
+	r.cache.ensureCapacity(depth * 2)
 }
 
 // SetCancelCheck installs a predicate polled before each read and chunk
@@ -73,6 +113,8 @@ func (pbs *PBSClient) NewFIDXReaderAt(archiveName string, cacheChunks int, progr
 	r.pbs = pbs
 	r.cache = newChunkCache(cacheChunks)
 	r.progress = progress
+	r.fetchFn = pbs.GetChunkData
+	r.inflight = make(map[int]chan struct{})
 	return r, int64(r.size), nil
 }
 
@@ -111,18 +153,58 @@ func parseFIDX(raw []byte) (*FIDXReaderAt, error) {
 	}, nil
 }
 
-// chunkAt returns the plaintext of chunk ci, from cache or by fetching it
-// (verifying SHA-256 against the index digest, same policy as DIDX: a
-// mismatch means corruption or tampering — fail, never serve wrong bytes).
+// chunkAt returns the plaintext of chunk ci — from cache, from an in-flight
+// prefetch, or by fetching it — and kicks off read-ahead of the following
+// chunks when prefetch is enabled.
 func (r *FIDXReaderAt) chunkAt(ci int) ([]byte, error) {
 	if r.cancel != nil && r.cancel() {
 		return nil, ErrReadCancelled
 	}
-	if data, ok := r.cache.get(ci); ok {
-		return data, nil
+	data, err := r.ensureChunk(ci)
+	if err != nil {
+		return nil, err
 	}
+	r.schedulePrefetch(ci)
+	return data, nil
+}
+
+// ensureChunk returns chunk ci, deduplicating against concurrent fetches of
+// the same chunk: if another goroutine (usually a prefetch worker) is already
+// downloading it, wait for that instead of fetching twice.
+func (r *FIDXReaderAt) ensureChunk(ci int) ([]byte, error) {
+	for {
+		if data, ok := r.cache.get(ci); ok {
+			return data, nil
+		}
+		r.inflightMu.Lock()
+		if done, busy := r.inflight[ci]; busy {
+			r.inflightMu.Unlock()
+			<-done // fetch finished (or failed); loop to re-check the cache
+			if data, ok := r.cache.get(ci); ok {
+				return data, nil
+			}
+			// The in-flight fetch failed. Fall through and fetch it ourselves
+			// so the CALLER gets the real error, not a stale cache miss.
+		} else {
+			done := make(chan struct{})
+			r.inflight[ci] = done
+			r.inflightMu.Unlock()
+			data, err := r.fetchAndCache(ci)
+			r.inflightMu.Lock()
+			delete(r.inflight, ci)
+			close(done)
+			r.inflightMu.Unlock()
+			return data, err
+		}
+	}
+}
+
+// fetchAndCache downloads chunk ci, verifies it against the index digest
+// (mismatch = corruption or tampering — fail, never serve wrong bytes), and
+// stores it in the cache.
+func (r *FIDXReaderAt) fetchAndCache(ci int) ([]byte, error) {
 	digest := r.digests[ci]
-	chunk, err := r.pbs.GetChunkData(digest)
+	chunk, err := r.fetchFn(digest)
 	if err != nil {
 		return nil, fmt.Errorf("fetch chunk %s (index %d/%d): %w", digest, ci, len(r.digests), err)
 	}
@@ -148,6 +230,49 @@ func (r *FIDXReaderAt) chunkAt(ci int) ([]byte, error) {
 		r.progress(fetched, len(r.digests))
 	}
 	return chunk, nil
+}
+
+// schedulePrefetch starts background fetches for the chunks after ci, bounded
+// by prefetchDepth ahead and prefetchWorkers concurrent requests. Best-effort
+// by design: a failed prefetch is simply retried synchronously when the read
+// actually reaches that chunk, so the error surfaces on the real read path.
+func (r *FIDXReaderAt) schedulePrefetch(ci int) {
+	if r.prefetchSem == nil {
+		return
+	}
+	for next := ci + 1; next <= ci+r.prefetchDepth && next < len(r.digests); next++ {
+		if r.cancel != nil && r.cancel() {
+			return
+		}
+		if _, ok := r.cache.get(next); ok {
+			continue
+		}
+		r.inflightMu.Lock()
+		if _, busy := r.inflight[next]; busy {
+			r.inflightMu.Unlock()
+			continue
+		}
+		select {
+		case r.prefetchSem <- struct{}{}: // worker slot free
+		default:
+			r.inflightMu.Unlock()
+			return // all workers busy; further look-ahead would just queue
+		}
+		done := make(chan struct{})
+		r.inflight[next] = done
+		r.inflightMu.Unlock()
+
+		go func(idx int, done chan struct{}) {
+			defer func() { <-r.prefetchSem }()
+			if r.cancel == nil || !r.cancel() {
+				_, _ = r.fetchAndCache(idx) // best-effort; real reads surface errors
+			}
+			r.inflightMu.Lock()
+			delete(r.inflight, idx)
+			close(done)
+			r.inflightMu.Unlock()
+		}(next, done)
+	}
 }
 
 // chunkSpan is how many LOGICAL image bytes chunk ci covers (chunkSize, or

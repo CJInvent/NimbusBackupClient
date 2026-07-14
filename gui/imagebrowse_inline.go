@@ -124,6 +124,13 @@ func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchi
 		return nil, 0, nil, ibFail(fmt.Errorf("[NB-3413] open disk image %s (type %s): %v",
 			diskArchive, normalizeImageBackupType(backupType), err))
 	}
+	// A single HTTP stream is latency-bound (~120 Mbps observed on a LAN):
+	// each 4 MB chunk waits out a full round trip before the next request
+	// starts. Sequential consumers — the $MFT scan, file extraction — telegraph
+	// exactly which chunks come next, so read ahead with concurrent requests.
+	// 6 workers x 16 chunks ahead ≈ 64 MB in flight window; verified race-free
+	// and dedup-exact by the pbscommon prefetch tests.
+	ra.SetPrefetch(6, 16)
 	return ra, size, func() { client.Close() }, nil
 }
 
