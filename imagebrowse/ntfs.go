@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
+	"slices"
 	"strings"
+	"sync"
 
 	ntfs "www.velocidex.com/golang/go-ntfs/parser"
 )
@@ -26,6 +28,12 @@ const ntfsUsedBitmapCap = 64 << 20
 
 type ntfsFS struct {
 	ctx *ntfs.NTFSContext
+
+	// $SDS security-descriptor index, built lazily on first permissions
+	// request (see ntfs_security.go). Browsing never pays for it.
+	sdsOnce sync.Once
+	sds     map[uint32][]byte
+	sdsErr  error
 }
 
 func openNTFS(r io.ReaderAt) (Filesystem, error) {
@@ -49,7 +57,18 @@ func (f *ntfsFS) root() (*ntfs.MFT_ENTRY, error) {
 // listings — they are not user data, and several are unreadable through the
 // ordinary data path.
 func isMeta(name string) bool {
-	return name == "" || name == "." || name == ".." || strings.HasPrefix(name, "$")
+	if name == "" || name == "." || name == ".." {
+		return true
+	}
+	// ListDir surfaces alternate data streams as "name:stream" pseudo-entries;
+	// those are not files — they are carried by StreamLister and the ADS
+	// restore option. NB: legitimate $-prefixed USER directories (e.g.
+	// $WINDOWS.~BT) are NOT filtered here; only the reserved metafile records
+	// are excluded, and that happens by MFT entry number in FullTree.
+	if strings.Contains(name, ":") {
+		return true
+	}
+	return false
 }
 
 func (f *ntfsFS) open(p string) (*ntfs.MFT_ENTRY, error) {
@@ -78,6 +97,11 @@ func (f *ntfsFS) List(dir string) ([]Entry, error) {
 	out := make([]Entry, 0, len(infos))
 	for _, fi := range infos {
 		if fi == nil || isMeta(fi.Name) {
+			continue
+		}
+		// Reserved metafiles live in the root; hide them there (FullTree does
+		// the same by entry number < 24). $-named USER dirs elsewhere show.
+		if base == "/" && strings.HasPrefix(fi.Name, "$") && ntfsReservedName(fi.Name) {
 			continue
 		}
 		out = append(out, Entry{
@@ -205,7 +229,11 @@ const ntfsMaxRecords = 4_000_000
 // volume.
 func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done, total int64)) ([]Entry, error) {
 	if maxEntries <= 0 {
-		maxEntries = 250000
+		// Unlimited. The result lives in the GO-side session cache and is
+		// served to the UI one directory at a time — there is no JSON-size
+		// reason to cap it, and capping was exactly the "most of my C: drive
+		// is hiding" bug: a random (map-ordered!) 250k subset of 1.4M records.
+		maxEntries = int(^uint(0) >> 1)
 	}
 
 	// The $MFT is itself a file (record 0); read it as a stream.
@@ -258,6 +286,14 @@ func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done
 		if name == "" {
 			continue
 		}
+		// Skip only TRUE NTFS metafiles: the reserved records (0-23: $MFT,
+		// $Bitmap, $Secure, $Extend, ...). A user directory that merely STARTS
+		// with '$' — $WINDOWS.~BT, $AV_ASW, $WinREAgent — is real data and
+		// must show. ($Extend's children have a parent outside the record map
+		// and drop out of path resolution on their own.)
+		if entry < 24 && strings.HasPrefix(name, "$") {
+			continue
+		}
 		if len(records) >= ntfsMaxRecords {
 			return nil, fmt.Errorf("volume has more than %d MFT records — too large for a full tree listing", ntfsMaxRecords)
 		}
@@ -288,8 +324,8 @@ func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done
 			return "", false
 		}
 		r, ok := records[e]
-		if !ok || strings.HasPrefix(r.name, "$") {
-			paths[e] = "\x00" // memoize the failure
+		if !ok {
+			paths[e] = "\x00" // memoize the failure (parent is a metafile or gone)
 			return "", false
 		}
 		parentPath, ok := resolve(r.parent, depth+1)
@@ -302,11 +338,17 @@ func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done
 		return p, true
 	}
 
-	out := make([]Entry, 0, min(len(records), maxEntries))
-	for e, r := range records {
+	keys := make([]uint64, 0, len(records))
+	for e := range records {
+		keys = append(keys, e)
+	}
+	slices.Sort(keys) // deterministic: caps (if any) truncate predictably
+	out := make([]Entry, 0, len(records))
+	for _, e := range keys {
 		if e == rootEntry {
 			continue
 		}
+		r := records[e]
 		p, ok := resolve(e, 0)
 		if !ok || p == "" {
 			continue
@@ -371,4 +413,87 @@ func (f *ntfsFS) StoragePlan() (int64, []Extent, error) {
 		return 0, nil, fmt.Errorf("$MFT has no allocated runs")
 	}
 	return size, extents, nil
+}
+
+// ---- alternate data streams --------------------------------------------------
+
+const ntfsAttrData = 128 // $DATA attribute type
+
+// ListStreams implements StreamLister: the named $DATA attributes of a file.
+// (The unnamed attribute is the file's main content and is not listed.)
+func (f *ntfsFS) ListStreams(p string) ([]StreamInfo, error) {
+	e, err := f.open(p)
+	if err != nil {
+		return nil, err
+	}
+	var out []StreamInfo
+	seen := map[string]bool{}
+	for _, attr := range e.EnumerateAttributes(f.ctx) {
+		if attr.Type().Value != ntfsAttrData {
+			continue
+		}
+		name := attr.Name()
+		if name == "" || seen[name] {
+			continue // unnamed main stream, or a continuation record of one we have
+		}
+		seen[name] = true
+		out = append(out, StreamInfo{Name: name, Size: ntfsAttrSize(attr)})
+	}
+	return out, nil
+}
+
+// ExtractStream implements StreamLister for one named stream.
+func (f *ntfsFS) ExtractStream(p, stream string, w io.Writer) (int64, error) {
+	if stream == "" {
+		return f.ExtractFile(p, w)
+	}
+	e, err := f.open(p)
+	if err != nil {
+		return 0, err
+	}
+	var size int64 = -1
+	for _, attr := range e.EnumerateAttributes(f.ctx) {
+		if attr.Type().Value == ntfsAttrData && attr.Name() == stream {
+			size = int64(ntfsAttrSize(attr))
+			break
+		}
+	}
+	if size < 0 {
+		return 0, fmt.Errorf("%s has no stream %q", p, stream)
+	}
+	reader, err := ntfs.OpenStream(f.ctx, e, ntfsAttrData, 65535, stream)
+	if err != nil {
+		return 0, fmt.Errorf("open stream %s:%s: %w", p, stream, err)
+	}
+	n, err := io.Copy(w, io.NewSectionReader(reader, 0, size))
+	if err != nil {
+		return n, fmt.Errorf("read stream %s:%s: %w", p, stream, err)
+	}
+	if n != size {
+		return n, fmt.Errorf("stream %s:%s: read %d of %d bytes", p, stream, n, size)
+	}
+	return n, nil
+}
+
+// ntfsReservedName reports whether name is one of the reserved NTFS metafile
+// names that occupy MFT records 0-23. Only these are hidden from listings;
+// any other $-prefixed name is user data.
+func ntfsReservedName(name string) bool {
+	switch name {
+	case "$MFT", "$MFTMirr", "$LogFile", "$Volume", "$AttrDef",
+		"$Bitmap", "$Boot", "$BadClus", "$Secure", "$UpCase", "$Extend":
+		return true
+	}
+	return false
+}
+
+// ntfsAttrSize returns an attribute's data size. Resident attributes (small
+// streams live inline in the MFT record) carry it in Content_size;
+// Actual_size is only meaningful for non-resident attributes — reading it on
+// a resident one returns bytes of the content itself as a bogus number.
+func ntfsAttrSize(attr *ntfs.NTFS_ATTRIBUTE) uint64 {
+	if attr.IsResident() {
+		return uint64(attr.Content_size())
+	}
+	return attr.Actual_size()
 }

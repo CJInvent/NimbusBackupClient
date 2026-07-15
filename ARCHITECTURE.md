@@ -286,6 +286,17 @@ disk). Browsing them means parsing the image ourselves:
   parent references. Over the chunk reader this moves ~the MFT's size instead
   of a large fraction of the volume. FAT/exFAT use the generic walk (small).
   The fast path is tested to produce the identical tree to the walk.
+- **Capability interfaces** on the opened filesystem: `TreeLister` (fast
+  $MFT full tree), `Planner` (exact $MFT extent plan for prefetch),
+  `StreamLister` (alternate data streams) and `SecurityReader` (security
+  descriptors — SecurityId→$Secure/$SDS with legacy inline-0x50 fallback).
+  The GUI type-asserts; absence of a capability is exactly what greys the
+  matching restore option, with the reason shown to the user.
+- **One restore workflow** (`RestoreImageSelection` / pxar restore): options
+  are best-effort per file AFTER data placement — mtimes, then ADS, then the
+  security descriptor LAST (a restrictive DACL could lock us out of a file we
+  still need to write streams onto). Metadata failures warn in the backup log;
+  the file's data is already safe.
 - **The user picks the partition — always.** Auto-selecting the first NTFS
   volume put people inside WinRE. `ListImagePartitions` returns EVERY partition
   (browsable or not) with filesystem, used and allocated size; `partIndex < 1`

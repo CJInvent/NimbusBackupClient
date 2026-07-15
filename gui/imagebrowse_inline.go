@@ -406,13 +406,26 @@ func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskAr
 // shape of the (known-good) directory lister.
 func (a *App) LastImageListTruncated() bool { return a.lastImageTruncated }
 
-// extractSelection stages the chosen paths from an image partition into
-// stageDir, preserving their relative structure. Shared by download and
-// restore so the two can never drift.
-func (a *App) extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
-	includePaths []string, stageDir string, emit func(float64, string)) error {
+// extractedMeta is what a restore needs to finish one file after its bytes
+// are in place: source mtime, its named streams (when ADS restore is on), and
+// its security descriptor (when permissions restore is on). Keyed by the
+// path RELATIVE to the staging dir — the same key the placement walk sees.
+type extractedMeta struct {
+	MTime   int64
+	Streams map[string][]byte // stream name -> content
+	SD      []byte            // self-relative security descriptor
+}
 
-	return a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
+// extractSelection stages the chosen paths from an image partition into
+// stageDir, preserving their relative structure, and gathers per-file
+// metadata as requested. Shared by download and restore so they cannot drift:
+// download simply passes wantStreams=false, wantSD=false.
+func (a *App) extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+	includePaths []string, stageDir string, wantStreams, wantSD bool,
+	emit func(float64, string)) (map[string]*extractedMeta, error) {
+
+	meta := map[string]*extractedMeta{}
+	err := a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
 		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
 			files, err := expandImageSelection(fs, includePaths)
 			if err != nil {
@@ -421,10 +434,14 @@ func (a *App) extractSelection(pbsID, backupID, snapshotID, backupType, diskArch
 			if len(files) == 0 {
 				return ibFail(errors.New("[NB-3420] the selection contains no files"))
 			}
+			streamer, canStream := fs.(imagebrowse.StreamLister)
+			secReader, canSD := fs.(imagebrowse.SecurityReader)
+
 			for i, f := range files {
 				emit(5+float64(i)/float64(len(files))*80,
 					fmt.Sprintf("Extracting %d/%d: %s", i+1, len(files), filepath.Base(f)))
-				out := filepath.Join(stageDir, filepath.FromSlash(strings.TrimPrefix(f, "/")))
+				rel := filepath.FromSlash(strings.TrimPrefix(f, "/"))
+				out := filepath.Join(stageDir, rel)
 				if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 					return ibFail(err)
 				}
@@ -439,9 +456,43 @@ func (a *App) extractSelection(pbsID, backupID, snapshotID, backupType, diskArch
 				if cerr := w.Close(); cerr != nil {
 					return ibFail(cerr)
 				}
+
+				m := &extractedMeta{}
+				if st, serr := fs.Stat(f); serr == nil {
+					m.MTime = st.ModTime
+				}
+				// ADS: pulled at extraction time, applied after placement.
+				if wantStreams && canStream {
+					if streams, lerr := streamer.ListStreams(f); lerr == nil {
+						for _, si := range streams {
+							var buf strings.Builder
+							if _, xerr := streamer.ExtractStream(f, si.Name, &buf); xerr == nil {
+								if m.Streams == nil {
+									m.Streams = map[string][]byte{}
+								}
+								m.Streams[si.Name] = []byte(buf.String())
+							} else {
+								writeBackupLog(fmt.Sprintf("ImageBrowse WARN: stream %s:%s not extracted: %v", f, si.Name, xerr))
+							}
+						}
+					}
+				}
+				// Permissions: SD bytes exactly as the source volume stored them.
+				if wantSD && canSD {
+					if sd, sderr := secReader.SecurityDescriptor(f); sderr == nil {
+						m.SD = sd
+					} else {
+						writeBackupLog(fmt.Sprintf("ImageBrowse WARN: no security descriptor for %s: %v", f, sderr))
+					}
+				}
+				meta[rel] = m
 			}
 			return nil
 		})
+	if err != nil {
+		return nil, err
+	}
+	return meta, nil
 }
 
 // DownloadImageSelection extracts a selection from a volume backup to
@@ -497,8 +548,8 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 		}
 	}
 
-	if err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
-		includePaths, staging, emit); err != nil {
+	if _, err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
+		includePaths, staging, false, false, emit); err != nil {
 		emit(100, "Download failed")
 		return err
 	}
@@ -530,11 +581,16 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 // destination folder (not a zip). This is what the Restore button does for an
 // image backup: the old path tried to open backup.pxar.didx as a "host" backup
 // and PBS 400'd, because a volume snapshot has neither.
+// The restoreMtimes / restoreACLs / restoreADS options only have meaning when
+// the SOURCE stores them (NTFS) — the frontend greys them out otherwise, and
+// the backend treats them as best-effort per file: metadata failures warn in
+// the backup log, the file's data is already safely in place.
 func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
-	includePaths []string, destDir string, keepStructure, overwrite bool, neededBytes int64) error {
+	includePaths []string, destDir string, keepStructure, overwrite bool,
+	restoreMtimes, restoreACLs, restoreADS bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("RestoreImageSelection(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v)",
-		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite))
+	writeDebugLog(fmt.Sprintf("RestoreImageSelection(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
+		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
 
 	if destDir == "" {
 		return ibFail(errors.New(errDestPathRequired))
@@ -572,16 +628,19 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	if err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
-		includePaths, staging, emit); err != nil {
+	meta, err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
+		includePaths, staging, restoreADS, restoreACLs, emit)
+	if err != nil {
 		emit(100, "Restore failed")
 		return err
 	}
 
-	// Move the staged tree into place. keepStructure=false flattens to base
-	// names (matching the directory-restore option of the same name).
+	// Move the staged tree into place, then finish each file with its
+	// metadata: mtime, alternate data streams, security descriptor — in that
+	// order, and SD last, because a restrictive DACL could lock US out of the
+	// very file we still need to write streams onto.
 	emit(90, "Writing files…")
-	count := 0
+	count, warned := 0, 0
 	err = filepath.Walk(staging, func(p string, info os.FileInfo, werr error) error {
 		if werr != nil || info.IsDir() {
 			return werr
@@ -604,14 +663,51 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 			return err
 		}
 		count++
+
+		m := meta[rel]
+		if m == nil {
+			return nil
+		}
+		if restoreADS {
+			for name, data := range m.Streams {
+				if aerr := writeADS(target, name, data); aerr != nil {
+					warned++
+					writeBackupLog(fmt.Sprintf("ImageBrowse WARN: ADS %s:%s not restored: %v", target, name, aerr))
+				}
+			}
+		}
+		if restoreMtimes && m.MTime > 0 {
+			ts := time.Unix(m.MTime, 0)
+			if terr := os.Chtimes(target, ts, ts); terr != nil {
+				warned++
+				writeBackupLog(fmt.Sprintf("ImageBrowse WARN: mtime not restored on %s: %v", target, terr))
+			}
+		}
+		if restoreACLs && len(m.SD) > 0 {
+			warning, aerr := applyNTFSSecurity(target, m.SD)
+			if aerr != nil {
+				warned++
+				writeBackupLog(fmt.Sprintf("ImageBrowse WARN: permissions not restored on %s: %v", target, aerr))
+			} else if warning != "" {
+				warned++
+				writeBackupLog(fmt.Sprintf("ImageBrowse WARN: %s: %s", target, warning))
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		emit(100, "Restore failed")
 		return ibFail(err)
 	}
+	if warned > 0 {
+		writeBackupLog(fmt.Sprintf("ImageBrowse: restore finished with %d metadata warning(s) — files themselves are intact", warned))
+	}
 
-	emit(100, fmt.Sprintf("Restored %d file(s)", count))
+	doneMsg := fmt.Sprintf("Restored %d file(s)", count)
+	if warned > 0 {
+		doneMsg += fmt.Sprintf(" — %d metadata warning(s), see the log", warned)
+	}
+	emit(100, doneMsg)
 	writeBackupLog(fmt.Sprintf("ImageBrowse: restored %d file(s) from %s partition %d to %s",
 		count, diskArchive, partIndex, destDir))
 	return nil

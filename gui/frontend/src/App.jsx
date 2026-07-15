@@ -171,6 +171,7 @@ function App() {
   const [imageCwd, setImageCwd] = useState('/')                  // current directory inside the image
   const [imageSort, setImageSort] = useState({ key: 'name', dir: 1 }) // dir: 1 asc, -1 desc
   const [selectedInfo, setSelectedInfo] = useState(new Map())    // path -> {size} for cross-directory selections
+  const [packageAsZip, setPackageAsZip] = useState(false)        // unified workflow: zip to a file instead of restoring to a folder
   // Control server (NimbusControl) status + settings form
   const [cpStatus, setCpStatus] = useState(null)
   const [cpForm, setCpForm] = useState({ url: '', token: '', fp: '' })
@@ -1264,6 +1265,9 @@ function App() {
           restoreDestPath,
           restoreKeepTree,
           restoreOptions.overwrite,
+          restoreMatrix.mtime.on && restoreOptions.timestamps,
+          restoreMatrix.acl.on && restoreOptions.acls,
+          restoreMatrix.ads.on && restoreOptions.ads,
           selectionBytes || 0
         )
         setRestoreLoading(false)
@@ -1508,6 +1512,45 @@ function App() {
   // Navigate to a directory inside the image: fetch just that level from the
   // Go-side cache. The webview never holds more than one directory of rows,
   // so there is nothing to truncate.
+  // The option matrix for the unified restore workflow. ONE place decides
+  // which options apply to the current source + packaging, and WHY not —
+  // the reason is shown as the tooltip on every greyed option.
+  //  - Image backups from NTFS: permissions + ADS come straight from the
+  //    parsed volume (no sidecar needed — the image contains them).
+  //  - Image backups from FAT/exFAT: the format stores neither -> greyed.
+  //  - Directory (pxar) backups: capture of perms/ADS isn't implemented yet
+  //    on the backup side -> greyed, honestly labelled.
+  //  - ZIP packaging can't represent either -> greyed while ZIP is ticked.
+  const restoreMatrix = useMemo(() => {
+    const imgFs = imageDisk && imagePartitions
+      ? (imagePartitions.rows.find(r => r.index === imagePartIndex)?.filesystem || '')
+      : ''
+    const m = {
+      zip:   { on: true, why: '' },
+      mtime: { on: true, why: '' },
+      acl:   { on: false, why: '' },
+      ads:   { on: false, why: '' },
+    }
+    if (imageDisk) {
+      if (imgFs === 'ntfs') {
+        m.acl = { on: true, why: '' }
+        m.ads = { on: true, why: '' }
+      } else {
+        m.acl = { on: false, why: t('naFat') }
+        m.ads = { on: false, why: t('naFat') }
+      }
+    } else {
+      m.acl = { on: false, why: t('naSidecar') }
+      m.ads = { on: false, why: t('naSidecar') }
+    }
+    if (packageAsZip) {
+      m.acl = { on: false, why: t('naZip') }
+      m.ads = { on: false, why: t('naZip') }
+      m.mtime = { on: false, why: t('naZip') }
+    }
+    return m
+  }, [imageDisk, imagePartitions, imagePartIndex, packageAsZip])
+
   const handleImageNavigate = async (dir) => {
     if (!ListImageDirectory || !selectedSnapshot || !imageDisk) return
     try {
@@ -3043,17 +3086,7 @@ function App() {
                       .replace('{n}', selectedPaths.size)
                       .replace('{size}', formatBytes(selectionBytes))}
               </p>
-              <div style={{marginTop: '8px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap'}}>
-                <button
-                  className="btn btn-primary"
-                  disabled={selectedPaths.size === 0 || downloading}
-                  onClick={handleDownloadSelection}
-                  title={t('downloadHint')}
-                >
-                  ⬇️ {downloading ? t('downloadInProgress') : t('downloadSelection')}
-                </button>
-                <span className="hint-text">{t('downloadModesHint')}</span>
-              </div>
+
             </div>
           )}
 
@@ -3169,6 +3202,9 @@ function App() {
                   </>
                 )}
 
+                {/* Unified restore options. Greyed options carry their reason
+                    as the tooltip — the matrix (restoreMatrix) is the single
+                    source of truth for what applies to this source. */}
                 <div style={{display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '12px'}}>
                   <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: isInPlace ? 0.5 : 1}}
                          title={isInPlace ? (t('overwriteForcedInPlace') || '') : ''}>
@@ -3180,30 +3216,54 @@ function App() {
                     />
                     {t('optionOverwrite')}
                   </label>
-                  <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: restoreMatrix.mtime.on ? 1 : 0.5}}
+                         title={restoreMatrix.mtime.why}>
                     <input
                       type="checkbox"
-                      checked={restoreOptions.timestamps}
+                      disabled={!restoreMatrix.mtime.on}
+                      checked={restoreMatrix.mtime.on && restoreOptions.timestamps}
                       onChange={(e) => setRestoreOptions(o => ({...o, timestamps: e.target.checked}))}
                     />
                     {t('optionTimestamps')}
                   </label>
-                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
-                    <input type="checkbox" disabled checked={false} />
-                    {t('optionACLs')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: restoreMatrix.acl.on ? 1 : 0.5}}
+                         title={restoreMatrix.acl.why}>
+                    <input
+                      type="checkbox"
+                      disabled={!restoreMatrix.acl.on}
+                      checked={restoreMatrix.acl.on && restoreOptions.acls}
+                      onChange={(e) => setRestoreOptions(o => ({...o, acls: e.target.checked}))}
+                    />
+                    {t('optionACLs')} <span style={{fontSize: '11px', color: 'var(--nc-warn)'}}>{restoreMatrix.acl.on ? t('betaTag') : ''}</span>
                   </label>
-                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: 0.5}} title={t('optionComingSoon')}>
-                    <input type="checkbox" disabled checked={false} />
-                    {t('optionADS')} <span style={{fontSize: '11px'}}>({t('comingSoon')})</span>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px', opacity: restoreMatrix.ads.on ? 1 : 0.5}}
+                         title={restoreMatrix.ads.why}>
+                    <input
+                      type="checkbox"
+                      disabled={!restoreMatrix.ads.on}
+                      checked={restoreMatrix.ads.on && restoreOptions.ads}
+                      onChange={(e) => setRestoreOptions(o => ({...o, ads: e.target.checked}))}
+                    />
+                    {t('optionADS')}
+                  </label>
+                  <label style={{display: 'flex', alignItems: 'center', gap: '6px'}}
+                         title={t('zipHint')}>
+                    <input
+                      type="checkbox"
+                      checked={packageAsZip}
+                      onChange={(e) => setPackageAsZip(e.target.checked)}
+                    />
+                    {t('optionZip')}
                   </label>
                 </div>
 
                 <button
                   className="btn btn-primary"
-                  onClick={handleRestoreSnapshot}
-                  disabled={restoreLoading || (isInPlace && crossHost && !restoreAllowCrossHost)}
+                  onClick={packageAsZip ? handleDownloadSelection : handleRestoreSnapshot}
+                  disabled={restoreLoading || downloading || (packageAsZip && selectedPaths.size === 0) || (isInPlace && crossHost && !restoreAllowCrossHost)}
+                  title={packageAsZip ? t('zipButtonHint') : ''}
                 >
-                  {restoreLoading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
+                  {restoreLoading || downloading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
                 </button>
 
                 {restoreLoading && (

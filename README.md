@@ -1,157 +1,90 @@
-# Nimbus Backup — Windows client for Proxmox Backup Server
+# Nimbus Backup
 
-🇬🇧 English | [🇫🇷 Français](README.fr.md)
+Windows backup agent for **Proxmox Backup Server** (PBS), built for MSP
+deployment: a native GUI + Windows service pair that backs up directories or
+whole disks to PBS, restores at file granularity from either, and reports into
+[NimbusControl](https://github.com/CJInvent/NimbusControl) for fleet
+monitoring.
 
-[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/rdemsystems/NimbusBackupClient)](https://github.com/rdemsystems/NimbusBackupClient/releases)
-[![Documentation](https://img.shields.io/badge/docs-nimbus.rdem--systems.com-orange)](https://nimbus.rdem-systems.com/en/?utm_source=github)
+> Forked long ago from `tizbac/proxmoxbackupclient_go`; the codebase has since
+> been substantially rewritten.
 
-**Nimbus Backup is an open-source (GPL-3.0) Windows backup client for Proxmox Backup Server (PBS).**
-A modern GUI to back up Windows servers and workstations to PBS — VSS-consistent snapshots, scheduled jobs, file and disk modes, snapshot browsing and restore, multi-PBS support, and a Windows service. Looking for **offsite, immutable** PBS storage without self-hosting? See the [managed service](#️-managed-pbs-offsite--immutable) below.
+## What it does
 
-> Keywords: proxmox backup client windows · PBS client · Windows VSS backup · offsite immutable backup · proxmox backup server GUI.
+**Backup**
+- Directory backups (pxar) and whole-disk **volume backups** (raw image, VSS
+  snapshot based), one-shot or scheduled.
+- Optional split of large initial seeds into resumable parts.
+- Upload bandwidth cap (`upload_limit_mbps`).
+- Failure-alert emails; job history; multi-PBS routing (different paths to
+  different PBS datastores).
 
-## 📦 Download
+**Restore & browse**
+- Directory backups: browse the snapshot tree, restore in place or to an
+  alternate location.
+- **Volume backups: browse INSIDE the disk image without restoring it.**
+  Partitions are parsed in userspace (GPT/MBR + NTFS, FAT12/16/32, exFAT —
+  see `imagebrowse/`), the file table is fetched with an exact chunk plan
+  (fragmentation-proof), and the tree is served one directory at a time —
+  nothing hidden, sortable by name/date/size.
+- **One unified restore workflow** for both backup types: pick files/folders,
+  choose options, one button. Options grey out with a reason when the source
+  can't provide them:
+  | Option | Directory backup | Image (NTFS) | Image (FAT/exFAT) |
+  |---|---|---|---|
+  | Overwrite existing | ✅ | ✅ | ✅ |
+  | Restore modification times | ✅ | ✅ | ✅ |
+  | Restore NTFS permissions | ⛔ needs sidecar capture (planned) | ✅ **read from the image** (BETA) | ⛔ not stored by the format |
+  | Restore alternate data streams | ⛔ needs sidecar capture (planned) | ✅ read from the image | ⛔ not stored by the format |
+  | Package as ZIP | ✅ | ✅ | ✅ (metadata options grey while ZIP) |
+- Download bandwidth cap (`download_limit_mbps`) — one shared token bucket
+  across all concurrent chunk fetches.
 
-👉 **[Download the latest release](https://github.com/rdemsystems/NimbusBackupClient/releases)**
+**Fleet (NimbusControl)**
+- Enrollment by one-time token; status, job results and alerting server-side.
 
-> ⚠️ **Windows says "virus detected" (e.g. `Trojan:Win32/Sabsik.FL.A!ml`) or shows a SmartScreen warning?**
-> This is a known **false positive** for Go/Wails applications — it is *not* a virus. The `!ml` suffix means it comes from a machine-learning model that flags *unsigned, low-prevalence* executables.
-> Read [why this happens and how to verify the download](https://nimbus.rdem-systems.com/en/antivirus-false-positive/?utm_source=github).
+## Architecture in one paragraph
 
-### 🔎 Verify any download
+Two processes from one binary: a **Windows service** (`-tags service`,
+LocalSystem — owns VSS, schedules, uploads) and a **GUI** (Wails/WebView2 —
+thin frontend; talks to the service over an authenticated local API). Restore
+reads run over `pbscommon.FIDXReaderAt`, a lazy `io.ReaderAt` on PBS fixed
+indexes with LRU chunk cache, concurrent prefetch, exact-range plan prefetch
+and rate limiting — so browsing a multi-TB image moves megabytes. Full detail:
+[ARCHITECTURE.md](ARCHITECTURE.md). Never reintroduce native file dialogs
+(§7c) — they fault natively and kill the process.
 
-Every release ships SHA-256 checksums and a signed **build-provenance attestation** (cryptographic proof the binary was produced by this repo's CI, from a specific commit):
+## Modules
 
-```powershell
-Get-FileHash .\NimbusBackup.exe -Algorithm SHA256   # compare against SHA256SUMS.txt
-gh attestation verify .\NimbusBackup.exe --repo rdemsystems/NimbusBackupClient
+| Path | What it is |
+|---|---|
+| `gui/` | The application (GUI + service variants, Wails frontend under `gui/frontend/`) |
+| `pbscommon/` | PBS protocol: sessions, chunking, DIDX/FIDX readers, prefetch, rate limit |
+| `imagebrowse/` | Userspace partition + filesystem readers (NTFS/FAT/exFAT), ADS, NTFS security descriptors — see [imagebrowse/README.md](imagebrowse/README.md) |
+| `controlplane/` | Agent side of NimbusControl enrollment/reporting |
+| `docs/` | Deep dives: control plane, restore guide, image-browse scope |
+
+## Building
+
+CI (GitHub Actions) builds the MSI on every tag: `git tag vX.Y.Z && git push
+origin master vX.Y.Z`. Locally:
+
+```
+cd gui/frontend && npm ci && npm run build   # webview assets
+cd ..                                        # gui/
+go build .                                   # GUI variant
+go build -tags service .                     # service variant
 ```
 
-**VirusTotal — 0 detections.** Independent multi-engine reports for recent MSI installers:
-[0.2.108](https://www.virustotal.com/gui/file/6e8fb7ce9af740d470e947addb8daba4331c0b88e8bfdec9e0697ea8f7f29e9e/detection) ·
-[0.2.107](https://www.virustotal.com/gui/file/6fd6c6fa77e0305c129ef882a3745100aa6033187a6d52a4af94149ab6b666d2/detection) ·
-[0.2.106](https://www.virustotal.com/gui/file/ad6e56700ed9df8e088906e38cee2e2882fc7045f4e39269de0e379a01784ad7/detection)
+Go ≥ 1.25. Tests: `go test ./...` in `pbscommon/` (race-detector prefetch
+suites) and `imagebrowse/` (real mkfs-built fixture images in `testdata/`).
 
-> ℹ️ **Code signing:** Windows binaries are **not yet Authenticode-signed** (an OSS certificate via [SignPath Foundation](https://signpath.org) is pending). Until then, provenance is established via the attestation and checksums above.
+## Support notes
 
-## ☁️ Managed PBS (offsite & immutable)
-
-Don't want to self-host Proxmox Backup Server? Use our fully managed, **offsite immutable** PBS datastores:
-👉 **[Configure your backup & see pricing](https://nimbus.rdem-systems.com/en/choose-backup/?utm_source=github)**
-
-- ✅ From €12/TB/month
-- ✅ 1 TB free trial
-- ✅ [NimbusBackup — Managed PBS hosting in France](https://nimbus.rdem-systems.com/en/?utm_source=github)
-
-## 📚 Documentation
-
-- **Complete Proxmox Backup guide** — PBS deployment best practices ([🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/complete-proxmox-backup-guide/?utm_source=github))
-- **Back up Windows with Proxmox Backup Server** — Windows-specific deployment guide ([🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/backup-windows-proxmox-backup-server/?utm_source=github))
-- **PBS vs Veeam** — Proxmox Backup Server comparison ([🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/pbs-vs-veeam-proxmox-backup-comparison/?utm_source=github))
-
-
-## 🛠️ For developers
-
-Architecture, module layout, build-tag rules, the control-plane API, the security model, and planned work are documented in **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — start there to pick up development. Feature status matrix: [`FEATURES_STATUS.md`](FEATURES_STATUS.md).
-
-## ✨ Features
-
-### GUI interface (recommended)
-- **🌍 Multi-language** — English & French interface
-- User-friendly configuration with connection testing
-- Real-time backup progress with speed and ETA
-- VSS (Volume Shadow Copy) support for consistent backups
-- Multi-folder backup, file and disk modes
-- Snapshot browsing, file search (wildcards) and restore
-- Multi-PBS server support, certificate fingerprint pinning (TOFU)
-- Windows service mode + scheduled backups
-- Debug logging for troubleshooting
-
-### 📸 Screenshots
-
-![Server configuration](docs/screenshots/nimbus-gui-liste-servers.png)
-*Multi-PBS server management with status indicators*
-
-![Add server form](docs/screenshots/nimbus-gui-add-server-form.png)
-*Easy server configuration with connection testing*
-
-![One-shot backup](docs/screenshots/nimbus-gui-one-shot-backup.png)
-*Real-time backup progress with ETA and speed*
-
-### Smart system exclusions (file mode)
-When backing up an entire drive (e.g. `D:\`), Nimbus Backup automatically excludes:
-
-**System folders:** `System Volume Information` (VSS storage, can be 100+ GB), `$RECYCLE.BIN`, `Recovery`.
-**System files:** `pagefile.sys`, `hiberfil.sys`, `swapfile.sys`.
-
-**Why it matters:** a drive may report 1.03 TB used while the real files are ~141 GB. Without exclusions the backup would include VSS snapshots (wasted space and time); with them the backup size matches the real data.
-
-**Recommendation:** use **file mode** (default) with auto-exclusions for file-level backups; use **disk mode** in a separate job for bare-metal restore (includes everything).
-
-### Security & quality
-- Input validation and credential sanitization
-- Path-traversal prevention
-- Retry logic with exponential backoff
-- Comprehensive error handling and tests, 100% lint compliance
-
-## 🚀 Quick start
-
-1. Download `NimbusBackup.exe` (or the `.msi`) from releases
-2. Run with administrator privileges (required for VSS)
-3. Configure your PBS connection and test it
-4. Select directories to back up
-5. Start the backup
-
-## 📋 Requirements
-
-- Windows 10/11 (64-bit)
-- Administrator rights (for VSS snapshots)
-- Network access to a Proxmox Backup Server
-
-## 🔨 Building from source
-
-### Prerequisites
-- Go 1.22 or later
-- Node.js 20 or later
-- Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-
-### Build
-```bash
-cd gui
-npm install --prefix frontend
-wails build      # or: wails dev  (hot reload)
-```
-
-## 📝 Source project
-
-This project is a fork of [tizbac/proxmoxbackupclient_go](https://github.com/tizbac/proxmoxbackupclient_go), enhanced with a modern GUI and additional features for Windows users.
-
-**Original:** Proxmox Backup Client in Go · **Author:** Tiziano Bacocco (tizbac) · **License:** GPLv3
-
-| Feature                 | tizbac/proxmoxbackupclient_go | NimbusBackupClient (this fork) |
-|-------------------------|:-----------------------------:|:------------------------------:|
-| CLI mode                | ✅                             | ✅                              |
-| Wails GUI               | ❌                             | ✅                              |
-| Multi-language (FR/EN)  | ❌                             | ✅                              |
-| Real-time progress      | ❌                             | ✅                              |
-| Smart system exclusions | ❌                             | ✅                              |
-| Multi-PBS support       | ❌                             | ✅                              |
-| CI/CD pipelines         | ❌                             | ✅                              |
-| Comprehensive tests     | ❌                             | ✅                              |
-
-## ⚠️ Disclaimer
-
-This software is provided as-is. While we strive for reliability, we take no responsibility for any data loss or damage. Always test your backups and verify restoration before relying on them in production.
-
-## 📄 License
-
-GPLv3 — see the [LICENSE](LICENSE) file.
-
-## About RDEM Systems
-
-NimbusBackupClient is developed and maintained by [RDEM Systems](https://www.rdem-systems.com/), a French infrastructure provider specialized in Proxmox VE/PBS managed services and NTP/NTS infrastructure. We operate [11 public NTS servers](https://github.com/jauderho/nts-servers) listed in the community reference, and provide [fully managed PBS hosting](https://nimbus.rdem-systems.com/en/?utm_source=github) for users who don't want to self-host.
-
----
-
-**© 2024-2026 RDEM Systems. All rights reserved.**
+- ReFS and BitLocker partitions are detected and refused with a clear reason;
+  full-image restore covers them. (No mature pure-Go ReFS parser exists, and
+  guessing at on-disk structures in a restore tool risks corrupt files.)
+- NTFS permission restore applies the DACL always; owner/group need elevation
+  and downgrade to a logged warning. SACLs are not restored.
+- Error codes: `NB-3xxx` in the GUI map to entries in the backup log at
+  `C:\ProgramData\NimbusBackup`.

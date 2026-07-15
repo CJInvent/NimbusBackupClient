@@ -101,7 +101,7 @@ func sortEntries(e []Entry) {
 // access to the rest of their backup.
 func Walk(fs Filesystem, startPath string, maxEntries int, cancel func() bool) ([]Entry, error) {
 	if maxEntries <= 0 {
-		maxEntries = 250000
+		maxEntries = int(^uint(0) >> 1) // unlimited: results stay in Go memory
 	}
 	var out []Entry
 	queue := []string{CleanPath(startPath)}
@@ -194,4 +194,31 @@ type Planner interface {
 	// StoragePlan returns the file table's logical size and its on-disk
 	// extents in partition byte space, ordered as they will be read.
 	StoragePlan() (size int64, extents []Extent, err error)
+}
+
+// StreamInfo describes one alternate data stream (ADS) of a file.
+type StreamInfo struct {
+	Name string `json:"name"` // stream name, e.g. "Zone.Identifier"
+	Size uint64 `json:"size"`
+}
+
+// StreamLister is an optional interface for filesystems that store named
+// alternate data streams (NTFS). Restore uses it to carry ADS across when the
+// user asks — FAT/exFAT have no such concept, which is exactly why the UI
+// greys the option for them.
+type StreamLister interface {
+	// ListStreams returns the named streams of p (the unnamed main stream is
+	// not included).
+	ListStreams(p string) ([]StreamInfo, error)
+	// ExtractStream writes the named stream's content to w.
+	ExtractStream(p, stream string, w io.Writer) (int64, error)
+}
+
+// SecurityReader is an optional interface for filesystems that store native
+// permissions (NTFS). SecurityDescriptor returns the SELF-RELATIVE security
+// descriptor bytes for a path, exactly as the OS stored them; the restore
+// side applies them natively. FAT/exFAT have no permissions — the UI greys
+// the option for them, which is the honest representation of the format.
+type SecurityReader interface {
+	SecurityDescriptor(p string) ([]byte, error)
 }

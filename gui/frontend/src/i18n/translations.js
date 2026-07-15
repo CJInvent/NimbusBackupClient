@@ -1,5 +1,12 @@
 const translations = {
   fr: {
+    optionZip: "Empaqueter en ZIP",
+    zipHint: "Enregistre la sélection dans un fichier ZIP au lieu de restaurer vers un dossier.",
+    zipButtonHint: "La sélection sera enregistrée en ZIP (ou en fichier direct pour un seul fichier).",
+    betaTag: "(BÊTA)",
+    naFat: "Non stocké sur FAT32/exFAT — ce système de fichiers n'a ni permissions ni flux ADS.",
+    naSidecar: "Nécessite la capture sidecar NTFS côté sauvegarde — prévue. Les sauvegardes d'images NTFS le prennent déjà en charge.",
+    naZip: "Impossible dans un ZIP — décochez « Empaqueter en ZIP » pour restaurer les métadonnées.",
     colModified: "Modifié",
     colSize: "Taille",
     fileTableLabel: "Table des fichiers :",
@@ -418,6 +425,13 @@ const translations = {
 
   },
   en: {
+    optionZip: "Package as ZIP",
+    zipHint: "Saves the selection into a ZIP file instead of restoring into a folder.",
+    zipButtonHint: "The selection will be saved as a ZIP (or a direct file for a single file).",
+    betaTag: "(BETA)",
+    naFat: "Not stored on FAT32/exFAT — that filesystem has neither permissions nor ADS.",
+    naSidecar: "Needs NTFS sidecar capture on the backup side — planned. NTFS image backups already support this.",
+    naZip: "Cannot be represented in a ZIP — untick 'Package as ZIP' to restore metadata.",
     colModified: "Modified",
     colSize: "Size",
     fileTableLabel: "File table:",
@@ -836,6 +850,13 @@ const translations = {
 
   },
   es: {
+    optionZip: "Empaquetar como ZIP",
+    zipHint: "Guarda la selección en un archivo ZIP en lugar de restaurar a una carpeta.",
+    zipButtonHint: "La selección se guardará como ZIP (o archivo directo si es un solo archivo).",
+    betaTag: "(BETA)",
+    naFat: "No se almacena en FAT32/exFAT — ese sistema de archivos no tiene permisos ni ADS.",
+    naSidecar: "Requiere captura sidecar NTFS en la copia — planificado. Las imágenes NTFS ya lo admiten.",
+    naZip: "No se puede representar en un ZIP — desmarque «Empaquetar como ZIP» para restaurar metadatos.",
     colModified: "Modificado",
     colSize: "Tamaño",
     fileTableLabel: "Tabla de archivos:",

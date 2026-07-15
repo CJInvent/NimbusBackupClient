@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.146] - 2026-07-15
+
+### Fixed
+- **Nothing is hidden anymore.** Browsing a big partition showed only a
+  fraction of the root (6 folders on a real C: drive) for two reasons, both
+  now fixed and regression-tested: (1) the full-tree scan silently capped at
+  250,000 entries and — worse — filled that cap from a Go map in RANDOM
+  order, so a 1.4M-record volume yielded an arbitrary subset; the cap is
+  gone (the tree lives Go-side; the webview only ever gets one directory).
+  (2) The metafile filter dropped ANY name starting with `$`, hiding real
+  user directories like `$WINDOWS.~BT`; only the reserved NTFS metafile
+  records (0–23) are excluded now. Hidden/system files were never filtered
+  and remain fully visible — listing is permission- and attribute-agnostic.
+
+### Added
+- **NTFS permissions restore (BETA) — no sidecar needed for image backups.**
+  The disk image already contains everything: security descriptors are read
+  straight from the volume ($STANDARD_INFORMATION SecurityId → $Secure/$SDS,
+  with the legacy inline $SECURITY_DESCRIPTOR attribute as fallback) and
+  applied on restore via Win32 (`SetNamedSecurityInfo`). DACL always;
+  owner/group attempted and downgraded to a logged warning without
+  elevation; SACLs skipped by design. The full read chain is exercised
+  against a real NTFS image in CI.
+- **Alternate Data Streams restore.** Named $DATA streams are enumerated and
+  extracted from NTFS images (byte-exact, tested against streams written via
+  ntfs-3g) and written onto restored files as `path:stream`.
+- **One unified restore workflow** for both backup types — the separate
+  Download button is gone. One selection, one options row, one Restore
+  button: Overwrite · Restore modification times (now honoured for image
+  restores too) · Restore NTFS permissions · Restore ADS · **Package as
+  ZIP** (routes to a Save-As picker; a single file saves direct). Options
+  grey out with the REASON as their tooltip: FAT32/exFAT sources grey
+  permissions+ADS (the format stores neither), directory backups grey them
+  (sidecar capture on the backup side is still planned), ZIP packaging greys
+  all metadata options (a ZIP can't carry them).
+- Metadata application order is deliberate: data → streams → mtime →
+  security descriptor LAST, since a restrictive restored DACL could lock the
+  restorer out of a file it still needs to finish. Per-file metadata
+  failures are warnings in the backup log; the data itself is already in
+  place.
+
+### Docs
+- README.md, README.fr.md regenerated; new imagebrowse/README.md documenting
+  the filesystem layers, capability interfaces, and test guarantees;
+  ARCHITECTURE.md updated for the unified workflow.
+
 ## [0.2.145] - 2026-07-14
 
 ### Performance

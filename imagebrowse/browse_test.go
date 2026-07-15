@@ -424,3 +424,135 @@ func TestNTFSStoragePlan(t *testing.T) {
 	}
 	t.Logf("$MFT: %d bytes in %d extent(s), %d bytes allocated", size, len(extents), covered)
 }
+
+// TestNTFSNothingHidden: the fixture holds a $-prefixed USER directory
+// ($WINDOWS.~BT, like Windows upgrade leftovers) and a file named hidden.dat.
+// A backup tool must show them all — the earlier blanket '$' filter and the
+// silent 250k random-subset cap both violated that.
+func TestNTFSNothingHidden(t *testing.T) {
+	vol := loadFixture(t, "ntfs.img.gz")
+	disk := wrapMBR(vol, 0x07)
+	r := bytes.NewReader(disk)
+	parts, _ := ListPartitions(r, int64(len(disk)))
+	fs, err := OpenFilesystem(r, parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := FullTree(fs, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("FullTree: %v", err)
+	}
+	got := map[string]bool{}
+	for _, e := range all {
+		got[e.Path] = true
+	}
+	for _, want := range []string{
+		"/$WINDOWS.~BT",
+		"/$WINDOWS.~BT/setupact.log",
+		"/hidden.dat",
+		"/readme.txt",
+		"/Docs/Nested/deep.txt",
+	} {
+		if !got[want] {
+			t.Errorf("FullTree hides %s — nothing may be hidden", want)
+		}
+	}
+	// And the true metafiles stay out of user-facing listings.
+	for _, meta := range []string{"/$MFT", "/$Bitmap", "/$Secure"} {
+		if got[meta] {
+			t.Errorf("FullTree leaked NTFS metafile %s", meta)
+		}
+	}
+}
+
+// TestNTFSADS: enumeration and byte-exact extraction of real alternate data
+// streams written through ntfs-3g's streams_interface=windows.
+func TestNTFSADS(t *testing.T) {
+	vol := loadFixture(t, "ntfs.img.gz")
+	disk := wrapMBR(vol, 0x07)
+	r := bytes.NewReader(disk)
+	parts, _ := ListPartitions(r, int64(len(disk)))
+	fs, err := OpenFilesystem(r, parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sl, ok := fs.(StreamLister)
+	if !ok {
+		t.Fatal("NTFS must implement StreamLister")
+	}
+
+	streams, err := sl.ListStreams("/readme.txt")
+	if err != nil {
+		t.Fatalf("ListStreams: %v", err)
+	}
+	if len(streams) != 1 || streams[0].Name != "secret" {
+		t.Fatalf("want exactly stream 'secret', got %+v", streams)
+	}
+	var buf bytes.Buffer
+	n, err := sl.ExtractStream("/readme.txt", "secret", &buf)
+	if err != nil {
+		t.Fatalf("ExtractStream: %v", err)
+	}
+	if buf.String() != "ads payload here\n" || n != 17 {
+		t.Fatalf("stream content = %q (%d bytes)", buf.String(), n)
+	}
+
+	streams, err = sl.ListStreams("/Docs/a-long-file-name-with-lfn.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(streams) != 1 || streams[0].Name != "Zone.Identifier" || streams[0].Size != 10 {
+		t.Fatalf("want Zone.Identifier(10), got %+v", streams)
+	}
+	buf.Reset()
+	if _, err := sl.ExtractStream("/Docs/a-long-file-name-with-lfn.bin", "Zone.Identifier", &buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "zone info\n" {
+		t.Fatalf("zone stream = %q", buf.String())
+	}
+
+	// Files without ADS list empty, and a missing stream errors.
+	streams, err = sl.ListStreams("/Docs/Nested/deep.txt")
+	if err != nil || len(streams) != 0 {
+		t.Fatalf("deep.txt streams = %+v err=%v", streams, err)
+	}
+	if _, err := sl.ExtractStream("/readme.txt", "nope", io.Discard); err == nil {
+		t.Fatal("extracting a missing stream must fail")
+	}
+}
+
+// TestNTFSSecurityDescriptor exercises the whole permissions chain against a
+// real volume: $SDS scan -> SecurityId from $STANDARD_INFORMATION -> SD bytes.
+// A valid self-relative SD starts with revision 1 and carries a control word
+// with the self-relative bit (0x8000) set.
+func TestNTFSSecurityDescriptor(t *testing.T) {
+	vol := loadFixture(t, "ntfs.img.gz")
+	disk := wrapMBR(vol, 0x07)
+	r := bytes.NewReader(disk)
+	parts, _ := ListPartitions(r, int64(len(disk)))
+	fs, err := OpenFilesystem(r, parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr, ok := fs.(SecurityReader)
+	if !ok {
+		t.Fatal("NTFS must implement SecurityReader")
+	}
+	for _, p := range []string{"/readme.txt", "/Docs", "/Docs/Nested/deep.txt"} {
+		sd, err := sr.SecurityDescriptor(p)
+		if err != nil {
+			t.Fatalf("SecurityDescriptor(%s): %v", p, err)
+		}
+		if len(sd) < 20 {
+			t.Fatalf("%s: SD too short (%d bytes)", p, len(sd))
+		}
+		if sd[0] != 1 {
+			t.Fatalf("%s: SD revision = %d, want 1", p, sd[0])
+		}
+		control := uint16(sd[2]) | uint16(sd[3])<<8
+		if control&0x8000 == 0 {
+			t.Fatalf("%s: SD not self-relative (control %#x)", p, control)
+		}
+	}
+}
