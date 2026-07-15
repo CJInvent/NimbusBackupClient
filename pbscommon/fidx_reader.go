@@ -102,8 +102,8 @@ func (r *FIDXReaderAt) PlanPrefetch(ranges [][2]int64, workers int) (stop func()
 	if workers <= 0 {
 		workers = 4
 	}
-	if workers > 16 {
-		workers = 16
+	if workers > 64 {
+		workers = 64 // HTTP/2 multiplexes; stay well under the server's stream cap
 	}
 	// Expand ranges to an ordered, de-duplicated chunk index list.
 	seen := make(map[int]bool)

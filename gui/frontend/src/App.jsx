@@ -5,7 +5,7 @@ import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory, CancelImageRestore
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -28,6 +28,7 @@ if (window.go) {
   CreateFolder = window.go.main.App.CreateFolder
   DefaultSaveDir = window.go.main.App.DefaultSaveDir
   ListImageDirectory = window.go.main.App.ListImageDirectory
+  CancelImageRestore = window.go.main.App.CancelImageRestore
   DownloadImageSelection = window.go.main.App.DownloadImageSelection
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
@@ -377,7 +378,7 @@ function App() {
   useEffect(() => {
     if (!EventsOn) return
     const unsubP = EventsOn('restore:progress', (data) => {
-      setRestoreProgress(Math.round((data.percent || 0) * 100))
+      setRestoreProgress(Math.round(data.percent || 0))
       showStatus(`🔄 ${data.message || ''}`, 'info')
     })
     const unsubC = EventsOn('restore:complete', (data) => {
@@ -1550,6 +1551,15 @@ function App() {
     }
     return m
   }, [imageDisk, imagePartitions, imagePartIndex, packageAsZip])
+
+  // Cancel an in-flight restore. Image restores are cancellable mid-run on the
+  // Go side (CancelImageRestore); the button appears only while one is active.
+  const handleCancelRestore = async () => {
+    try {
+      if (CancelImageRestore) await CancelImageRestore()
+    } catch (e) { /* best-effort */ }
+    showStatus('✖ ' + t('restoreCancelled'), 'info')
+  }
 
   const handleImageNavigate = async (dir) => {
     if (!ListImageDirectory || !selectedSnapshot || !imageDisk) return
@@ -2923,8 +2933,11 @@ function App() {
               <div style={{
                 border: '1px solid var(--nc-border)',
                 borderRadius: '8px',
-                maxHeight: '360px',
-                overflowY: 'auto',
+                // Image-directory mode has its own inner scroller
+                // (.nc-dir-scroll); a second one here produced the double
+                // scrollbar. Only the tree/partition views need this wrapper
+                // to scroll.
+                ...(imageDisk ? {} : { maxHeight: '360px', overflowY: 'auto' }),
                 backgroundColor: 'var(--nc-panel)'
               }}>
                 {snapshotEntries.length === 0 && selectedSnapshot && isVolumeSnapshot(selectedSnapshot) ? (
@@ -3257,14 +3270,21 @@ function App() {
                   </label>
                 </div>
 
-                <button
-                  className="btn btn-primary"
-                  onClick={packageAsZip ? handleDownloadSelection : handleRestoreSnapshot}
-                  disabled={restoreLoading || downloading || (packageAsZip && selectedPaths.size === 0) || (isInPlace && crossHost && !restoreAllowCrossHost)}
-                  title={packageAsZip ? t('zipButtonHint') : ''}
-                >
-                  {restoreLoading || downloading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
-                </button>
+                <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={packageAsZip ? handleDownloadSelection : handleRestoreSnapshot}
+                    disabled={restoreLoading || downloading || (packageAsZip && selectedPaths.size === 0) || (isInPlace && crossHost && !restoreAllowCrossHost)}
+                    title={packageAsZip ? t('zipButtonHint') : ''}
+                  >
+                    {restoreLoading || downloading ? `⏳ ${t('restoring')}` : `▶️ ${t('restore')}`}
+                  </button>
+                  {(restoreLoading || downloading) && (
+                    <button className="btn btn-danger" onClick={handleCancelRestore}>
+                      ✖ {t('cancel')}
+                    </button>
+                  )}
+                </div>
 
                 {restoreLoading && (
                   <div style={{marginTop: '12px'}}>

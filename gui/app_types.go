@@ -18,9 +18,11 @@ type App struct {
 	callbacksMutex   sync.RWMutex
 	isServiceProcess bool // True if running as Windows Service (never re-detect mode)
 
-	lastImageTruncated bool   // legacy: kept for the LastImageListTruncated binding (always false now)
-	lastImageKey       string // cache key of the most recent partition scan
-	lastIbEmitStep     int    // service build: last 10%-step logged by ibEmit
+	lastImageTruncated bool               // legacy: kept for the LastImageListTruncated binding (always false now)
+	lastImageKey       string             // cache key of the most recent partition scan
+	lastIbEmitStep     int                // service build: last 10%-step logged by ibEmit
+	ibRestoreMu        sync.Mutex         // guards ibRestoreCancel
+	ibRestoreCancel    context.CancelFunc // set while an image restore runs; nil otherwise
 }
 
 // progressCallbacks stores the callback functions for a backup operation

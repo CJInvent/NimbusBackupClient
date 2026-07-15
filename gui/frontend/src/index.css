@@ -929,7 +929,11 @@ button:focus-visible,
 }
 .nc-crumb-sep { color: var(--nc-text-dim); padding: 0 2px; }
 
-.nc-dir-scroll { max-height: 420px; overflow-y: auto; }
+/* Single scroll region for the image directory table. Sized to content, and
+   only scrolls when the listing is genuinely taller than most of the viewport
+   — so short directories show every row with NO scrollbar, and the window/
+   panel grows to fit rather than nesting a second scrollbar. */
+.nc-dir-scroll { max-height: calc(100vh - 360px); overflow-y: auto; }
 .nc-dir-table { width: 100%; border-collapse: collapse; }
 .nc-dir-table th {
     position: sticky;

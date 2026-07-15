@@ -1235,12 +1235,16 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 		return fmt.Errorf("ID de snapshot invalide: %v", err)
 	}
 
+	// The restore progress convention is 0-100 across the whole app (download
+	// and image paths already emit 0-100). Directory restore's OnProgress is
+	// historically 0-1, so scale it here at the single boundary rather than
+	// touching every progress call inside restore_inline.go.
 	emit := func(percent float64, message string) {
 		if a.ctx == nil {
 			return
 		}
 		runtime.EventsEmit(a.ctx, "restore:progress", map[string]interface{}{
-			"percent": percent,
+			"percent": percent * 100,
 			"message": message,
 		})
 	}

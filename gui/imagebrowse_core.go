@@ -17,6 +17,7 @@ package main
 // not only in a GUI alert — remote diagnostics need them.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,12 @@ import (
 // blocks pulled from PBS. Beyond it the tree is truncated with an honest
 // banner rather than silently partial.
 const imageWalkCap = 250000
+
+// imageScanWorkers is how many chunk requests the $MFT plan keeps in flight.
+// They multiplex over one HTTP/2 connection to PBS, so this can be well above
+// the old value of 6 without opening connections; it is bounded inside
+// PlanPrefetch to a safe ceiling.
+const imageScanWorkers = 32
 
 // resolveRestorePBS picks the PBS server to restore from. When pbsID is empty
 // the default PBS server is used. Falls back to legacy single-server fields
@@ -355,7 +362,13 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 					for _, e := range extents {
 						abs = append(abs, [2]int64{p.StartOffset + e.Offset, e.Length})
 					}
-					stopPlan := ra.PlanPrefetch(abs, 6)
+					// HTTP/2 multiplexes all of these over the single PBS
+					// connection, so deep concurrency costs almost nothing and
+					// is what actually saturates the link — 6 workers left the
+					// pipe mostly idle between round trips. 32 keeps enough
+					// streams in flight to hide latency without tripping the
+					// server's default MaxConcurrentStreams (~100).
+					stopPlan := ra.PlanPrefetch(abs, imageScanWorkers)
 					defer stopPlan()
 					emit(6, fmt.Sprintf("Downloading file table: %s in %d fragment(s)…",
 						formatBytesGo(uint64(mftSize)), len(extents)))
@@ -620,79 +633,127 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 
 	emit := a.ibEmit
 
-	staging, err := os.MkdirTemp("", "nimbus-imgrs-*")
-	if err != nil {
-		return ibFail(fmt.Errorf("temp dir: %v", err))
+	// Register this restore as cancellable. The frontend Cancel button calls
+	// CancelImageRestore, which fires this context.
+	ctx, cancel := context.WithCancel(context.Background())
+	a.ibRestoreMu.Lock()
+	a.ibRestoreCancel = cancel
+	a.ibRestoreMu.Unlock()
+	defer func() {
+		a.ibRestoreMu.Lock()
+		a.ibRestoreCancel = nil
+		a.ibRestoreMu.Unlock()
+		cancel()
+	}()
+	cancelled := func() bool {
+		select {
+		case <-ctx.Done():
+			return true
+		default:
+			return false
+		}
 	}
-	defer func() { _ = os.RemoveAll(staging) }()
 
-	meta, err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
-		includePaths, staging, restoreADS, restoreACLs, emit)
-	if err != nil {
-		emit(100, "Restore failed")
-		return err
-	}
-
-	// Move the staged tree into place, then finish each file with its
-	// metadata: mtime, alternate data streams, security descriptor — in that
-	// order, and SD last, because a restrictive DACL could lock US out of the
-	// very file we still need to write streams onto.
-	emit(90, "Writing files…")
+	// Extract DIRECTLY to the destination — no temp staging. Staging doubled
+	// the space requirement (temp copy + final copy) and, on a nearly-full
+	// system drive holding %TEMP%, could fail the staging write for a large
+	// file even when the DESTINATION drive had ample room. Direct placement
+	// needs space only where the files actually land, which is what we checked.
 	count, warned := 0, 0
-	err = filepath.Walk(staging, func(p string, info os.FileInfo, werr error) error {
-		if werr != nil || info.IsDir() {
-			return werr
-		}
-		rel, rerr := filepath.Rel(staging, p)
-		if rerr != nil {
-			return rerr
-		}
-		target := filepath.Join(destDir, rel)
-		if !keepStructure {
-			target = filepath.Join(destDir, filepath.Base(rel))
-		}
-		if _, serr := os.Stat(target); serr == nil && !overwrite {
-			return fmt.Errorf("[NB-3427] %s already exists (tick Overwrite to replace it)", target)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if err := copyFileTo(p, target); err != nil {
-			return err
-		}
-		count++
+	err = a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
+		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
+			files, ferr := expandImageSelection(fs, includePaths)
+			if ferr != nil {
+				return ferr
+			}
+			if len(files) == 0 {
+				return ibFail(errors.New("[NB-3420] the selection contains no files"))
+			}
+			streamer, canStream := fs.(imagebrowse.StreamLister)
+			secReader, canSD := fs.(imagebrowse.SecurityReader)
 
-		m := meta[rel]
-		if m == nil {
-			return nil
-		}
-		if restoreADS {
-			for name, data := range m.Streams {
-				if aerr := writeADS(target, name, data); aerr != nil {
-					warned++
-					writeBackupLog(fmt.Sprintf("ImageBrowse WARN: ADS %s:%s not restored: %v", target, name, aerr))
+			for i, f := range files {
+				if cancelled() {
+					return errImageRestoreCancelled
+				}
+				emit(5+float64(i)/float64(len(files))*90,
+					fmt.Sprintf("Restoring %d/%d: %s", i+1, len(files), filepath.Base(f)))
+
+				// Where this file lands. keepStructure=false flattens to the base
+				// name (matches the directory-restore option of the same name).
+				rel := filepath.FromSlash(strings.TrimPrefix(f, "/"))
+				target := filepath.Join(destDir, rel)
+				if !keepStructure {
+					target = filepath.Join(destDir, filepath.Base(rel))
+				}
+				if _, serr := os.Stat(target); serr == nil && !overwrite {
+					return fmt.Errorf("[NB-3427] %s already exists (tick Overwrite to replace it)", target)
+				}
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					return ibFail(err)
+				}
+
+				// Stream the file's bytes straight to the destination.
+				w, cerr := os.Create(target)
+				if cerr != nil {
+					return ibFail(fmt.Errorf("[NB-3421] create %s: %v", target, cerr))
+				}
+				if _, eerr := fs.ExtractFile(f, w); eerr != nil {
+					_ = w.Close()
+					_ = os.Remove(target) // don't leave a half-written file
+					return ibFail(fmt.Errorf("[NB-3421] extract %s: %v", f, eerr))
+				}
+				if cerr := w.Close(); cerr != nil {
+					return ibFail(fmt.Errorf("[NB-3421] finalize %s: %v", target, cerr))
+				}
+				count++
+
+				// Metadata, best-effort, applied AFTER the bytes are in place:
+				// ADS, then mtime, then the security descriptor LAST (a
+				// restrictive DACL could lock us out of a file we still need to
+				// finish writing streams onto).
+				if restoreADS && canStream {
+					if streams, lerr := streamer.ListStreams(f); lerr == nil {
+						for _, si := range streams {
+							var buf strings.Builder
+							if _, xerr := streamer.ExtractStream(f, si.Name, &buf); xerr == nil {
+								if aerr := writeADS(target, si.Name, []byte(buf.String())); aerr != nil {
+									warned++
+									writeBackupLog(fmt.Sprintf("ImageBrowse WARN: ADS %s:%s not restored: %v", target, si.Name, aerr))
+								}
+							}
+						}
+					}
+				}
+				if restoreMtimes {
+					if st, serr := fs.Stat(f); serr == nil && st.ModTime > 0 {
+						ts := time.Unix(st.ModTime, 0)
+						if terr := os.Chtimes(target, ts, ts); terr != nil {
+							warned++
+							writeBackupLog(fmt.Sprintf("ImageBrowse WARN: mtime not restored on %s: %v", target, terr))
+						}
+					}
+				}
+				if restoreACLs && canSD {
+					if sd, sderr := secReader.SecurityDescriptor(f); sderr == nil && len(sd) > 0 {
+						if warning, aerr := applyNTFSSecurity(target, sd); aerr != nil {
+							warned++
+							writeBackupLog(fmt.Sprintf("ImageBrowse WARN: permissions not restored on %s: %v", target, aerr))
+						} else if warning != "" {
+							warned++
+							writeBackupLog(fmt.Sprintf("ImageBrowse WARN: %s: %s", target, warning))
+						}
+					}
 				}
 			}
-		}
-		if restoreMtimes && m.MTime > 0 {
-			ts := time.Unix(m.MTime, 0)
-			if terr := os.Chtimes(target, ts, ts); terr != nil {
-				warned++
-				writeBackupLog(fmt.Sprintf("ImageBrowse WARN: mtime not restored on %s: %v", target, terr))
-			}
-		}
-		if restoreACLs && len(m.SD) > 0 {
-			warning, aerr := applyNTFSSecurity(target, m.SD)
-			if aerr != nil {
-				warned++
-				writeBackupLog(fmt.Sprintf("ImageBrowse WARN: permissions not restored on %s: %v", target, aerr))
-			} else if warning != "" {
-				warned++
-				writeBackupLog(fmt.Sprintf("ImageBrowse WARN: %s: %s", target, warning))
-			}
-		}
-		return nil
-	})
+			return nil
+		})
+
+	if errors.Is(err, errImageRestoreCancelled) {
+		emit(100, "Restore cancelled")
+		writeBackupLog(fmt.Sprintf("ImageBrowse: restore CANCELLED after %d file(s) to %s", count, destDir))
+		return errImageRestoreCancelled
+	}
 	if err != nil {
 		emit(100, "Restore failed")
 		return ibFail(err)
@@ -743,3 +804,21 @@ func expandImageSelection(fs imagebrowse.Filesystem, selections []string) ([]str
 
 // interface assertion: keeps the io import honest if extraction is refactored.
 var _ io.Writer = (*os.File)(nil)
+
+// errImageRestoreCancelled is returned when the user cancels an in-flight
+// image restore. Surfaced to the frontend so it can show "cancelled" rather
+// than a scary error.
+var errImageRestoreCancelled = errors.New("[NB-3429] restore cancelled by user")
+
+// CancelImageRestore aborts an in-progress image restore, if one is running.
+// The restore loop checks between files, so cancellation takes effect at the
+// next file boundary (a large file in flight finishes its current write).
+func (a *App) CancelImageRestore() {
+	a.ibRestoreMu.Lock()
+	cancel := a.ibRestoreCancel
+	a.ibRestoreMu.Unlock()
+	if cancel != nil {
+		cancel()
+		writeBackupLog("ImageBrowse: cancel requested for in-progress restore")
+	}
+}

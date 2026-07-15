@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.148] - 2026-07-15
+
+### Fixed
+- **Restore progress no longer jumps to "500%" and the file actually lands.**
+  The progress bar had two conventions colliding: the image/download paths
+  emit 0–100 while directory restore emits 0–1, and the frontend multiplied
+  everything by 100 — so an image restore's first `emit(5)` rendered as 500%.
+  Progress is now 0–100 everywhere (directory restore scaled at its one
+  boundary), and the frontend no longer multiplies.
+- **Image restore writes directly to the destination — no more silent
+  failures on large files.** It used to extract into `%TEMP%` and then copy
+  to the destination, which needed the file's size TWICE and, on a nearly
+  full system drive holding `%TEMP%`, could fail the staging write even when
+  the destination drive had room — the symptom being "write activity, then no
+  file." Files now stream straight to the destination; the space check covers
+  exactly where they land. A failed extract removes the half-written file
+  instead of leaving a stub.
+
+### Added
+- **Cancel button for restores.** An in-progress image restore can be
+  cancelled; it stops cleanly at the next file boundary (a large file in
+  flight finishes its current write). New `CancelImageRestore`.
+
+### Changed
+- **MFT download is much faster.** Chunk fetches multiplex over the single
+  HTTP/2 connection to PBS, so the old 6-worker prefetch left the link mostly
+  idle between round trips. The `$MFT` plan now keeps up to 32 requests in
+  flight (ceiling raised to 64), staying well under the server's stream cap —
+  the file table downloads far closer to link speed. This applies to
+  portal-delegated browsing too (shared core).
+- **Browse tab: one scrollbar, not two.** The image directory listing had a
+  scroller nested inside another scroller. The directory table is now the
+  only scroll region, sized to its content up to the viewport, so short
+  directories show every row with no scrollbar and the panel grows to fit.
+
 ## [0.2.147] - 2026-07-15
 
 ### Added
