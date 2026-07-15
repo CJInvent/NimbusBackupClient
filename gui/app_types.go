@@ -20,6 +20,7 @@ type App struct {
 
 	lastImageTruncated bool   // legacy: kept for the LastImageListTruncated binding (always false now)
 	lastImageKey       string // cache key of the most recent partition scan
+	lastIbEmitStep     int    // service build: last 10%-step logged by ibEmit
 }
 
 // progressCallbacks stores the callback functions for a backup operation

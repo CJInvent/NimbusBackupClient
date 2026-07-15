@@ -1082,24 +1082,6 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 
 // ==================== RESTORE ====================
 
-// resolveRestorePBS picks the PBS server to restore from. When pbsID is empty
-// the default PBS server is used. Falls back to legacy single-server fields
-// when no multi-PBS entry is configured.
-func (a *App) resolveRestorePBS(pbsID string) (*Config, error) {
-	if pbsID != "" {
-		pbs, err := a.config.GetPBSServer(pbsID)
-		if err != nil {
-			return nil, err
-		}
-		return pbs.ToConfig(), nil
-	}
-	cfg := a.config.EffectivePBS()
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
 // ListSnapshots lists available snapshots on a PBS server, optionally filtered
 // by backup ID (partial match supports split backups).
 //

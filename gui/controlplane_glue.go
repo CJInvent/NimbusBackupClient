@@ -231,6 +231,11 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 // on the runningJobs de-dup in executeScheduledJob, so a re-delivered
 // command while the job runs is a clean no-op.
 func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResult {
+	// Portal-delegated image browsing (image_partitions / image_scan /
+	// image_dir / image_extract) — see controlplane_browse.go.
+	if res, handled := a.cpHandleBrowseCommand(cmd); handled {
+		return res
+	}
 	switch cmd.Command {
 	case "run_backup":
 		name, _ := cmd.Payload["job"].(string)

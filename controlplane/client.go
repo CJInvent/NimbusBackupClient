@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -238,4 +239,44 @@ func NewRunUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// PostCommandArtifact streams a file (typically an extraction zip) to the
+// control server as the binary artifact of a completed command. Separate
+// from PostCommandResult because command results are small JSON by contract
+// (the server enforces a small body cap on them); artifacts are bulk data
+// with their own, larger cap and disk-backed handling server-side.
+func (c *Client) PostCommandArtifact(id int64, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open artifact: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	if c.AgentID <= 0 || c.Secret == "" {
+		return fmt.Errorf("controlplane: not enrolled")
+	}
+	req, err := http.NewRequest(http.MethodPost,
+		strings.TrimRight(c.BaseURL, "/")+fmt.Sprintf("/api/agent/v1/commands/%d/artifact", id), f)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = st.Size()
+	req.Header.Set("Content-Type", "application/zip")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %d.%s", c.AgentID, c.Secret))
+
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return fmt.Errorf("upload artifact: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("artifact upload rejected: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }

@@ -1,10 +1,10 @@
-//go:build !service
-// +build !service
-
 package main
 
-// imagebrowse_inline.go — Browse-tab support for VOLUME (machine/image)
-// backups: enumerate partitions, walk a partition's file tree, and download or
+// imagebrowse_core.go — VOLUME (machine/image) backup browsing, shared by
+// BOTH processes: the GUI's Browse tab AND the service's control-plane
+// delegation (the NimbusControl portal browses image backups by sending
+// commands that land here — see controlplane_glue.go). Progress reporting is
+// abstracted behind a.ibEmit so this file carries no Wails dependency: enumerate partitions, walk a partition's file tree, and download or
 // restore a selection out of a raw disk image without restoring the image.
 //
 // Data path: PBS reader session -> pbscommon.FIDXReaderAt (lazy, chunk-LRU)
@@ -28,14 +28,30 @@ import (
 
 	"imagebrowse"
 	"pbscommon"
-
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // imageWalkCap bounds a full-tree listing: memory AND the number of image
 // blocks pulled from PBS. Beyond it the tree is truncated with an honest
 // banner rather than silently partial.
 const imageWalkCap = 250000
+
+// resolveRestorePBS picks the PBS server to restore from. When pbsID is empty
+// the default PBS server is used. Falls back to legacy single-server fields
+// when no multi-PBS entry is configured.
+func (a *App) resolveRestorePBS(pbsID string) (*Config, error) {
+	if pbsID != "" {
+		pbs, err := a.config.GetPBSServer(pbsID)
+		if err != nil {
+			return nil, err
+		}
+		return pbs.ToConfig(), nil
+	}
+	cfg := a.config.EffectivePBS()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
 
 // ibFail logs an image-browse failure to the backup log and returns it
 // unchanged. An error visible only in a GUI alert is invisible to support.
@@ -191,8 +207,8 @@ func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchi
 	}
 	// Browsing and file downloads honour the same configurable network limit
 	// as the rest of the client (one shared bucket across all fetch workers).
-	if cfgAll := a.GetConfig(); cfgAll != nil && cfgAll.DownloadLimitMbps > 0 {
-		ra.SetRateLimitMbps(cfgAll.DownloadLimitMbps)
+	if a.config != nil && a.config.DownloadLimitMbps > 0 {
+		ra.SetRateLimitMbps(a.config.DownloadLimitMbps)
 	}
 	return ra, size, func() { client.Close() }, nil
 }
@@ -324,13 +340,7 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	}
 	imageTreeMu.Unlock()
 
-	emit := func(pct float64, msg string) {
-		if a.ctx != nil {
-			wailsruntime.EventsEmit(a.ctx, "restore:progress", map[string]interface{}{
-				"percent": pct, "message": msg,
-			})
-		}
-	}
+	emit := a.ibEmit
 	emit(2, "Opening disk image…")
 
 	var result *imageTree
@@ -540,13 +550,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	emit := func(pct float64, msg string) {
-		if a.ctx != nil {
-			wailsruntime.EventsEmit(a.ctx, "restore:progress", map[string]interface{}{
-				"percent": pct, "message": msg,
-			})
-		}
-	}
+	emit := a.ibEmit
 
 	if _, err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
 		includePaths, staging, false, false, emit); err != nil {
@@ -614,13 +618,7 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 			formatBytesGo(needed), formatBytesGo(sc.FreeBytes)))
 	}
 
-	emit := func(pct float64, msg string) {
-		if a.ctx != nil {
-			wailsruntime.EventsEmit(a.ctx, "restore:progress", map[string]interface{}{
-				"percent": pct, "message": msg,
-			})
-		}
-	}
+	emit := a.ibEmit
 
 	staging, err := os.MkdirTemp("", "nimbus-imgrs-*")
 	if err != nil {

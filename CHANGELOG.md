@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.147] - 2026-07-15
+
+### Added
+- **Portal-delegated image browsing.** The NimbusControl web portal can now
+  browse volume (disk-image) backups and download files from them, WITHOUT
+  PBS credentials or encryption keys ever leaving this machine: the portal
+  queues commands on the existing agent channel and the Windows service
+  answers them using the exact same imagebrowse core as the local Browse tab
+  — one implementation, gated by the same `file_restore` policy. New
+  commands: `image_partitions`, `image_scan`, `image_dir`, `image_extract`
+  (extractions stream to the server as a ZIP artifact).
+- **Portal downloads are data-only by design**: the ZIP carries plain file
+  bytes — no NTFS permissions, no alternate data streams (a browser download
+  could not apply them anyway). Full-fidelity restore remains a local
+  operation on the machine itself.
+
+### Changed
+- The image-browse layer was refactored out of the GUI-only build into a
+  shared core (`imagebrowse_core.go`) used by BOTH processes; progress
+  reporting is abstracted (webview events in the GUI, coarse debug-log lines
+  in the service). No behaviour change for local use.
+
 ## [0.2.146] - 2026-07-15
 
 ### Fixed
