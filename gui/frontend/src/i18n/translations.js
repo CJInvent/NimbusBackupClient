@@ -1,5 +1,6 @@
 const translations = {
   fr: {
+    timeLeft: "restant",
     restoreCancelled: "Restauration annulée",
     optionZip: "Empaqueter en ZIP",
     zipHint: "Enregistre la sélection dans un fichier ZIP au lieu de restaurer vers un dossier.",
@@ -426,6 +427,7 @@ const translations = {
 
   },
   en: {
+    timeLeft: "left",
     restoreCancelled: "Restore cancelled",
     optionZip: "Package as ZIP",
     zipHint: "Saves the selection into a ZIP file instead of restoring into a folder.",
@@ -852,6 +854,7 @@ const translations = {
 
   },
   es: {
+    timeLeft: "restante",
     restoreCancelled: "Restauración cancelada",
     optionZip: "Empaquetar como ZIP",
     zipHint: "Guarda la selección en un archivo ZIP en lugar de restaurar a una carpeta.",

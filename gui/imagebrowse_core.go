@@ -518,14 +518,19 @@ func (a *App) extractSelection(pbsID, backupID, snapshotID, backupType, diskArch
 	return meta, nil
 }
 
-// DownloadImageSelection extracts a selection from a volume backup to
-// destPath — a single file written directly, or a zip for folders and
-// multi-selections — with authoritative free-space enforcement.
+// DownloadImageSelection packages the selection as a ZIP, STREAMED in one
+// pass to destPath: PBS chunks -> NTFS parser -> zip entry -> disk, nothing
+// staged anywhere. The zip is packaging, not compression (Store method), so
+// throughput is I/O-bound and the progress bar's byte math is exact. The
+// old single-file "direct" mode is gone: the caller only invokes this when
+// the user explicitly ticked Package as ZIP, and one file in a zip is what
+// they asked for.
 func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("DownloadImageSelection(disk=%s part=%d includes=%d dest=%s zip=%v needed=%d)",
-		diskArchive, partIndex, len(includePaths), destPath, asZip, neededBytes))
+	writeDebugLog(fmt.Sprintf("DownloadImageSelection(disk=%s part=%d includes=%d dest=%s needed=%d)",
+		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
+	_ = asZip // retained in the signature for frontend compatibility; always zip now
 
 	if destPath == "" {
 		return ibFail(errors.New(errDestPathRequired))
@@ -533,8 +538,8 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 	if len(includePaths) == 0 {
 		return ibFail(errors.New("[NB-3420] nothing selected to download"))
 	}
-	if !asZip && len(includePaths) != 1 {
-		return ibFail(errors.New("[NB-3420] a single-file download needs exactly one selected file"))
+	if !strings.HasSuffix(strings.ToLower(destPath), ".zip") {
+		destPath += ".zip"
 	}
 	needed := uint64(0)
 	if neededBytes > 0 {
@@ -542,55 +547,71 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 	}
 
 	// Space enforcement — authoritative here, regardless of the frontend
-	// pre-flight. Both the staging drive and the destination drive must fit it.
-	tmpParent := os.TempDir()
-	if sc, err := evaluateSpace(tmpParent, needed); err == nil && !sc.Fits {
-		return ibFail(fmt.Errorf("[NB-3401] not enough space on the temporary drive (%s): need %s, only %s free",
-			tmpParent, formatBytesGo(needed), formatBytesGo(sc.FreeBytes)))
+	// preflight. Store-method zip output ≈ input bytes (+ tiny headers).
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return ibFail(fmt.Errorf("[NB-3402] cannot create %s: %v", filepath.Dir(destPath), err))
 	}
-	sc, err := evaluateSpace(destPath, needed)
-	if err != nil {
-		return ibFail(fmt.Errorf("[NB-3402] cannot check free space for %s: %v", destPath, err))
-	}
-	if !sc.Fits {
-		return ibFail(fmt.Errorf("[NB-3403] not enough space on the destination drive: need %s, only %s free — download blocked",
-			formatBytesGo(needed), formatBytesGo(sc.FreeBytes)))
+	if needed > 0 {
+		sc, err := evaluateSpace(filepath.Dir(destPath), needed)
+		if err == nil && !sc.Fits {
+			return ibFail(fmt.Errorf("[NB-3403] not enough space: need %s, only %s free",
+				formatBytesGo(needed), formatBytesGo(sc.FreeBytes)))
+		}
 	}
 
-	staging, err := os.MkdirTemp("", "nimbus-imgdl-*")
-	if err != nil {
-		return ibFail(fmt.Errorf("temp dir: %v", err))
+	// Cancellable, same registration the restore path uses — the one Cancel
+	// button covers both.
+	ctx, cancel := context.WithCancel(context.Background())
+	a.ibRestoreMu.Lock()
+	a.ibRestoreCancel = cancel
+	a.ibRestoreMu.Unlock()
+	defer func() {
+		a.ibRestoreMu.Lock()
+		a.ibRestoreCancel = nil
+		a.ibRestoreMu.Unlock()
+		cancel()
+	}()
+	cancelled := func() bool {
+		select {
+		case <-ctx.Done():
+			return true
+		default:
+			return false
+		}
 	}
-	defer func() { _ = os.RemoveAll(staging) }()
 
-	emit := a.ibEmit
-
-	if _, err := a.extractSelection(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex,
-		includePaths, staging, false, false, emit); err != nil {
-		emit(100, "Download failed")
+	a.ibEmit(0, "Opening disk image…")
+	var nFiles int
+	var nBytes int64
+	err := a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
+		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
+			files, total, perr := planSelection(fs, includePaths)
+			if perr != nil {
+				return perr
+			}
+			out, cerr := os.Create(destPath)
+			if cerr != nil {
+				return ibFail(fmt.Errorf("[NB-3421] create %s: %v", destPath, cerr))
+			}
+			nFiles, nBytes, perr = streamImageZip(fs, files, total, out, a.ibEmitTask, cancelled)
+			if perr != nil {
+				_ = out.Close()
+				_ = os.Remove(destPath) // never leave a corrupt half-zip
+				return perr
+			}
+			return out.Close()
+		})
+	if errors.Is(err, errImageRestoreCancelled) {
+		a.ibEmit(100, "Download cancelled")
 		return err
 	}
-
-	emit(88, "Packaging…")
-	if asZip {
-		if err := zipDirectory(staging, destPath); err != nil {
-			emit(100, "Download failed")
-			return ibFail(fmt.Errorf("[NB-3422] create zip: %v", err))
-		}
-	} else {
-		src, ferr := findSingleFile(staging)
-		if ferr != nil {
-			emit(100, "Download failed")
-			return ibFail(ferr)
-		}
-		if err := copyFileTo(src, destPath); err != nil {
-			emit(100, "Download failed")
-			return ibFail(fmt.Errorf("[NB-3423] write file: %v", err))
-		}
+	if err != nil {
+		a.ibEmit(100, "Download failed")
+		return ibFail(err)
 	}
-	emit(100, "Download complete")
-	writeBackupLog(fmt.Sprintf("ImageBrowse: downloaded %d selection(s) from %s to %s",
-		len(includePaths), diskArchive, destPath))
+	a.ibEmit(100, fmt.Sprintf("Packaged %d file(s), %s", nFiles, formatBytesGo(uint64(nBytes))))
+	writeBackupLog(fmt.Sprintf("ImageBrowse: streamed %d file(s) / %s into %s",
+		nFiles, formatBytesGo(uint64(nBytes)), destPath))
 	return nil
 }
 
@@ -662,22 +683,23 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	count, warned := 0, 0
 	err = a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
 		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
-			files, ferr := expandImageSelection(fs, includePaths)
+			files, totalBytes, ferr := planSelection(fs, includePaths)
 			if ferr != nil {
 				return ferr
 			}
-			if len(files) == 0 {
-				return ibFail(errors.New("[NB-3420] the selection contains no files"))
-			}
 			streamer, canStream := fs.(imagebrowse.StreamLister)
 			secReader, canSD := fs.(imagebrowse.SecurityReader)
+
+			// Byte-accurate progress: the bar tracks bytes landed, not files
+			// finished — a single 5.7 GB file moves the bar continuously
+			// instead of parking at its first emit.
+			prog := newTaskProgress(totalBytes, "", a.ibEmitTask)
 
 			for i, f := range files {
 				if cancelled() {
 					return errImageRestoreCancelled
 				}
-				emit(5+float64(i)/float64(len(files))*90,
-					fmt.Sprintf("Restoring %d/%d: %s", i+1, len(files), filepath.Base(f)))
+				prog.label = fmt.Sprintf("Restoring %d/%d: %s", i+1, len(files), filepath.Base(f))
 
 				// Where this file lands. keepStructure=false flattens to the base
 				// name (matches the directory-restore option of the same name).
@@ -698,7 +720,7 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 				if cerr != nil {
 					return ibFail(fmt.Errorf("[NB-3421] create %s: %v", target, cerr))
 				}
-				if _, eerr := fs.ExtractFile(f, w); eerr != nil {
+				if _, eerr := fs.ExtractFile(f, &countingWriter{w: w, t: prog}); eerr != nil {
 					_ = w.Close()
 					_ = os.Remove(target) // don't leave a half-written file
 					return ibFail(fmt.Errorf("[NB-3421] extract %s: %v", f, eerr))

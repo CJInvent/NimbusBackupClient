@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.149] - 2026-07-16
+
+### Fixed
+- **"Package as ZIP" now actually produces a zip.** A single-file selection
+  used to hit an old "one file → save it directly" shortcut that silently
+  overrode the ticked option. The explicit request wins: one file becomes a
+  one-entry zip.
+- **Restore progress no longer parks at 5%.** Progress was per-FILE, so a
+  single large file emitted once at the start and nothing until done. The
+  bar now tracks BYTES landed — a 5.7 GB file moves it continuously.
+- **The progress indicator no longer blinks in and out.** Scan/restore
+  progress was surfaced through auto-hiding status toasts, and the actual
+  bar only rendered during restores (never scans or downloads). There is now
+  ONE persistent animated task bar covering scan, restore, and zip download:
+  visible from the first event to completion (with a short linger at 100%),
+  a travelling sheen so it reads as alive between updates, and an
+  indeterminate mode for phases that can't know their size yet.
+
+### Changed
+- **Zip packaging is now a single streamed pass — zero interim storage.**
+  Bytes flow PBS → chunk cache → NTFS parser → zip entry → destination; the
+  old path staged the full extraction AND the zip (2× the selection's size
+  in temp space, every byte touched three times). Zip entries use the Store
+  method — this is packaging, not compression: image data is arbitrary
+  binary, Store keeps throughput I/O-bound, and it makes the progress math
+  exact (bytes in = bytes out). Entry mtimes carry the source file's mtime;
+  NTFS permissions/ADS can't travel in a zip, which is why those options
+  grey in zip mode.
+- **Live rate and time-to-completion estimate** on the task bar for restores
+  and zip downloads: "3.2 GB / 5.7 GB · 56% · 41.8 MB/s · 1m 12s left"
+  (EMA-smoothed rate, emit-throttled to ~5 events/s).
+- **Portal extraction mirrored**: the agent's delegated `image_extract`
+  streams the zip in one pass too (single temp zip, then upload — interim
+  storage halved; the server-side spool remains, inherent to the async
+  browser-download design). Same `streamImageZip` core as the GUI, so the
+  two paths cannot drift. Byte/rate details now appear in the service debug
+  log for delegated extractions.
+- Cancel covers zip downloads as well as restores (same button, same
+  mechanism).
+
+### Known limitations (stated, not hidden)
+- Directory (pxar) backup zip downloads still stage before zipping — the
+  pxar decoder extracts to a directory rather than handing out per-file
+  streams. Volume-backup downloads are fully streaming. Portal live
+  progress/ETA for delegated extraction isn't shown in the browser (the
+  async command channel reports completion, not progress); it is visible in
+  the machine's debug log.
+
 ## [0.2.148] - 2026-07-15
 
 ### Fixed

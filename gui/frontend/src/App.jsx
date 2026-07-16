@@ -192,6 +192,10 @@ function App() {
   })
   const [restoreLoading, setRestoreLoading] = useState(false)
   const [restoreProgress, setRestoreProgress] = useState(0)
+  // Unified task progress for scan / restore / zip download. Fed by every
+  // restore:progress event; visible from first event until 100% (with a short
+  // linger) — it does NOT blink between emits, unlike the old status toasts.
+  const [taskProg, setTaskProg] = useState(null) // {pct,msg,done,total,bps,eta,indet}
 
   // ===== file search across snapshots =====
   const [showSearch, setShowSearch] = useState(false)
@@ -378,8 +382,23 @@ function App() {
   useEffect(() => {
     if (!EventsOn) return
     const unsubP = EventsOn('restore:progress', (data) => {
-      setRestoreProgress(Math.round(data.percent || 0))
-      showStatus(`🔄 ${data.message || ''}`, 'info')
+      const pct = Math.round(data.percent || 0)
+      setRestoreProgress(pct)
+      // Indeterminate when the phase can't know its size (no totals yet).
+      const indet = !(data.total_bytes > 0) && pct === 0
+      setTaskProg({
+        pct,
+        msg: data.message || '',
+        done: data.done_bytes || 0,
+        total: data.total_bytes || 0,
+        bps: data.bps || 0,
+        eta: (typeof data.eta_seconds === 'number' && data.eta_seconds >= 0) ? data.eta_seconds : null,
+        indet,
+      })
+      if (pct >= 100) {
+        // Linger briefly at 100 so completion is visible, then clear.
+        setTimeout(() => setTaskProg(p => (p && p.pct >= 100 ? null : p)), 900)
+      }
     })
     const unsubC = EventsOn('restore:complete', (data) => {
       setRestoreLoading(false)
@@ -1554,6 +1573,18 @@ function App() {
 
   // Cancel an in-flight restore. Image restores are cancellable mid-run on the
   // Go side (CancelImageRestore); the button appears only while one is active.
+  const fmtRate = (bps) => {
+    if (!bps || bps < 1) return ''
+    const mbps = bps / 1e6
+    return mbps >= 1 ? `${mbps.toFixed(1)} MB/s` : `${(bps / 1e3).toFixed(0)} KB/s`
+  }
+  const fmtEta = (sec) => {
+    if (sec == null || sec < 0) return ''
+    if (sec < 60) return `${sec}s`
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`
+    return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
+  }
+
   const handleCancelRestore = async () => {
     try {
       if (CancelImageRestore) await CancelImageRestore()
@@ -1597,11 +1628,10 @@ function App() {
   const handleDownloadSelection = async () => {
     if (!DownloadSelection || selectedPaths.size === 0) return
     const paths = Array.from(selectedPaths)
-    // Single regular file? (must exist in entries and not be a dir)
-    const single = paths.length === 1 ? snapshotEntries.find(e => e.path === paths[0] && !e.is_dir) : null
-    const defaultName = single
-      ? (single.path.split('/').pop() || 'download')
-      : `${selectedSnapshot.backup_id}-${(selectedSnapshot.time || '').replace(/[: ]/g, '-')}.zip`
+    // The user explicitly ticked "Package as ZIP" — a single file becomes a
+    // one-entry zip, exactly as asked. (The old single->direct-file shortcut
+    // silently overrode the request.)
+    const defaultName = `${selectedSnapshot.backup_id}-${(selectedSnapshot.time || '').replace(/[: ]/g, '-')}.zip`
     const dest = await openPicker({
       mode: 'save',
       initialPath: restoreDestPath || '',
@@ -1639,7 +1669,7 @@ function App() {
           imagePartIndex,
           paths,
           dest,
-          !single,
+          true, // always a zip — that is what the ticked option means
           selectionBytes || 0
         )
       } else {
@@ -1649,7 +1679,7 @@ function App() {
           selectedSnapshot.id,
           paths,
           dest,
-          !single,
+          true, // always a zip — that is what the ticked option means
           selectionBytes || 0
         )
       }
@@ -3286,18 +3316,19 @@ function App() {
                   )}
                 </div>
 
-                {restoreLoading && (
+                {taskProg && (
                   <div style={{marginTop: '12px'}}>
-                    <div style={{height: '8px', backgroundColor: 'var(--nc-border-soft)', borderRadius: '4px', overflow: 'hidden'}}>
-                      <div style={{
-                        height: '100%',
-                        width: `${restoreProgress}%`,
-                        backgroundColor: 'var(--nc-accent)',
-                        transition: 'width 0.3s ease'
-                      }}/>
+                    <div className={taskProg.indet ? 'nc-taskbar indet' : 'nc-taskbar'}>
+                      <div className="nc-taskbar-fill" style={taskProg.indet ? {} : { width: `${taskProg.pct}%` }}/>
                     </div>
-                    <p style={{textAlign: 'center', fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: '4px'}}>
-                      {restoreProgress}%
+                    <p style={{display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: 'var(--nc-text-dim)', marginTop: '4px', gap: '10px', flexWrap: 'wrap'}}>
+                      <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%'}}>{taskProg.msg}</span>
+                      <span style={{fontVariantNumeric: 'tabular-nums'}}>
+                        {taskProg.total > 0 && `${formatBytes(taskProg.done)} / ${formatBytes(taskProg.total)} · `}
+                        {!taskProg.indet && `${taskProg.pct}%`}
+                        {fmtRate(taskProg.bps) && ` · ${fmtRate(taskProg.bps)}`}
+                        {taskProg.eta != null && ` · ${fmtEta(taskProg.eta)} ${t('timeLeft')}`}
+                      </span>
                     </p>
                   </div>
                 )}

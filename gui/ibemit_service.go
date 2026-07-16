@@ -21,3 +21,14 @@ func (a *App) ibEmit(pct float64, msg string) {
 		writeDebugLog(fmt.Sprintf("[imagebrowse %3.0f%%] %s", pct, msg))
 	}
 }
+
+// ibEmitTask (service build): same coarse log line; byte details included so
+// a delegated extraction's throughput is visible in ProgramData.
+func (a *App) ibEmitTask(pct float64, msg string, done, total int64, bps float64, _ int) {
+	step := int(pct) / 10
+	if step != lastIbEmitStep || pct >= 100 {
+		lastIbEmitStep = step
+		writeDebugLog(fmt.Sprintf("[imagebrowse %3.0f%%] %s (%s / %s, %.1f MB/s)",
+			pct, msg, formatBytesGo(uint64(done)), formatBytesGo(uint64(total)), bps/1e6))
+	}
+}

@@ -987,3 +987,43 @@ button:focus-visible,
     color: var(--nc-accent);
     text-decoration: underline;
 }
+
+/* ============================================================================
+   Unified task progress bar (scan / restore / zip download)
+   Persistent from first event to completion — replaces the blinking toasts.
+   Indeterminate mode (no known total yet) shows a travelling shimmer.
+   ============================================================================ */
+.nc-taskbar {
+    height: 8px;
+    background: var(--nc-border-soft);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+.nc-taskbar-fill {
+    height: 100%;
+    background: var(--nc-accent);
+    border-radius: 4px;
+    transition: width 0.25s ease;
+    /* subtle moving sheen so the bar reads as ALIVE even between updates */
+    background-image: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in srgb, #fff 18%, transparent) 50%,
+        transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: nc-task-sheen 1.6s linear infinite;
+}
+.nc-taskbar.indet .nc-taskbar-fill {
+    width: 35%;
+    animation: nc-task-indet 1.2s ease-in-out infinite;
+}
+@keyframes nc-task-sheen {
+    from { background-position: 200% 0; }
+    to   { background-position: -200% 0; }
+}
+@keyframes nc-task-indet {
+    0%   { margin-left: -35%; }
+    100% { margin-left: 100%; }
+}

@@ -34,11 +34,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"controlplane"
+	"imagebrowse"
+	"pbscommon"
 )
 
 // cpDirEntryCap bounds one directory listing in a command result. The server
@@ -178,56 +179,49 @@ func (a *App) cpImagePartitions(pbsID, backupID, snapshotID, backupType string) 
 	return controlplane.CommandResult{OK: true, Result: map[string]interface{}{"disks": out}}
 }
 
-// cpImageExtract extracts the selection to a temp ZIP and streams it to the
-// control server as the command's artifact. The zip contains file DATA only:
-// no NTFS permissions, no ADS — by design for browser downloads.
+// cpImageExtract streams the selection into a Store-method ZIP in ONE pass
+// (PBS -> parser -> zip -> temp file), uploads it as the command's artifact,
+// and deletes the temp. Interim storage is exactly the zip's size — the old
+// extract-tree-then-zip needed it twice. The zip carries file DATA only: no
+// NTFS permissions, no ADS — by design for browser downloads; full-fidelity
+// restore is a local-GUI operation. Mirrors the GUI's DownloadImageSelection
+// via the same streamImageZip core, so the two paths cannot drift.
 func (a *App) cpImageExtract(cmdID int64, pbsID, backupID, snapshotID, backupType, disk string, part int, paths []string) controlplane.CommandResult {
 	if cpClient == nil {
 		return cpErr("control server client not initialised")
 	}
-	staging, err := os.MkdirTemp("", "nimbus-portal-x-*")
+	tmp, err := os.CreateTemp("", "nimbus-portal-*.zip")
 	if err != nil {
-		return cpErr("temp dir: " + err.Error())
+		return cpErr("temp zip: " + err.Error())
 	}
-	defer func() { _ = os.RemoveAll(staging) }()
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
 
-	if _, err := a.extractSelection(pbsID, backupID, snapshotID, backupType, disk, part,
-		paths, staging, false /*streams*/, false /*sd*/, a.ibEmit); err != nil {
-		return cpErr(err.Error())
-	}
-
-	zipPath := filepath.Join(staging, "artifact.zip")
-	// Zip the extracted tree. extractSelection stages under path-shaped
-	// subdirs; zip the staging root minus the artifact itself.
-	stagedRoot := filepath.Join(staging, "tree")
-	// extractSelection wrote directly under staging; move entries under tree/
-	// so the artifact.zip we create alongside is not zipped into itself.
-	if err := os.MkdirAll(stagedRoot, 0o755); err != nil {
-		return cpErr(err.Error())
-	}
-	items, _ := os.ReadDir(staging)
-	for _, it := range items {
-		if it.Name() == "tree" {
-			continue
-		}
-		if err := os.Rename(filepath.Join(staging, it.Name()), filepath.Join(stagedRoot, it.Name())); err != nil {
-			return cpErr("stage move: " + err.Error())
-		}
-	}
-	if err := zipDirectory(stagedRoot, zipPath); err != nil {
-		return cpErr("zip: " + err.Error())
-	}
-	st, err := os.Stat(zipPath)
+	var nFiles int
+	var nBytes int64
+	err = a.withPartition(pbsID, backupID, snapshotID, backupType, disk, part, true,
+		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
+			files, total, perr := planSelection(fs, paths)
+			if perr != nil {
+				return perr
+			}
+			nFiles, nBytes, perr = streamImageZip(fs, files, total, tmp, a.ibEmitTask, nil)
+			if perr != nil {
+				_ = tmp.Close()
+				return perr
+			}
+			return tmp.Close()
+		})
 	if err != nil {
 		return cpErr(err.Error())
 	}
-	if err := cpClient.PostCommandArtifact(cmdID, zipPath); err != nil {
+	if err := cpClient.PostCommandArtifact(cmdID, tmpPath); err != nil {
 		return cpErr("artifact upload: " + err.Error())
 	}
-	writeBackupLog(fmt.Sprintf("Portal browse: uploaded %d-byte extraction artifact for command %d (%d path(s) from %s)",
-		st.Size(), cmdID, len(paths), disk))
+	writeBackupLog(fmt.Sprintf("Portal browse: streamed %d file(s) / %s into artifact for command %d (from %s)",
+		nFiles, formatBytesGo(uint64(nBytes)), cmdID, disk))
 	return controlplane.CommandResult{OK: true, Result: map[string]interface{}{
-		"artifact": true, "bytes": st.Size(),
+		"artifact": true, "bytes": nBytes, "files": nFiles,
 	}}
 }
 
