@@ -9,10 +9,15 @@ package main
 
 import "fmt"
 
+// lastIbEmitStep is package-level rather than an App field so the untagged
+// build carries no unused field (golangci's `unused` analyzes without the
+// service tag). One App exists per process, so package scope is equivalent.
+var lastIbEmitStep = -1
+
 func (a *App) ibEmit(pct float64, msg string) {
 	step := int(pct) / 10
-	if step != a.lastIbEmitStep || pct >= 100 {
-		a.lastIbEmitStep = step
+	if step != lastIbEmitStep || pct >= 100 {
+		lastIbEmitStep = step
 		writeDebugLog(fmt.Sprintf("[imagebrowse %3.0f%%] %s", pct, msg))
 	}
 }

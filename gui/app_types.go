@@ -20,7 +20,6 @@ type App struct {
 
 	lastImageTruncated bool               // legacy: kept for the LastImageListTruncated binding (always false now)
 	lastImageKey       string             // cache key of the most recent partition scan
-	lastIbEmitStep     int                // service build: last 10%-step logged by ibEmit
 	ibRestoreMu        sync.Mutex         // guards ibRestoreCancel
 	ibRestoreCancel    context.CancelFunc // set while an image restore runs; nil otherwise
 }
