@@ -125,7 +125,12 @@ type PBSClient struct {
 
 	Datastore string
 	Namespace string
-	Manifest  BackupManifest
+
+	// Shared zstd encoder (see encoder()): built once, used by all upload
+	// workers concurrently via EncodeAll.
+	encOnce  sync.Once
+	enc      *zstd.Encoder
+	Manifest BackupManifest
 
 	Insecure bool
 
@@ -515,13 +520,14 @@ func (pbs *PBSClient) UploadFixedCompressedChunk(writerid uint64, digest string,
 	return pbs.UploadChunk(writerid, digest, chunkdata, false, true)
 }
 
-func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []byte, dynamic bool, compressed bool) error {
-	outBuffer := make([]byte, 0)
-	if compressed {
-		outBuffer = append(outBuffer, blobCompressedMagic...)
-		compressedData := make([]byte, 0)
-
-		// Select compression level based on client configuration
+// encoder returns the client's shared zstd encoder, built once. The old code
+// constructed a NEW encoder for EVERY chunk — zstd.NewWriter spins up encoder
+// goroutines and allocates multi-megabyte window state, so a 238k-chunk
+// backup paid that setup/teardown and GC churn 238k times. EncodeAll on one
+// shared Encoder is explicitly safe for concurrent use (klauspost/compress
+// docs) and is the intended pattern; all upload workers share this one.
+func (pbs *PBSClient) encoder() *zstd.Encoder {
+	pbs.encOnce.Do(func() {
 		var encoderLevel zstd.EncoderLevel
 		switch pbs.CompressionLevel {
 		case CompressionFastest:
@@ -533,9 +539,19 @@ func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []by
 		default: // CompressionDefault or empty
 			encoderLevel = zstd.SpeedDefault
 		}
+		pbs.enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(encoderLevel))
+	})
+	return pbs.enc
+}
 
-		w, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(encoderLevel))
-		compressedData = w.EncodeAll(chunkdata, compressedData)
+func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []byte, dynamic bool, compressed bool) error {
+	// Preallocate: magic + crc + worst-case payload. Avoids the append-growth
+	// reallocations the old code did on every chunk.
+	outBuffer := make([]byte, 0, len(chunkdata)+len(blobCompressedMagic)+8)
+	if compressed {
+		outBuffer = append(outBuffer, blobCompressedMagic...)
+
+		compressedData := pbs.encoder().EncodeAll(chunkdata, make([]byte, 0, len(chunkdata)))
 		checksum := crc32.Checksum(compressedData, crc32.IEEETable)
 		//binary.Write(outBuffer, binary.LittleEndian, checksum)
 		outBuffer = binary.LittleEndian.AppendUint32(outBuffer, checksum)
@@ -1116,11 +1132,19 @@ func (pbs *PBSClient) DownloadToBytes(archivename string) ([]byte, error) { //In
 
 }
 
+// GetKnownSha265FromFIDX loads the previous backup's chunk digests so
+// unchanged chunks upload as cheap reuse assignments. Phase timings are
+// logged via DebugLogFn because this call sits on the critical path before
+// the first chunk moves: if it is ever slow, the log must say WHERE (server
+// response vs transfer vs parse), not leave a silent ten-minute gap.
 func (pbs *PBSClient) GetKnownSha265FromFIDX(archivename string) (*hashmap.Map[string, bool], error) {
+	t0 := time.Now()
 	data, err := pbs.DownloadPreviousToBytes(archivename)
 	if err != nil {
 		return nil, err
 	}
+	tDownload := time.Since(t0)
+	tp := time.Now()
 	rdr := bytes.NewReader(data)
 	var hdr FIDXHeader
 	err = binary.Read(rdr, binary.LittleEndian, &hdr)
@@ -1141,6 +1165,11 @@ func (pbs *PBSClient) GetKnownSha265FromFIDX(archivename string) (*hashmap.Map[s
 			return nil, fmt.Errorf("FIDX: Short read")
 		}
 		ret.Insert(hex.EncodeToString(H), true)
+	}
+	if DebugLogFn != nil {
+		DebugLogFn(fmt.Sprintf("Previous index %s: %s downloaded in %s, %d digests parsed in %s",
+			archivename, ByteCountSI(int64(len(data))), tDownload.Round(time.Millisecond),
+			ret.Len(), time.Since(tp).Round(time.Millisecond)))
 	}
 	return ret, nil
 
@@ -1197,3 +1226,20 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 
 }
 
+// DebugLogFn, when set by the host application, receives diagnostic lines
+// from hot paths (timings, retries). Nil = silent. Set once at startup.
+var DebugLogFn func(string)
+
+// ByteCountSI renders a byte count for log lines (SI units).
+func ByteCountSI(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
+}

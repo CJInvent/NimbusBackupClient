@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.150] - 2026-07-16
+
+### Performance
+- **One zstd encoder for the whole backup, not one per chunk.** Every chunk
+  upload constructed a fresh `zstd.NewWriter` — encoder goroutines and
+  multi-megabyte window state built and thrown away ~240,000 times on a 1 TB
+  disk. All upload workers now share a single encoder (EncodeAll is
+  concurrency-safe by contract). This was the dominant CPU/GC waste in the
+  upload path and a large part of why the send rate never approached the
+  link.
+- **Disk reader rewritten without the append/re-slice churn.** The old chunk
+  assembly re-copied every byte at least once more and produced a 4–8 MB
+  allocation per chunk of GC pressure; chunks are now single fresh slices
+  filled directly by reads.
+- **128 MB elastic pipeline (was 32 MB).** The 60↔400 MB/s read sawtooth was
+  backpressure: with only 8 chunk slots between reader and upload workers,
+  the reader parked the instant the pipeline paused, then burst. 32 slots
+  decouple the stages.
+- The pre-upload known-chunk load (the long silent pause before chunks move)
+  is now **instrumented**: the log reports the previous index's size,
+  download time, and parse time separately, so if it is ever slow again the
+  log says exactly where the time went.
+
+### Added
+- **VSS diagnostics finally land in the log.** They were computed and printed
+  to stdout — which a Windows service doesn't have — so every snapshot
+  success, failure, writer warning and shadow ID vanished. Now logged:
+  snapshot creation start (volume, context, timeout), success with shadow ID
+  + device path + elapsed, busy-retry and service-reset attempts, and on
+  failure the exact error (HRESULT included) plus every writer in a bad
+  state with its last error — the same facts Event Viewer's VSS entries
+  carry.
+
+### Fixed
+- **Time remaining is byte-based and deliberately conservative.** The old
+  estimate was percent-per-second between two ticks, so a burst of reused
+  chunks made it claim "4m remaining" on a fresh 1 TB backup. It now uses
+  the byte rate over the whole run (the disk must be READ in full regardless
+  of reuse), pads ×1.15, and displays as "≥".
+- **Chunk counters no longer appear twice.** Counters ride the structured
+  stats channel only (the stats grid renders them once); the per-chunk
+  status message that duplicated them is gone.
+- **No more auto-hiding toast during backups** — the toast duplicated the
+  progress card and blinked with every event, the same defect the restore
+  path had. Phase changes render as a persistent line inside the card.
+- **Duplicate log lines de-duplicated and re-worded for their actual
+  purpose**: the backup engine logs phases verbatim and percent at ≥1%
+  steps ("Backup engine: …"); the service relay logs only phase deliveries
+  ("Service→GUI relay: … delivered"), confirming the callback path rather
+  than restating the engine. Chunk-cadence diagnostics throttle to one line
+  per 256 chunks.
+
+### Internationalization
+- **`npm run i18n-audit`** — a build-gating script that extracts every
+  user-visible string (JSX text nodes, title/placeholder/aria attributes,
+  toast calls) and fails on anything not routed through t(). It found and
+  we fixed **66 hardcoded strings**, including the mixed-language backup
+  stats card ("Données", "Dossier", "échoués") and a swath of French-only
+  error toasts. The audit runs before every frontend build, so hardcoded
+  text can no longer ship. Catalog now 395 keys × 3 languages, parity
+  intact.
+
 ## [0.2.149] - 2026-07-16
 
 ### Fixed

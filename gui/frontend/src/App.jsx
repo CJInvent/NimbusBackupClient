@@ -127,6 +127,7 @@ function App() {
   const [disksError, setDisksError] = useState('')
   const [excludeList, setExcludeList] = useState('')
   const [progress, setProgress] = useState(0)
+  const [backupPhase, setBackupPhase] = useState('')   // current engine phase, shown once in the card
   // Opt-in: split this backup into parts (for the first backup of a large volume).
   // Off by default → no size analysis, the backup starts immediately.
   const [splitFirstBackup, setSplitFirstBackup] = useState(false)
@@ -306,53 +307,56 @@ function App() {
       const now = Date.now()
       const percent = Math.round(data.percent)
       setProgress(percent)
-      showStatus(`🔄 ${data.message}`, 'info')
+      // Phase changes update the card's status line; NO toast per tick —
+      // the auto-hiding toast duplicated the card and blinked with every
+      // event (the same defect the restore path had).
+      if (data.message) setBackupPhase(data.message)
 
-      // Calculate speed and ETA
-      setBackupStats(prev => {
-        const startTime = prev.startTime || now
-        const lastUpdate = prev.lastUpdate || now
-        const timeDiff = (now - lastUpdate) / 1000 // seconds
-        const percentDiff = percent - prev.lastPercent
-
-        // Calculate speed (percent per second)
-        let speed = prev.speed
-        if (timeDiff > 0 && percentDiff > 0) {
-          speed = percentDiff / timeDiff
-        }
-
-        // Calculate ETA (seconds remaining)
-        let eta = null
-        if (speed > 0 && percent < 100) {
-          const remainingPercent = 100 - percent
-          eta = Math.round(remainingPercent / speed)
-        }
-
-        return {
-          ...prev, // preserve structured stats (bytes/chunks) set by backup:stats
-          startTime,
-          lastUpdate: now,
-          lastPercent: percent,
-          speed,
-          eta
-        }
-      })
+      // Speed & ETA — measured on BYTES over the WHOLE run, not on percent
+      // between two ticks. Percent-per-second lied grotesquely: a burst of
+      // reused chunks makes percent fly while the disk still has 900 GB to
+      // read, so the old ETA said "4m" on a fresh 1 TB backup. Byte rate over
+      // total elapsed self-corrects, and the displayed value is padded x1.15
+      // and labelled ">=": the whole disk must be READ no matter how much is
+      // reused, so if the estimate errs, it errs high.
+      setBackupStats(prev => ({
+        ...prev, // structured stats (bytes/chunks) arrive via backup:stats
+        startTime: prev.startTime || now,
+        lastUpdate: now,
+        lastPercent: percent,
+      }))
     })
 
     // Structured live statistics (bytes + chunk counts) emitted alongside progress.
     const unsubStats = EventsOn('backup:stats', (data) => {
-      setBackupStats(prev => ({
-        ...prev,
-        bytesDone: data.bytesDone || 0,
-        bytesTotal: data.bytesTotal || 0,
-        newChunks: data.newChunks || 0,
-        reusedChunks: data.reusedChunks || 0,
-        failedChunks: data.failedChunks || 0,
-        currentDir: data.currentDir || ''
-      }))
+      setBackupStats(prev => {
+        const startTime = prev.startTime || Date.now()
+        const elapsed = (Date.now() - startTime) / 1000
+        const done = data.bytesDone || 0
+        const total = data.bytesTotal || 0
+        // Byte rate over the whole run (self-correcting); ETA padded x1.15
+        // and rendered as ">=" — see the comment in the progress handler.
+        const byteRate = elapsed > 3 && done > 0 ? done / elapsed : 0
+        const eta = byteRate > 0 && total > done
+          ? Math.round(((total - done) / byteRate) * 1.15)
+          : null
+        return {
+          ...prev,
+          startTime,
+          bytesDone: done,
+          bytesTotal: total,
+          newChunks: data.newChunks || 0,
+          reusedChunks: data.reusedChunks || 0,
+          failedChunks: data.failedChunks || 0,
+          currentDir: data.currentDir || '',
+          byteRate,
+          eta,
+        }
+      })
     })
 
     const unsubComplete = EventsOn('backup:complete', (data) => {
+      setBackupPhase('')
       setProgress(data.success ? 100 : 0)
       setBackupStats({ startTime: null, lastUpdate: null, lastPercent: 0, speed: 0, eta: null, bytesDone: 0, bytesTotal: 0, newChunks: 0, reusedChunks: 0, failedChunks: 0, currentDir: '' })
       showStatus(data.success ? '✅ ' + data.message : '❌ ' + data.message, data.success ? 'success' : 'error')
@@ -595,7 +599,7 @@ function App() {
 
   const handleAddPBSServer = async () => {
     if (!AddPBSServer) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -623,13 +627,13 @@ function App() {
       setEditingServer(null)
       await loadPBSServers()
     } catch (err) {
-      showStatus(`❌ Erreur: ${err}`, 'error')
+      showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
     }
   }
 
   const handleUpdatePBSServer = async () => {
     if (!UpdatePBSServer) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -652,13 +656,13 @@ function App() {
       setEditingServer(null)
       await loadPBSServers()
     } catch (err) {
-      showStatus(`❌ Erreur: ${err}`, 'error')
+      showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
     }
   }
 
   const handleDeletePBSServer = async (id) => {
     if (!DeletePBSServer) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -671,13 +675,13 @@ function App() {
       showStatus(`✅ ${t('statusServerDeleted')}`, 'success')
       await loadPBSServers()
     } catch (err) {
-      showStatus(`❌ Erreur: ${err}`, 'error')
+      showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
     }
   }
 
   const handleSetDefaultPBS = async (id) => {
     if (!SetDefaultPBSServer) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -686,7 +690,7 @@ function App() {
       setDefaultPBSID(id)
       showStatus(`✅ ${t('statusServerSetDefault').replace('{id}', id)}`, 'success')
     } catch (err) {
-      showStatus(`❌ Erreur: ${err}`, 'error')
+      showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
     }
   }
 
@@ -697,7 +701,7 @@ function App() {
 
   const handleTestPBSConnection = async (id) => {
     if (!TestPBSConnection) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -756,7 +760,7 @@ function App() {
 
   const handleSaveConfig = async () => {
     if (!SaveConfig) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -780,13 +784,13 @@ function App() {
       setConfig(trimmedConfig)
       showStatus(`✅ ${t('statusConfigSaved')}`, 'success')
     } catch (err) {
-      showStatus(`❌ Erreur : ${err}`, 'error')
+      showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
     }
   }
 
   const handleTestConnection = async () => {
     if (!TestConnection) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -852,7 +856,7 @@ function App() {
   // returns one job per part; we then run a backup per part.
   const executeSplitBackup = async (dirList) => {
     if (!window.go || !window.go.main.App.CreateBackupSplitPlan) {
-      showStatus('❌ Split backup not available', 'error')
+      showStatus('❌ ' + t('errSplitUnavailable'), 'error')
       return
     }
 
@@ -884,7 +888,7 @@ function App() {
         return
       }
 
-      showStatus(`🔄 Lancement de ${splitPlan.length} backups partiels...`, 'info')
+      showStatus(`🔄 ${t('splitLaunching').replace('{n}', splitPlan.length)}`, 'info')
 
       // Execute split jobs sequentially
       for (let i = 0; i < splitPlan.length; i++) {
@@ -936,13 +940,13 @@ function App() {
         'success'
       )
     } catch (err) {
-      showStatus(`❌ Erreur split backup: ${err}`, 'error')
+      showStatus(`❌ ${t('errSplitBackup')}: ${err}`, 'error')
     }
   }
 
   const handleStartBackup = async () => {
     if (!StartBackup) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
 
@@ -950,12 +954,12 @@ function App() {
     const dirList = backupDirs.split('\n').map(d => d.trim()).filter(d => d)
 
     if (backupType === 'directory' && dirList.length === 0) {
-      showStatus('❌ Au moins un répertoire requis', 'error')
+      showStatus('❌ ' + t('errNeedDirectory'), 'error')
       return
     }
 
     if (backupType === 'machine' && selectedDrives.length === 0) {
-      showStatus('❌ Au moins un disque requis', 'error')
+      showStatus('❌ ' + t('errNeedDisk'), 'error')
       return
     }
 
@@ -973,7 +977,7 @@ function App() {
     // Scheduled mode - save or update job instead of executing immediately
     if (backupMode === 'scheduled') {
       if (!SaveScheduledJob || !UpdateScheduledJob) {
-        showStatus('❌ Fonction de planification non disponible', 'error')
+        showStatus('❌ ' + t('errNoScheduler'), 'error')
         return
       }
 
@@ -996,20 +1000,20 @@ function App() {
           // Update existing job
           await UpdateScheduledJob(jobData)
           setScheduledJobs(scheduledJobs.map(j => j.id === editingJobId ? jobData : j))
-          showStatus(`✅ Backup modifié pour ${scheduleTime}`, 'success')
+          showStatus(`✅ ${t('scheduleUpdated').replace('{time}', scheduleTime)}`, 'success')
           setEditingJobId(null)
         } else {
           // Create new job
           await SaveScheduledJob(jobData)
           setScheduledJobs([...scheduledJobs, jobData])
-          showStatus(`✅ Backup planifié pour ${scheduleTime}`, 'success')
+          showStatus(`✅ ${t('scheduleCreated').replace('{time}', scheduleTime)}`, 'success')
         }
         // Reset form after save
         setScheduleTime('02:00')
         setRunAtStartup(false)
         setBackupDirs('')
       } catch (err) {
-        showStatus(`❌ Erreur: ${err}`, 'error')
+        showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
       }
       return
     }
@@ -1038,15 +1042,15 @@ function App() {
 
   const handleListSnapshots = async () => {
     if (!ListSnapshots) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
     if (!restoreBackupId) {
-      showStatus('❌ Backup ID requis', 'error')
+      showStatus('❌ ' + t('errBackupIdRequired'), 'error')
       return
     }
 
-    showStatus('🔍 Recherche des snapshots...', 'info')
+    showStatus('🔍 ' + t('searchingSnapshots'), 'info')
     setSelectedSnapshot(null)
     setSnapshotEntries([])
     setSelectedPaths(new Set())
@@ -1056,7 +1060,7 @@ function App() {
       const snaps = await ListSnapshots(restorePBSID || '', restoreBackupId)
       setSnapshots(snaps || [])
       setShowSnapshots(true)
-      showStatus(`✅ ${snaps.length} snapshot(s) trouvé(s)`, 'success')
+      showStatus(`✅ ${t('snapshotsFound').replace('{n}', snaps.length)}`, 'success')
     } catch (err) {
       showStatus(`❌ ${err}`, 'error')
     }
@@ -1064,7 +1068,7 @@ function App() {
 
   const handleSelectSnapshot = async (snap, forceRefresh = false) => {
     if (!ListSnapshotContents) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
     setSelectedSnapshot(snap)
@@ -1142,7 +1146,7 @@ function App() {
 
   const handleSearch = async () => {
     if (!SearchFiles) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
     if (!searchQuery.trim()) {
@@ -1223,7 +1227,7 @@ function App() {
 
   const handleRestoreSnapshot = async () => {
     if (!RestoreSnapshot) {
-      showStatus('❌ Wails runtime non disponible', 'error')
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
       return
     }
     if (!selectedSnapshot) {
@@ -1475,7 +1479,7 @@ function App() {
   // Step 2: open the partition the user chose.
   const handleBrowseImageDisk = async (disk, partIndex, forceRefresh = false) => {
     if (!selectedSnapshot) {
-      showStatus('❌ No snapshot selected', 'error')
+      showStatus('❌ ' + t('errNoSnapshotSelected'), 'error')
       return
     }
     if (!ListImageContents) {
@@ -1948,7 +1952,7 @@ function App() {
                 type="text"
                 value={serverFormData.name}
                 onChange={(e) => setServerFormData({...serverFormData, name: e.target.value})}
-                placeholder="SSD Rapide"
+                placeholder={t('phServerName')}
               />
             </div>
 
@@ -1959,7 +1963,7 @@ function App() {
                   type="text"
                   value={serverFormData.id}
                   onChange={(e) => setServerFormData({...serverFormData, id: e.target.value})}
-                  placeholder="pbs-ssd (laissez vide pour auto-génération)"
+                  placeholder={t('phServerIdAuto')}
                 />
               </div>
             )}
@@ -2029,7 +2033,7 @@ function App() {
               <textarea
                 value={serverFormData.description}
                 onChange={(e) => setServerFormData({...serverFormData, description: e.target.value})}
-                placeholder="Stockage SSD pour backups critiques"
+                placeholder={t('phServerComment')}
                 rows="2"
               />
             </div>
@@ -2127,7 +2131,7 @@ function App() {
                     type="text"
                     value={serverFormData.name}
                     onChange={(e) => setServerFormData({...serverFormData, name: e.target.value})}
-                    placeholder="SSD Rapide"
+                    placeholder={t('phServerName')}
                   />
                 </div>
 
@@ -2138,7 +2142,7 @@ function App() {
                       type="text"
                       value={serverFormData.id}
                       onChange={(e) => setServerFormData({...serverFormData, id: e.target.value})}
-                      placeholder="pbs-ssd (laissez vide pour auto-génération)"
+                      placeholder={t('phServerIdAuto')}
                     />
                   </div>
                 )}
@@ -2208,7 +2212,7 @@ function App() {
                   <textarea
                     value={serverFormData.description}
                     onChange={(e) => setServerFormData({...serverFormData, description: e.target.value})}
-                    placeholder="Stockage SSD pour backups critiques"
+                    placeholder={t('phServerComment')}
                     rows="2"
                   />
                 </div>
@@ -2495,12 +2499,12 @@ function App() {
               <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px'}}>
                 {backupStats.eta !== null && (
                   <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
-                    ⏱️ <strong>{t('timeRemaining')}</strong> {Math.floor(backupStats.eta / 60)}m {backupStats.eta % 60}s
+                    ⏱️ <strong>{t('timeRemaining')}</strong> ≥ {fmtEta(backupStats.eta)}
                   </div>
                 )}
-                {backupStats.speed > 0 && (
+                {backupStats.byteRate > 0 && (
                   <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
-                    ⚡ <strong>{t('speed')}</strong> {backupStats.speed.toFixed(1)}%/s
+                    ⚡ <strong>{t('speed')}</strong> {fmtRate(backupStats.byteRate)}
                   </div>
                 )}
                 {backupStats.startTime && (
@@ -2510,21 +2514,26 @@ function App() {
                 )}
                 {backupStats.bytesDone > 0 && (
                   <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
-                    📦 <strong>Données :</strong> {Math.round(backupStats.bytesDone / 1048576)}
-                    {backupStats.bytesTotal > 0 ? ` / ${Math.round(backupStats.bytesTotal / 1048576)}` : ''} MB
+                    📦 <strong>{t('dataLabel')}</strong> {formatBytes(backupStats.bytesDone)}
+                    {backupStats.bytesTotal > 0 ? ` / ${formatBytes(backupStats.bytesTotal)}` : ''}
                   </div>
                 )}
                 {(backupStats.newChunks > 0 || backupStats.reusedChunks > 0) && (
                   <div style={{fontSize: '13px', color: 'var(--nc-text-dim)'}}>
-                    🧩 <strong>Chunks :</strong> {backupStats.newChunks} new · {backupStats.reusedChunks} reused
+                    🧩 <strong>{t('chunksLabel')}</strong> {backupStats.newChunks} {t('chunksNew')} · {backupStats.reusedChunks} {t('chunksReused')}
                     {backupStats.failedChunks > 0 ? (
-                      <span style={{color: 'var(--nc-err)', fontWeight: 'bold'}}> · {backupStats.failedChunks} échoués</span>
+                      <span style={{color: 'var(--nc-err)', fontWeight: 'bold'}}> · {backupStats.failedChunks} {t('chunksFailed')}</span>
                     ) : ''}
                   </div>
                 )}
                 {backupStats.currentDir && (
                   <div style={{fontSize: '13px', color: 'var(--nc-text-dim)', gridColumn: '1 / -1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                    📁 <strong>Dossier :</strong> {backupStats.currentDir}
+                    📁 <strong>{t('folderLabel')}</strong> {backupStats.currentDir}
+                  </div>
+                )}
+                {backupPhase && (
+                  <div style={{fontSize: '13px', color: 'var(--nc-text-dim)', gridColumn: '1 / -1'}}>
+                    🔄 {backupPhase}
                   </div>
                 )}
               </div>
@@ -2619,7 +2628,7 @@ function App() {
                               setEditingJobId(null)
                             }
                           } catch (err) {
-                            showStatus(`❌ Erreur: ${err}`, 'error')
+                            showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
                           }
                         }}
                       >

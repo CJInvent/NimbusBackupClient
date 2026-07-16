@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"pbscommon"
 	"regexp"
@@ -399,16 +398,16 @@ func contains(slice []string, item string) bool {
 }
 
 type MachineChunkState struct {
-	assignments        []string
-	indexHashData      map[uint64][]byte
-	assignmentsOffset  []uint64
-	processedSize      uint64
-	wrid               uint64
-	chunkcount         uint64
-	currentChunk       []byte
-	newchunk           *atomic.Uint64
-	reusechunk         *atomic.Uint64
-	knownChunks        *hashmap.Map[string, bool]
+	assignments       []string
+	indexHashData     map[uint64][]byte
+	assignmentsOffset []uint64
+	processedSize     uint64
+	wrid              uint64
+	chunkcount        uint64
+	currentChunk      []byte
+	newchunk          *atomic.Uint64
+	reusechunk        *atomic.Uint64
+	knownChunks       *hashmap.Map[string, bool]
 }
 
 func (c *MachineChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool]) {
@@ -532,15 +531,21 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 			// on every chunk, and the old over-size error path broke out of
 			// the loop while still holding the lock, deadlocking the others.
 			percent := float64(processedSnapshot) / float64(totalSize)
-			totalChunks := int(math.Ceil(float64(totalSize) / float64(pbscommon.PBS_FIXED_CHUNK_SIZE)))
-			msg := fmt.Sprintf("Chunk %d/%d (New: %d, Reused: %d)", chunkcountSnapshot, totalChunks, newchunk.Load(), reusechunk.Load())
+			// Counters travel on the structured stats channel ONLY — the UI
+			// renders them once, in the stats grid. Baking them into the
+			// message too is what put chunk counts on screen twice.
 			if progress != nil {
-				progress(0.1+percent*0.85, msg)
+				progress(0.1+percent*0.85, "")
 			}
 			if machineStatsFn != nil {
 				machineStatsFn(processedSnapshot, totalSize, newchunk.Load(), reusechunk.Load())
 			}
-			writeCatLog(catChunks, msg)
+			// Chunk-cadence diagnostics: one line per 256 chunks (~1 GB).
+			if chunkcountSnapshot%256 == 0 {
+				totalChunks := int(math.Ceil(float64(totalSize) / float64(pbscommon.PBS_FIXED_CHUNK_SIZE)))
+				writeCatLog(catChunks, fmt.Sprintf("chunk %d/%d uploaded=%d reused=%d",
+					chunkcountSnapshot, totalChunks, newchunk.Load(), reusechunk.Load()))
+			}
 
 			if processedSnapshot > totalSize {
 				errch <- fmt.Errorf("fatal: tried to backup more data than specified size")
@@ -614,7 +619,11 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
-	ch := make(chan []byte, 8)
+	// 32 x 4 MB = 128 MB of elastic buffer between the disk reader and the
+	// hash/compress/upload workers. The old depth of 8 made read speed
+	// mirror every upload hiccup (the observed 60<->400 MB/s sawtooth):
+	// the reader parked the instant the pipeline paused, then burst.
+	ch := make(chan []byte, 32)
 	diskdev := fmt.Sprintf("\\\\.\\PhysicalDrive%d", index)
 
 	volumeHandle, err := syscall.CreateFile(
@@ -741,7 +750,33 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 		}
 
 		go func() {
-			buffer := make([]byte, 0)
+			// Chunk assembly WITHOUT the old append/re-slice churn: `buffer =
+			// append(buffer, ...)` + `buffer = buffer[CHUNK:]` re-copied every
+			// byte at least once more and generated a 4-8 MB allocation per
+			// chunk of GC pressure. Here each chunk is one fresh slice,
+			// filled directly by disk reads, handed to the channel untouched.
+			chunk := make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
+			fill := 0
+			send := func(force bool) {
+				if fill == int(pbscommon.PBS_FIXED_CHUNK_SIZE) || (force && fill > 0) {
+					ch <- chunk[:fill]
+					chunk = make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
+					fill = 0
+				}
+			}
+			// feed appends read bytes into the current chunk, emitting as
+			// chunks complete. src semantics: keep calling read into the
+			// spare capacity so partition boundaries pack, matching the old
+			// behaviour (chunks can span partitions).
+			feed := func(p []byte) {
+				for len(p) > 0 {
+					n := copy(chunk[fill:], p)
+					fill += n
+					p = p[n:]
+					send(false)
+				}
+			}
+
 			for idx, P := range parts {
 				writeDebugLog(fmt.Sprintf("Processing partition %d: %s to %s",
 					idx, BytesToString(int64(P.StartByte)), BytesToString(int64(P.EndByte))))
@@ -752,7 +787,6 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 						failRead(fmt.Errorf("seek to %d failed: %w", P.StartByte, err))
 						return
 					}
-
 					block := make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
 					pos := P.StartByte
 					for pos < P.EndByte {
@@ -761,12 +795,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 							failRead(fmt.Errorf("raw read at %d failed: %w", pos, err))
 							return
 						}
-						buffer = append(buffer, block[:nbytes]...)
-
-						if len(buffer) >= pbscommon.PBS_FIXED_CHUNK_SIZE {
-							ch <- buffer[:pbscommon.PBS_FIXED_CHUNK_SIZE]
-							buffer = buffer[pbscommon.PBS_FIXED_CHUNK_SIZE:]
-						}
+						feed(block[:nbytes])
 						pos += uint64(nbytes)
 					}
 					if pos != P.EndByte {
@@ -794,7 +823,7 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 					}
 
 					if uint64(P.EndByte) != uint64(P.StartByte)+uint64(l) {
-						log.Printf("VSS snapshot is smaller than partition, will pad with zeros")
+						writeDebugLog("VSS snapshot is smaller than the partition — padding with zeros")
 					}
 
 					npad := P.EndByte - (uint64(P.StartByte) + uint64(l))
@@ -817,23 +846,15 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 							return
 						}
 						pos += uint64(nbytes)
-						buffer = append(buffer, block[:nbytes]...)
-						if len(buffer) >= pbscommon.PBS_FIXED_CHUNK_SIZE {
-							ch <- buffer[:pbscommon.PBS_FIXED_CHUNK_SIZE]
-							buffer = buffer[pbscommon.PBS_FIXED_CHUNK_SIZE:]
-						}
+						feed(block[:nbytes])
 					}
 
-					// Padding
-					block = make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
+					// Zero padding to the partition boundary.
+					zeros := make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
 					for npad > 0 {
-						sl := block[:min(pbscommon.PBS_FIXED_CHUNK_SIZE, npad)]
-						buffer = append(buffer, sl...)
+						sl := zeros[:min(pbscommon.PBS_FIXED_CHUNK_SIZE, npad)]
+						feed(sl)
 						pos += uint64(len(sl))
-						if len(buffer) >= pbscommon.PBS_FIXED_CHUNK_SIZE {
-							ch <- buffer[:pbscommon.PBS_FIXED_CHUNK_SIZE]
-							buffer = buffer[pbscommon.PBS_FIXED_CHUNK_SIZE:]
-						}
 						npad -= uint64(len(sl))
 					}
 					if pos != P.EndByte {
@@ -842,16 +863,8 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 				}
 			}
 
-			// Flush remaining buffer
-			for len(buffer) > 0 {
-				if len(buffer) > pbscommon.PBS_FIXED_CHUNK_SIZE {
-					ch <- buffer[:pbscommon.PBS_FIXED_CHUNK_SIZE]
-					buffer = buffer[pbscommon.PBS_FIXED_CHUNK_SIZE:]
-				} else {
-					ch <- buffer
-					buffer = buffer[:0]
-				}
-			}
+			// Flush the final partial chunk.
+			send(true)
 
 			readerErr <- nil
 			close(ch)
@@ -937,11 +950,18 @@ func RunMachineBackup(opts BackupOptions) error {
 	// chunks and two log lines per chunk would write millions of lines. Log
 	// non-chunk messages always, chunk messages only when overall progress
 	// advanced by >= 0.1%. The UI callback still gets every update.
+	// Engine log policy: PHASE messages log verbatim (they mark state
+	// transitions worth keeping); empty per-chunk ticks log a percent line at
+	// >= 1% steps. This is THE backup-engine log line — the service relay
+	// deliberately does not log the same event again.
 	var lastLoggedPct float64 = -1
 	progress := func(pct float64, msg string) {
-		if !strings.HasPrefix(msg, "Chunk ") || pct-lastLoggedPct >= 0.001 {
-			lastLoggedPct = pct
-			writeDebugLog(fmt.Sprintf("Machine backup progress: %.1f%% - %s", pct*100, msg))
+		switch {
+		case msg != "":
+			writeDebugLog(fmt.Sprintf("Backup engine: %s (%.1f%%)", msg, pct*100))
+		case pct*100-lastLoggedPct >= 1:
+			lastLoggedPct = pct * 100
+			writeDebugLog(fmt.Sprintf("Backup engine: %.0f%% of disk processed", pct*100))
 		}
 		if opts.OnProgress != nil {
 			opts.OnProgress(pct, msg)

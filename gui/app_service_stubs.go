@@ -10,7 +10,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 )
 
 // GetConfigWithHostname returns the configuration with hostname
@@ -71,7 +70,7 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 	pbsCfg := a.config.EffectivePBS()
 
 	// Prepare backup options
-	lastLoggedPct := -1.0
+	var lastRelayedMsg string
 	opts := BackupOptions{
 		BaseURL:         pbsCfg.BaseURL,
 		AuthID:          pbsCfg.AuthID,
@@ -94,9 +93,12 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 			// per chunk was rewriting megabytes of log). The progress map
 			// still gets every update.
 			pct := percent * 100
-			if !strings.HasPrefix(message, "Chunk ") || pct-lastLoggedPct >= 0.1 {
-				lastLoggedPct = pct
-				writeDebugLog(fmt.Sprintf("[Backup Progress] %.1f%% - %s", pct, message))
+			// The backup ENGINE already logs progress (see machine backup's
+			// progress func). This relay logs only phase transitions, worded
+			// as what it is: confirmation the GUI callback path delivered.
+			if message != "" && message != lastRelayedMsg {
+				lastRelayedMsg = message
+				writeDebugLog(fmt.Sprintf("Service->GUI relay: %q delivered at %.1f%%", message, pct))
 			}
 			a.notifyProgressCallbacks(pct, message)
 		},

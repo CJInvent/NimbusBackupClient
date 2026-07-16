@@ -11,9 +11,43 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/st-matskevich/go-vss"
 )
+
+// LogFn receives every VSS diagnostic line. The old code fmt.Println'd them
+// — which in the Windows SERVICE goes nowhere, so snapshot successes,
+// failures, writer warnings and shadow IDs were all computed and then
+// discarded. The host wires this to its debug log at startup; nil falls back
+// to stdout so CLI use still prints.
+var LogFn = func(msg string) { fmt.Println(msg) }
+
+// writerErrorLines extracts the diagnostic core from `vssadmin list writers`
+// output: each writer name with a non-zero last error and its state — the
+// same facts Event Viewer's VSS entries carry, so a failed snapshot is
+// debuggable from our log alone.
+func writerErrorLines(writersStatus string) []string {
+	var out []string
+	var name, state string
+	for _, line := range strings.Split(writersStatus, "\n") {
+		l := strings.TrimSpace(line)
+		if strings.HasPrefix(l, "Writer name:") {
+			name = strings.TrimPrefix(l, "Writer name:")
+		}
+		if strings.HasPrefix(l, "State:") {
+			state = strings.TrimPrefix(l, "State:")
+		}
+		if strings.HasPrefix(l, "Last error:") {
+			errv := strings.TrimSpace(strings.TrimPrefix(l, "Last error:"))
+			if errv != "" && !strings.EqualFold(errv, "No error") {
+				out = append(out, fmt.Sprintf("writer%s: state%s, last error: %s", name, state, errv))
+			}
+			name, state = "", ""
+		}
+	}
+	return out
+}
 
 // shadowIDRe matches a bare VSS shadow-copy GUID (8-4-4-4-12 hex).
 var shadowIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -42,7 +76,7 @@ func SymlinkSnapshot(symlinkPath string, id string, deviceObjectPath string) (st
 
 	os.Remove(snapshotSymLinkFolder)
 
-	fmt.Println("Symlink from: ", deviceObjectPath, " to: ", snapshotSymLinkFolder)
+	LogFn(fmt.Sprintf("VSS: symlink %s -> %s", snapshotSymLinkFolder, deviceObjectPath))
 
 	if err := os.Symlink(deviceObjectPath, snapshotSymLinkFolder); err != nil {
 		return "", fmt.Errorf("failed to create symlink from: %s to: %s, error: %s", deviceObjectPath, snapshotSymLinkFolder, err)
@@ -88,7 +122,8 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 			return err
 		}
 
-		fmt.Print("Creating VSS Snapshot...")
+		LogFn(fmt.Sprintf("VSS: creating snapshot of %s (backup context, non-persistent, timeout 180s)", volName))
+		tSnap := time.Now()
 
 		// Check VSS writers status before creating snapshot
 		checkWritersCmd := exec.Command("vssadmin", "list", "writers")
@@ -98,21 +133,23 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 		// Log warnings for writers with known errors
 		hasWriterWarnings := false
 		if strings.Contains(writersStatus, "System Writer") && strings.Contains(writersStatus, "Last error") {
-			fmt.Println("⚠️  WARNING: System Writer has errors - system state may not be fully captured")
+			LogFn("VSS WARNING: System Writer reports errors — system state may not be fully captured")
 			hasWriterWarnings = true
 		}
 		if strings.Contains(writersStatus, "NTDS") && (strings.Contains(writersStatus, "Last error") || strings.Contains(writersStatus, "0x800423f4")) {
-			fmt.Println("⚠️  WARNING: NTDS Writer refuses to participate - Active Directory state will not be captured")
+			LogFn("VSS WARNING: NTDS Writer refuses to participate — Active Directory state will not be captured")
 			hasWriterWarnings = true
 		}
 		if strings.Contains(writersStatus, "Dhcp") && strings.Contains(writersStatus, "Last error") {
-			fmt.Println("⚠️  WARNING: DHCP Jet Writer has errors - DHCP configuration may not be captured")
+			LogFn("VSS WARNING: DHCP Jet Writer reports errors — DHCP configuration may not be captured")
 			hasWriterWarnings = true
 		}
 
 		if hasWriterWarnings {
-			fmt.Println("         → Backup will continue with available writers only")
-			fmt.Println("         → File-level backup will work normally")
+			for _, wl := range writerErrorLines(writersStatus) {
+				LogFn("VSS " + wl)
+			}
+			LogFn("VSS: continuing with available writers — volume data capture is unaffected")
 		}
 
 		snapshot, err := sn.CreateSnapshot(volName, false, 180)
@@ -120,11 +157,10 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 			// IVssBackupComponents stuck from a previous crashed run.
 			// vssadmin delete shadows alone won't release it — we have to bounce
 			// the VSS service to drop the orphaned context, then retry once.
-			fmt.Printf("⚠️  VSS busy: %v\n", err)
-			fmt.Println("         → Resetting VSS service state and retrying once...")
+			LogFn(fmt.Sprintf("VSS: snapshot creation blocked by an in-progress shadow (%v) — resetting VSS service state and retrying once", err))
 			sn.Release()
 			if resetErr := vssForceReset(); resetErr != nil {
-				fmt.Printf("         → VSS reset failed: %v\n", resetErr)
+				LogFn(fmt.Sprintf("VSS: service reset FAILED: %v", resetErr))
 			}
 			sn = vss.Snapshotter{}
 			snapshot, err = sn.CreateSnapshot(volName, false, 180)
@@ -135,23 +171,30 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 			if strings.Contains(errMsg, "0x80070005") || strings.Contains(errMsg, "0x800423f4") {
 				// These are writer-specific errors, not snapshot creation errors
 				// Log but DON'T fail - the snapshot might still be usable for file backup
-				fmt.Printf("⚠️  VSS Writers error during snapshot creation: %v\n", err)
-				fmt.Println("         → Attempting to use snapshot anyway for file-level backup")
+				LogFn(fmt.Sprintf("VSS: writer errors during creation (%v) — the snapshot itself may still be valid, checking", err))
 				// snapshot might still be valid even with writer errors - check below
 			} else {
-				// Other errors are critical
+				// Critical failure: log everything Event Viewer would show —
+				// the exact error (with HRESULT) plus every writer in a bad
+				// state — THEN fail.
+				LogFn(fmt.Sprintf("VSS FAILED: snapshot of %s: %v", volName, err))
+				for _, wl := range writerErrorLines(writersStatus) {
+					LogFn("VSS " + wl)
+				}
 				return fmt.Errorf("VSS snapshot creation failed: %v", err)
 			}
 		}
 
 		// Verify snapshot was actually created
 		if snapshot == nil || snapshot.Id == "" {
+			LogFn(fmt.Sprintf("VSS FAILED: no snapshot object returned for %s", volName))
 			return fmt.Errorf("VSS snapshot creation failed: no valid snapshot created")
 		}
 
-		fmt.Printf("✓ Snapshot created: %s\n", snapshot.Id)
+		LogFn(fmt.Sprintf("VSS: snapshot {%s} of %s created in %s -> %s",
+			snapshot.Id, volName, time.Since(tSnap).Round(time.Millisecond), snapshot.DeviceObjectPath))
 		if hasWriterWarnings {
-			fmt.Println("  Note: Snapshot created despite writer warnings - file-level backup will proceed")
+			LogFn("VSS: snapshot created despite writer warnings — volume backup proceeding")
 		}
 
 		_, err = SymlinkSnapshot(filepath.Join(appDataFolder, "VSS"), snapshot.Id, snapshot.DeviceObjectPath)
