@@ -1,481 +1,527 @@
-# Nimbus Backup — Architecture & Developer Guide
+# NimbusBackupClient — Architecture
 
-> Orientation document for a developer (or AI session) picking up this codebase.
-> It describes the module layout, the two-process model, the build-tag rules that
-> govern what compiles where, the control-plane API the future control server will
-> use, the security model, and planned work. For end-user docs see `README.md`;
-> for a feature status matrix see `FEATURES_STATUS.md`.
+Windows backup agent for **Proxmox Backup Server (PBS)**: a Wails v2 (Go +
+React) GUI plus a Windows service, one binary, controlled at fleet scale by
+the **NimbusControl** server (separate repo). Upstream lineage: fork of
+`tizbac/proxmoxbackupclient_go`.
 
-Current version: see `gui/wails.json` → `productVersion` (0.2.128 at time of
-writing). Upstream lineage: fork of `tizbac/proxmoxbackupclient_go`.
+**North star:** the industry-leading zero-trust Windows backup agent.
+Every design decision below serves that in priority order:
+**data safety → security → performance → polish.** When two sections of this
+document appear to conflict, the earlier priority wins. For a backup client
+the first priority is literal: a backup that silently commits torn or
+truncated data is worse than one that fails loudly.
 
----
+This document has three parts: the **system design** (what the thing is), the
+**development rules** (laws every change must obey), and the **roadmap**
+(phases from the current state to beta, including the CI smoke-test ledger).
 
-## 1. What it is
-
-A Windows backup client for **Proxmox Backup Server (PBS)** with a Wails v2
-(Go + React) GUI and a Windows **service**. It backs up files/folders
-("directory" mode) and full disks ("machine" mode, a bootable FIDX image via a
-VSS snapshot), browses and restores snapshots, supports multiple PBS targets,
-and runs scheduled jobs from the service.
-
-Two processes, one binary:
-
-- **GUI process** — the Wails desktop app the user interacts with. Runs in the
-  user's session, unprivileged. Build tag: `!service`.
-- **Service process** — `NimbusBackup` Windows service, runs as **LocalSystem**.
-  Owns scheduling, privileged VSS snapshots, and is the **single writer of
-  `config.json`**. Build tag: `service`.
-
-They communicate over an authenticated loopback HTTP API (see §5). The same
-compiled packages back both; which `main`/entrypoint you get is selected by the
-`service` build tag.
+Current version: see `gui/wails.json` → `productVersion` (0.2.150 at time of
+writing). This structure mirrors NimbusControl's `ARCHITECTURE.md`; the two
+documents are siblings and the agent↔server wire contract lives in the
+NimbusControl repo (`docs/AGENT-API.md`), with client-side notes in
+`docs/CONTROL-PLANE.md`.
 
 ---
 
-## 2. Module layout (Go workspace)
+# Part I — System design
 
-`go.work` composes several modules:
+## What it is
+
+Two processes, one compiled codebase:
+
+* **GUI process** — the Wails desktop app. Runs in the user's session,
+  unprivileged. Build tag: `!service`.
+* **Service process** — `NimbusBackup` Windows service, runs as
+  **LocalSystem**. Owns scheduling, privileged VSS snapshots, the
+  control-plane loop, and is the **single writer of `config.json`**.
+  Build tag: `service`.
+
+They communicate over an authenticated loopback HTTP API. Which
+`main`/entrypoint you get is selected by the `service` build tag; the same
+packages back both.
+
+Backup modes: files/folders ("directory" mode, PXAR + DIDX) and full disks
+("machine" mode, a bootable raw image via VSS into FIDX). Browse and restore
+for both, multiple PBS targets, scheduled jobs from the service, outbound-only
+attachment to NimbusControl.
+
+## Module layout (Go workspace)
+
+`go.work` composes the modules; `gui/go.mod` `replace` directives bind them:
 
 | Module | Role |
 |---|---|
-| `gui/` | The Wails app **and** the service (same package `main`, split by build tag). Frontend in `gui/frontend/` (React/Vite). Also contains the local API package `gui/api/`. |
-| `pbscommon/` | PBS protocol client: HTTP/2 backup/reader sessions, fixed/dynamic index (FIDX/DIDX), chunking (buzhash), PXAR archive read/write, catalog. The wire layer. |
-| `snapshot/` | VSS snapshot creation (Windows) via `st-matskevich/go-vss`. `nop_snapshot.go` for non-Windows. |
-| `machinebackup/`, `directorybackup/` | Older standalone CLI backup paths. The GUI's own inline implementations (`gui/backup_inline.go`, `gui/machine_backup_windows.go`) are what the app actually runs. |
-| `nbd/` | Network Block Device tooling for mounting/restoring machine images. |
-| `imagebrowse/` | Userspace file browsing INSIDE volume backups: GPT/MBR partition parser + **NTFS (go-ntfs), FAT12/16/32, exFAT** readers behind one `Filesystem` interface, over an `io.ReaderAt`. No mount/driver/admin — only the app reads the image. Fed by `pbscommon.FIDXReaderAt` (lazy, chunk-LRU) so a listing downloads only the blocks it touches. Real mkfs-made images in `testdata/`. ReFS + BitLocker are detected and refused with a clear reason. See §7b. |
-| `clientcommon/`, `pkg/` | Shared helpers. |
+| `gui/` | The Wails app **and** the service (same package `main`, split by build tag). Frontend in `gui/frontend/` (React/Vite). Local API package in `gui/api/`. |
+| `pbscommon/` | PBS protocol client: HTTP/2 backup/reader sessions, fixed/dynamic index (FIDX/DIDX), chunking (buzhash), PXAR read/write, catalog, `FIDXReaderAt`/`DIDXReaderAt` lazy chunk readers, upload rate limiting. The wire layer. |
+| `snapshot/` | VSS snapshot creation (Windows) via `st-matskevich/go-vss`; `nop_snapshot.go` for non-Windows; diagnostics via the package-level `LogFn` hook (declared platform-neutral — see rule 3). |
+| `imagebrowse/` | Userspace file browsing INSIDE image backups: GPT/MBR parsing + NTFS/FAT/exFAT read-only filesystems behind one `Filesystem` interface over an `io.ReaderAt`. Real mkfs-made images in `testdata/`. ReFS + BitLocker detected and refused with reasons. |
+| `controlplane/` | NimbusControl attachment: enrollment, check-in loop, command drain, forward-only run reporting. **Stdlib-only by law** (rule 10). |
+| `machinebackup/`, `directorybackup/` | Older standalone CLI paths. The GUI's inline implementations (`gui/backup_inline.go`, `gui/machine_backup_windows.go`) are what the app actually runs — when changing backup behavior, edit `gui/`. |
+| `nbd/` | Linux-only Network Block Device tooling for mounting/restoring machine images. |
+| `clientcommon/`, `pkg/` (`retry`, `security`, `logger`) | Shared helpers. |
 
-> The GUI deliberately reimplements backup inline (`gui/*_inline.go`,
-> `gui/machine_backup_windows.go`) rather than calling the CLI modules, so it can
-> stream progress/stats through callbacks. When changing backup behavior, edit
-> the `gui/` implementations.
+## Build-tag compile scopes — the single most important thing to internalize
 
----
+CI has failed repeatedly on this. Files in `gui/` fall into three scopes:
 
-## 3. Build tags — the single most important thing to internalize
+1. **Shared** (`package main`, no constraint) — compiled into **both** GUI and
+   service builds (`config.go`, `api_wrappers.go`, `secrets.go`,
+   `backup_inline.go`, `errcodes.go`, `pbslog_glue.go`, …).
+2. **`//go:build !service`** — GUI only (`main.go`: Wails entrypoint, bound
+   `App` methods, GUI-side delegation).
+3. **`//go:build service`** — service only (`service_main.go`,
+   `app_service_stubs.go`).
 
-CI has failed repeatedly on this, so read carefully.
-
-Files in `gui/` fall into three compile scopes:
-
-1. **Shared** (`package main`, no build constraint) — compiled into **both** the
-   GUI and service builds. Examples: `config.go`, `api_wrappers.go`,
-   `secrets.go`, `exchange.go`, `errcodes.go`, `logcat.go`, `alerts.go`,
-   `backup_inline.go`, `app_types.go`.
-2. **`//go:build !service`** — GUI build only. `main.go` (Wails entrypoint,
-   Wails-bound `App` methods, GUI-side service delegation).
-3. **`//go:build service`** — service build only. `service_main.go`,
-   `app_service_stubs.go`.
-
-Orthogonally, **`//go:build windows`** vs **`//go:build !windows`** split
-platform code (e.g. `secrets_windows.go` / `secrets_nonwindows.go`,
-`tpm_windows.go`, `exchange_windows.go`, `machine_backup_windows.go`).
+Orthogonally, `//go:build windows` vs `!windows` split platform code
+(`secrets_windows.go`/`secrets_nonwindows.go`, `tpm_windows.go`,
+`exchange_windows.go`, `machine_backup_windows.go`, …). The compile matrix is
+therefore **four views**: {GUI, service} × {windows, linux}. A symbol
+referenced from a shared file must exist in **every** view — see rule 3 and
+smoke S2, both born from real breakage.
 
 ### The lint trap
 
-`gui/.golangci.yml` runs **on Linux, `GOOS=linux`, with no build tags set**.
-Consequences:
+`gui/.golangci.yml` runs on Linux, `GOOS=linux`, no tags. Consequences:
 
-- The linter compiles the **`!service`** (GUI) view and the **`!windows`** view.
-- **`//go:build windows` files are never seen by the linter** (only by the
-  Windows build/CI `go build`). A `windows`-only function used only by other
-  `windows` code is therefore safe from the `unused` linter.
-- **A `windows`-only caller does NOT satisfy `unused` for a symbol declared in a
-  shared file.** If you add a shared/exported helper, it needs a caller that
-  compiles under Linux (shared or `!windows`). This is the exact failure that
-  bit `writeCatLog` (its only caller was in `machine_backup_windows.go`); it was
-  fixed by also calling it from `backup_inline.go` (shared).
+* The linter sees the **`!service` + `!windows`** view only. `windows`-gated
+  files are never linted (only compiled by the Windows build job).
+* A `windows`-only caller does **not** satisfy `unused` for a symbol declared
+  in a shared file. New shared/exported helpers need a Linux-visible caller
+  (this bit `writeCatLog`; fixed by also calling it from `backup_inline.go`).
+* Enabled: `errcheck`, `govet`, `ineffassign`, `staticcheck` (all checks incl.
+  ST1005 error-string style), `unused`. `gosec` runs separately at
+  `-severity high -confidence high` (G304/G204/G703 are the recurring ones;
+  mirror existing `#nosec`/`_ =` patterns).
 
-Enabled linters: `errcheck`, `govet`, `ineffassign`, `staticcheck` (all checks:
-ST1005 error-string style, QF quickfixes, SA), `unused`. `gosec` runs as a
-separate step at `-severity high -confidence high` (G304/G204/G703 are the ones
-we hit; mirror existing `#nosec`/`_ =`/`exec.Command` patterns).
+## Process model & config flow
 
-### Local pre-push checklist (avoids the CI round-trips)
+`config.json` lives at `C:\ProgramData\NimbusBackup\config.json`. ProgramData
+files are owned by whoever wrote them first, so an unprivileged GUI cannot
+overwrite a service-owned file. Therefore **all config writes flow through the
+service**: GUI `App` methods call `delegateConfigWrites()`; with a service
+present they POST to the local API and the service performs the write
+(`api_wrappers.go:SavePBSServerFromMap` etc.). Standalone GUIs (no service)
+write directly. The control-plane settings follow the same path
+(`/controlplane/save`).
 
-- `gofmt -e` every touched file; `gofmt -w` to auto-fix drift.
-- Every new shared/exported func has a Linux-visible caller.
-- `errcheck`: wrap deferred `Close`/`Remove` as `defer func(){ _ = x() }()`;
-  handle `CombinedOutput`/`Marshal`/`Unmarshal` errors.
-- `staticcheck` ST1005: `fmt.Errorf`/`errors.New` strings lowercase, no trailing
-  punctuation. (Log strings via `writeDebugLog` are exempt — they're not errors.)
-- Frontend: `esbuild src/App.jsx --jsx=automatic` to parse-check; keep the FR/EN/ES
-  translation blocks at equal key counts.
+Progress/stats: the engine invokes `OnProgress`/`OnStats`/`OnComplete`
+callbacks; in service mode these fill a per-job progress map (`gui/api/
+server.go`) which the GUI polls (`/backup/status/{id}`) and re-emits as Wails
+events. Percent is 0..1 internally, 0–100 at the API boundary.
 
-The sandbox can't reach `golang.org` (module proxy blocked), so a full `go build`
-/ `staticcheck` run isn't possible there; the checklist above plus `gofmt -e` is
-the validation path.
+## Local API — the only cross-process boundary
 
----
-
-## 4. Process model & config flow
-
-`config.json` lives at `C:\ProgramData\NimbusBackup\config.json`. Because
-ProgramData files are owned by whichever identity wrote them first, an
-unprivileged GUI cannot overwrite a service-owned file. Therefore:
-
-**All config writes flow through the service** (Phase 1). GUI-side `App` methods
-(`AddPBSServer`, `UpdatePBSServer`, `DeletePBSServer`, `SetDefaultPBSServer`,
-`SaveConfig` in `main.go`) call `delegateConfigWrites()`; when a service is
-present they POST to the local API and the **service** performs the write via
-the `BackupHandler` methods in `api_wrappers.go`. Standalone GUIs (no service)
-write directly. Key helpers: `main.go:delegateConfigWrites()`, `toMap()`;
-service side: `api_wrappers.go:SavePBSServerFromMap` etc.
-
-Progress/stats flow: the backup engine invokes `OnProgress`/`OnStats`/
-`OnComplete` callbacks. In service mode these update a per-job progress map
-(`gui/api/server.go`), which the GUI polls via `/backup/status/{id}` and
-re-emits as Wails events (`backup:progress`, `backup:stats`, `backup:complete`).
-Percent is a 0..1 fraction internally, scaled to 0–100 at the API boundary.
-Callback registration is shared: `api_wrappers.go:SetProgressCallbacks` +
-`notifyProgress/Stats/CompleteCallbacks`.
-
----
-
-## 5. Control-plane API — what a control server ties into
-
-Authenticated loopback server: `127.0.0.1:18765`, package `gui/api/`
-(`server.go`, `client.go`, `auth.go`, `types.go`, `mode.go`). Auth is a shared
-token (`X-Nimbus-Token`, constant-time compare) in a file whose DACL is
-restricted to SYSTEM/Administrators/INTERACTIVE (`acl_windows.go`). The
-`BackupHandler` interface (`server.go`) is the contract the service implements.
-
-Current routes:
+Authenticated loopback server `127.0.0.1:18765`, package `gui/api/`. Auth is
+a shared token (`X-Nimbus-Token`, constant-time compare) in a file whose DACL
+is restricted to SYSTEM/Administrators/INTERACTIVE (`acl_windows.go` —
+per-application ACLs don't exist on Windows; well-known SIDs are the correct
+domain-independent construct). The `BackupHandler` interface (`server.go`) is
+the contract the service implements.
 
 | Route | Purpose |
 |---|---|
 | `GET /status` | Service status + sanitized config snapshot |
-| `POST /backup` | Start a backup (registers progress callbacks) |
-| `GET /backup/status/{id}` | Poll progress/stats for a job |
+| `POST /backup`, `GET /backup/status/{id}` | Start a backup; poll progress/stats |
 | `GET/POST /jobs`, `/jobs/create`, `/jobs/update`, `/jobs/delete/{id}` | Scheduled job CRUD |
-| `POST /pbs/save`, `/pbs/delete/{id}`, `/pbs/default` | PBS server CRUD + default |
-| `POST /pbs/fingerprint` | Pin a TOFU certificate fingerprint |
+| `POST /pbs/save`, `/pbs/delete/{id}`, `/pbs/default`, `/pbs/fingerprint` | PBS server CRUD, default, TOFU pin |
 | `POST /config/save` | Persist full config |
+| `GET /controlplane/status`, `POST /controlplane/save` | NimbusControl attachment state / settings |
 
-**Control server integration (implemented, v0.2.129+):** the design landed
-inverted from the sketch above — the agent dials OUT to the NimbusControl
-server (CGNAT/Starlink-safe); the server never connects in. The `controlplane/`
-module (stdlib-only, unit-tested) implements enrollment (one-time token → per-
-agent secret, sealed by the Phase 2/3 secret store), a server-cadenced check-in
-loop (inventory → missed-backup expectations; command drain — `run_backup`;
-resolved policy set, fail-closed), and forward-only run reporting with
-VSS-confirmed phases (`preparing`/`running`/`vss_failed`/terminal + PBS
-snapshot triple). Glue lives in `gui/controlplane_glue.go`; the loop runs in
-the SERVICE (`NimbusService.run`) or in a standalone GUI. The GUI reads
-connectivity via the local API (`/controlplane/status`) and writes settings
-via `/controlplane/save` (single-writer rule). Wire contract:
-NimbusControl repo `docs/AGENT-API.md`; client-side notes:
-`docs/CONTROL-PLANE.md`.
+All inputs cross a typed JSON boundary; `exec.Command` uses fixed command
+names; no shell/SQL surface.
 
-### Config flags a control server can read/toggle
+## NimbusControl attachment (control plane)
 
-Exposed in `GetConfigWithHostname()` (sanitized; secrets are never returned) and
-persisted in `config.json`:
+The agent **dials out only** (CGNAT/Starlink-safe); the server never connects
+in. `controlplane/` implements: enrollment (one-time org token → per-agent
+32-byte secret, sealed by the secret store below), a server-cadenced check-in
+loop (inventory up; command drain — `run_backup`; resolved policy set,
+**fail-closed**), and forward-only run reporting with VSS-confirmed phases
+(`preparing`/`running`/`vss_failed`/terminal + the PBS snapshot triple). Glue:
+`gui/controlplane_glue.go`; the loop runs in the SERVICE (or a standalone
+GUI). Alerting (failure/missed/VSS) is a **server** responsibility — SMTP was
+removed from the client in 0.2.130 (`smtp_*`/`alert_email` keys are ignored).
 
-| Flag | Meaning |
-|---|---|
-| `upload_limit_mbps` | Upload bandwidth cap (token bucket on the PBS TLS socket) |
-| `exchange_aware` | Run app-aware Exchange post-backup health tasks |
-| `exchange_log_truncation` | Truncate Exchange transaction logs after a successful backup |
-| `usevss` | Use VSS shadow copies |
-| `control_server_url`, `control_cert_fp` | NimbusControl attachment (agent id + sealed secret are managed automatically; enroll token is one-time and wiped) |
+Config flags a control server reads/toggles (sanitized — secrets never
+returned): `upload_limit_mbps`, `usevss`, `exchange_aware`,
+`exchange_log_truncation`, `control_server_url`, `control_cert_fp`. Read-only
+posture surfaced: `GetSecurityWarnings()` (CPU speculation-control / Windows
+Update staleness), `GetExchangeStatus()`, `QueryExchangeLogMode()`.
 
-> **SMTP alerting was removed in 0.2.130** — failure/missed/VSS alerting is a
-> control-server responsibility now (`alerts.go` deleted; `smtp_*`/`alert_email`
-> config keys are ignored if present in old config.json files).
+## Security model (zero-trust posture)
 
-Read-only posture/detection surfaced to the GUI and available to a control
-server: `GetSecurityWarnings()` (CPU speculation-control / Windows Update
-staleness), `GetExchangeStatus()` (installed/version/aware/highlight),
-`QueryExchangeLogMode()` (circular-logging state).
+* **Single privileged writer** — config writes are service-only.
+* **Secrets at rest** — `secrets.go`: PBS token secrets AES-256-GCM sealed
+  under a random DEK (`encv1:`). DEK wrapped by a protector chain,
+  strongest-that-works, round-trip-verified at creation: **TPM**
+  (`tpm_windows.go`, ncrypt PCP, RSA-2048) → **DPAPI machine scope** →
+  **plaintext** (loudly logged fallback). Keys auto-upgrade to a stronger
+  protector on load (DEK re-wrap only). Decrypt failure ⇒ empty secret +
+  "re-enter", never a crash. `master.key` sits beside `config.json`.
+* **Local API auth** — shared token, constant-time compare, DACL'd token file.
+* **Enrollment secrecy** — the enroll token is one-time and wiped; the agent
+  secret lives in the same sealed store; the server stores sha256 only.
+* **Residual risk** — malware on an already-compromised host can request
+  DPAPI/TPM unwrap in-process; posture warnings make hardware-mitigation gaps
+  visible but userland cannot fully close this.
 
----
+## Backup engine
 
-## 6. Security model (zero-trust posture)
-
-- **Config writes: service-only** (Phase 1) — single privileged writer.
-- **Secrets at rest** (Phase 2/3) — `secrets.go`. PBS token secrets and the SMTP
-  password are AES-256-GCM sealed under a random DEK (`encv1:` prefix). The DEK
-  is wrapped by a protector chain, strongest-that-works, verified by a
-  round-trip at creation: **TPM** (`tpm_windows.go`, ncrypt Platform Crypto
-  Provider, RSA-2048) → **DPAPI** machine scope (`secrets_windows.go`) →
-  **plaintext** (loudly logged fallback; non-Windows or no DPAPI). Existing keys
-  auto-upgrade to a stronger protector on load (DEK re-wrap only; secret format
-  never changes). Decrypt failure ⇒ empty secret + "re-enter", never a crash.
-  `master.key` sits beside `config.json`.
-- **Local API auth** — shared token, constant-time compare, ACL-restricted token
-  file (`auth.go`, `acl_windows.go`). Per-application ACLs don't exist on Windows
-  (DACLs bind to principals, not binaries); well-known SIDs are the correct,
-  domain-independent construct.
-- **Input safety** — all API inputs cross a typed JSON boundary; no shell/SQL
-  injection surface. `exec.Command` is used with fixed command names.
-- **Residual risk** — local malware on an already-compromised host can request
-  DPAPI/TPM unwrap in-process; the posture warnings make hardware-mitigation
-  gaps visible but userland cannot fully close this.
-
----
-
-## 7. Backup internals (quick map)
-
-- **Directory mode** — `backup_inline.go` streams a PXAR archive, DIDX dynamic
-  chunking with dedup, junction/locked-file skip with reporting, optional
-  auto-split for large first backups (`backup_split_api.go`, `backup_analysis.go`).
-- **Machine mode** — `machine_backup_windows.go`. Per physical disk: enumerate
-  partitions, VSS-snapshot mounted volumes, stream raw + snapshot regions into a
-  fixed-size (4 MB) chunk pipeline → FIDX. 8 hasher/upload workers; channels are
-  buffered to decouple the disk reader. Reader failures abort via a `readerErr`
-  channel **before** the index is closed (prevents a truncated image being
-  committed). A per-destination `TryLock` prevents concurrent sessions to the
-  same backup group.
-- **VSS** — `snapshot/win_snapshot.go` via go-vss: `SetBackupState(false,
-  bootable, VSS_BT_COPY, false)` — **copy-only, component-less, writers
-  participate**. App-consistent (SQL/Exchange writers freeze during
-  `DoSnapshotSet`) but **does not truncate logs** (by design, so it doesn't
-  disturb other backup products). This is why Exchange log truncation is a
-  separate opt-in (§8).
-- **Restore** — `restore_inline.go` (+ `restore_search.go`, `restore_cache.go`):
-  snapshot tree browse, selective restore, metadata sidecar
-  (`.nimbus_backup_meta.json`) for in-place restore with cross-host guard.
-- **Bandwidth limit** — `pbscommon/pbsapi.go:rateLimitedConn` token bucket on the
-  session TLS socket; writes ≤1 KB bypass it so HTTP/2 control frames aren't
+* **Directory mode** — `backup_inline.go`: streams PXAR, DIDX dynamic chunking
+  with dedup, junction/locked-file skip with reporting, optional auto-split
+  for large first backups (`backup_split_api.go`, `backup_analysis.go`).
+* **Machine mode** — `machine_backup_windows.go`: per physical disk, enumerate
+  partitions, VSS-snapshot mounted volumes, stream raw + snapshot regions into
+  a fixed 4 MB chunk pipeline → FIDX. 8 hasher/upload workers over a **128 MB
+  elastic pipeline**; one **shared zstd encoder** across workers (per-chunk
+  encoder construction was the dominant upload-path CPU/GC waste). Reader
+  failures abort via `readerErr` **before** the index closes — a truncated
+  image is never committed. Per-destination `TryLock` prevents concurrent
+  sessions on one backup group. ETA is byte-based over the whole run, padded
+  ×1.15, rendered as `≥` (instantaneous rates lie under chunk-reuse bursts).
+* **VSS** — `snapshot/win_snapshot.go`: `SetBackupState(false, bootable,
+  VSS_BT_COPY, false)` — **copy-only, component-less, writers participate**.
+  App-consistent (SQL/Exchange writers freeze during `DoSnapshotSet`) but does
+  **not** truncate logs, by design, so it never disturbs other backup
+  products' chains. Busy-shadow retry with one VSS service reset; per-writer
+  last-error diagnostics; the full lifecycle (creation, shadow ID, device
+  path, elapsed, failures with HRESULT) logs through `snapshot.LogFn` into the
+  app debug log — in both processes.
+* **Restore** — `restore_inline.go` (+ search/cache): snapshot tree browse,
+  selective restore, metadata sidecar (`.nimbus_backup_meta.json`) with
+  cross-host guard.
+* **Bandwidth limit** — `pbscommon` `rateLimitedConn` token bucket on the
+  session TLS socket; writes ≤1 KB bypass so HTTP/2 control frames aren't
   starved.
-- **Alerts** — `alerts.go`: on failure, email with tails of the newest
-  `service-*.log` / `backup-*.log` (64 KB window), STARTTLS/implicit-TLS, certs
-  verified, best-effort/async. The `[NB-2004]` already-running rejection is
-  excluded from alerting.
+* **Exchange (application-aware)** — detection via the registry hive (2007→
+  2019 incl. v15 minor refinement); `exchange_aware` runs a post-backup EMS
+  health probe on success; `exchange_log_truncation` truncates the
+  **supported** way — a diskshadow writer-participating full backup whose
+  `end backup` makes the Exchange writer truncate committed logs; volatile
+  shadow discarded. **Never** manual `.log` deletion. Every EMS/diskshadow
+  command's outcome is logged with exit code.
 
----
+## Browsing files inside image backups
 
-## 7b. Browsing files inside volume (image) backups
+Directory backups have a pxar catalog; image backups are raw disks (one
+`*.img.fidx` per disk), so we parse the image ourselves:
 
-Directory backups have a pxar catalog (`ListSnapshotContentsInline`); image
-backups do NOT — they are raw disk images (one `*.img.fidx` fixed index per
-disk). Browsing them means parsing the image ourselves:
+* **`pbscommon.FIDXReaderAt`** — `io.ReaderAt` over a fixed index: index
+  downloaded once, 4 MB chunks fetched on demand with an LRU, each verified by
+  SHA-256. Only chunks a read touches are fetched.
+* **`imagebrowse`** — GPT (authoritative) / MBR (fallback) parsing; per-
+  partition boot-sector sniffing (NTFS / exFAT / FAT / BitLocker via the
+  `-FVE-FS-` OEM id). NTFS via go-ntfs (pure Go, read-only). Output shaped as
+  `SnapshotEntry` so the same Browse tree renders both backup types.
+* **Full-tree listing is a sequential $MFT scan** (`TreeLister`, the WizTree
+  technique): stream $MFT once, rebuild paths from parent references — moves
+  ~the MFT's size instead of a large fraction of the volume. The fast path is
+  tested to produce the identical tree to the generic walk.
+* **Capability interfaces** on an opened filesystem: `TreeLister`, `Planner`
+  (exact $MFT extent plan for prefetch), `StreamLister` (ADS),
+  `SecurityReader` (SecurityId→$Secure/$SDS with legacy inline-0x50
+  fallback). The GUI type-asserts; a missing capability is exactly what greys
+  the matching restore option, with the reason shown.
+* **One restore workflow** — options are best-effort per file AFTER data
+  placement: mtimes, then ADS, then the security descriptor LAST (a
+  restrictive DACL could lock us out of a file we still need to write streams
+  onto). Metadata failures warn; the data is already safe.
+* **Not a mount.** No WinFsp/Dokan, no driver, no admin — pure in-process
+  byte parsing. (`nbd/` is the separate Linux-only restore path.)
+* **ReFS is deliberately unsupported** — no mature pure-Go parser exists and
+  guessing at undocumented structures in a restore tool risks returning
+  corrupt files. ReFS and BitLocker are refused with actionable messages.
+* Used vs allocated: allocated from the partition table; used from the
+  filesystem ($Bitmap / FAT / exFAT bitmap), bounded, reported as unknown
+  rather than guessed.
+* Portal-delegated browsing: the service answers `image_partitions` /
+  `image_scan` / `image_dir` / `image_extract` over the agent command channel
+  (same core, same `file_restore` policy gate); extractions upload as ZIP
+  artifacts, **data-only by design** (no ACLs/ADS in browser downloads).
 
-- **`pbscommon.FIDXReaderAt`** (`fidx_reader.go`) — an `io.ReaderAt` over a
-  fixed index, mirroring `DIDXReaderAt`: downloads the index once, then fetches
-  4 MB image chunks ON DEMAND with an LRU cache, verifying each chunk's SHA-256.
-  Fixed indexes are pure arithmetic (chunk = offset / chunkSize), no binary
-  search. This is the storage primitive; only chunks a read touches are fetched.
-- **`imagebrowse` module** — `partitions.go` parses GPT (authoritative) and MBR
-  (fallback) tables and sniffs each partition's filesystem from its boot sector
-  (NTFS / exFAT / FAT / **BitLocker** via the `-FVE-FS-` OEM id). `ntfs.go`
-  wraps a partition in an `io.SectionReader` and hands it to **go-ntfs**
-  (`www.velocidex.com/golang/go-ntfs`, pure Go, read-only) for `List`, `Walk`,
-  and `ExtractFile`. Output is shaped as `SnapshotEntry` so the SAME Browse tree
-  renders both backup types.
-- **GUI wiring** — `gui/imagebrowse_inline.go` (`!service`): `ListImagePartitions`,
-  `ListImageContents` (cached per session; snapshots are immutable), and
-  `DownloadImageSelection` (single file / folder-zip / multi-select-zip). Space
-  safety is enforced identically to `download.go` — BLOCK if it won't fit,
-  frontend WARNs at ≥90% usage-after. Directory selections expand to their
-  files; an over-cap folder errors rather than silently downloading a partial.
-- **Not a mount**: no WinFsp/Dokan, no kernel NBD (that's the separate Linux-only
-  `nbd/` restore path), no driver, no admin. Pure in-process byte parsing —
-  "only the software needs access."
-- **Filesystems**: NTFS, FAT12/16/32, exFAT — read-only, all behind
-  `imagebrowse.Filesystem` (List/Stat/ExtractFile/UsedBytes), so the GUI has one
-  code path. **ReFS is deliberately NOT supported**: no mature pure-Go parser
-  exists, the format is undocumented and version-dependent, and guessing at
-  structures in a restore tool risks returning corrupt files. ReFS and BitLocker
-  are detected and refused with an actionable message.
-- **Full-tree listing is a sequential $MFT scan on NTFS** (`TreeLister` fast
-  path, the WizTree technique): stream $MFT once, rebuild paths in memory from
-  parent references. Over the chunk reader this moves ~the MFT's size instead
-  of a large fraction of the volume. FAT/exFAT use the generic walk (small).
-  The fast path is tested to produce the identical tree to the walk.
-- **Capability interfaces** on the opened filesystem: `TreeLister` (fast
-  $MFT full tree), `Planner` (exact $MFT extent plan for prefetch),
-  `StreamLister` (alternate data streams) and `SecurityReader` (security
-  descriptors — SecurityId→$Secure/$SDS with legacy inline-0x50 fallback).
-  The GUI type-asserts; absence of a capability is exactly what greys the
-  matching restore option, with the reason shown to the user.
-- **One restore workflow** (`RestoreImageSelection` / pxar restore): options
-  are best-effort per file AFTER data placement — mtimes, then ADS, then the
-  security descriptor LAST (a restrictive DACL could lock us out of a file we
-  still need to write streams onto). Metadata failures warn in the backup log;
-  the file's data is already safe.
-- **The user picks the partition — always.** Auto-selecting the first NTFS
-  volume put people inside WinRE. `ListImagePartitions` returns EVERY partition
-  (browsable or not) with filesystem, used and allocated size; `partIndex < 1`
-  is an error, never a default.
-- **Used vs allocated**: allocated comes from the partition table; used comes
-  from the filesystem ($Bitmap / FAT / exFAT allocation bitmap), bounded, and
-  reported as unknown rather than guessed.
+## Why there are no native file dialogs
 
----
+Wails native dialogs take an uncatchable **native COM fault** in this app: the
+process dies outright — tray icon and all — no Go panic, nothing in logs,
+nothing `recover()` can intercept, in BOTH processes. The picker is rendered
+in the webview (`components/PathPicker.jsx`) over three plain Go methods
+(`ListDrives`, `ListFolders`, `CreateFolder`) plus `DefaultSaveDir`. Pure Go +
+DOM: no COM, no shell APIs, no way to fault the process. See rule 8.
 
-## 7c. Why there are no native file dialogs
+## i18n & error codes
 
-`OpenSaveFileDialog` and `OpenRestoreDestDialog` are **retired stubs**. The Wails
-native dialogs take an uncatchable **native COM fault** in this app: the process
-dies outright — tray icon and all — with no Go panic, nothing in the logs, and
-nothing `recover()` can intercept. (An earlier session found the same fault in
-the service process and guarded only that case; the GUI hits it too.)
-
-The picker is therefore rendered in the webview (`components/PathPicker.jsx`)
-over three plain Go methods in `pathpicker.go` — `ListDrives`, `ListFolders`,
-`CreateFolder` — plus `DefaultSaveDir`. Pure Go + DOM: no COM, no shell APIs, no
-driver, and no way to fault the process. **Do not reintroduce
-`wailsruntime.SaveFileDialog` / `OpenDirectoryDialog`.**
-
----
-
-## 8. Exchange (application-aware)
-
-- **Detection** (`exchange_windows.go:detectExchange`) — registry hive
-  `HKLM\SOFTWARE\Microsoft\ExchangeServer\vN\Setup`; all versions
-  (v8=2007, v14=2010, v15 refined to 2013/2016/2019 via `MsiProductMinor`).
-- **`exchange_aware`** — runs post-backup health probe (EMS
-  `Get-MailboxDatabase -Status`) on **success only**.
-- **`exchange_log_truncation`** — because the snapshot is copy-only, logs on
-  non-circular databases accumulate until the volume fills. When enabled,
-  truncation is done the **supported** way: a diskshadow writer-participating
-  full backup whose `end backup` makes the Exchange writer truncate committed
-  logs (`runExchangeLogTruncation`). Volatile shadow, discarded — only the
-  truncation side effect is wanted. **Never** manual `.log` deletion.
-- **`QueryExchangeLogMode()`** — lazy EMS query of circular-logging state; the
-  GUI highlights the truncation toggle only when logs actually accumulate.
-- Every Exchange command's outcome is logged with exit code
-  (`runExchangeCommand`).
-
-> Validate diskshadow + EMS behavior on real Exchange hardware before fleet use —
-> these paths are compile/lint-verified but not runnable in CI.
-
----
-
-## 9. Internationalization
-
-- Frontend: `gui/frontend/src/i18n/translations.js` — three locales **fr / en /
-  es** at **full key parity** (parity is a hard invariant; keep counts equal —
-  currently 302/302/302). Switcher: one of three `Dropdown` instances in
-  `components/HeaderControls.jsx` (see #9b — Theme/Font Size/Language are the
-  same component, one row, by design). Context/fallback: `i18n/i18nContext.jsx`.
-- **No hardcoded strings in JSX bypassing `t()`** — this broke once already
-  (the multi-server list table, its status cells, and its Save/Update/Cancel
-  buttons were hardcoded French and did not respond to the language selector
-  at all). Any new user-facing string in `App.jsx` must go through `t()` in
-  all three languages before merge.
-- Backend errors: all user-facing Go errors are canonical `[NB-xxxx]` codes
+* Frontend: `gui/frontend/src/i18n/translations.js` — **fr / en / es at full
+  key parity** (395 × 3 at time of writing), enforced mechanically by
+  `npm run i18n-audit` (`scripts/i18n-audit.mjs`), which also fails on
+  hardcoded strings in JSX and runs as `prebuild` before every frontend
+  build. It found 66 hardcoded strings on first run.
+* Backend: all user-facing Go errors are canonical `[NB-xxxx]` codes
   (`errcodes.go`): `1xxx` config, `2xxx` backup, `3xxx` restore/search. Logs
-  record the code + a stable English base (grep-able, language-independent). The
-  GUI's `localizeMessage()` swaps the base for the active language via
-  `err_NBxxxx` translation keys, preserving any ` :: <detail>` suffix. **No
-  hardcoded French remains in Go** — new user-facing errors must use a code.
+  record code + stable English base (grep-able, language-independent); the
+  GUI's `localizeMessage()` swaps the base per `err_NBxxxx` keys, preserving
+  any ` :: <detail>` suffix.
+
+## Theming, font size, accessibility
+
+Proxmox-flavored utilitarian UI, 3px radius, deliberately the **same
+appearance model as the NimbusControl portal** so both surfaces match:
+
+* `data-theme` = light|dark|(absent=auto/OS) — structural colors.
+  `data-accent` = orange(default, absent)|pink|forest|sky — accent-family
+  variables ONLY, two shades each (brighter on light, muted on dark) so dark
+  mode is never blinded. Default accent Proxmox orange `#e57000`.
+* `data-fontsize` = small|medium|large via CSS `zoom` on `<html>`
+  (WebView2-only technique; this app runs nowhere else). **OpenDyslexic**
+  (OFL-1.1, bundled via `@fontsource`) is the global font at all sizes — zero
+  runtime network dependency, ships in the MSI.
+* Zero flash of wrong theme/size: an inline `<head>` script applies both
+  localStorage keys before first paint; `HeaderControls.jsx` owns changes.
+* One control type for Theme/Font Size/Language: `components/Dropdown.jsx`,
+  side by side in normal document flow.
+* Token law, `.tab-content` law, and the header-positioning law are rules 7
+  and 7a below — each earned by a real regression.
+
+## Logging
+
+Writers `logging_gui.go`/`logging_service.go`, rotation in `log_rotation.go`,
+files under `C:\ProgramData\NimbusBackup\` (`service-*.log`, `backup-*.log`).
+`writeDebugLog`/`writeBackupLog`; verbose per-category lines via
+`writeCatLog` behind `-logcat pbs,chunks,security,api|all` (default quiet — a
+931 GB machine backup is ~240k chunks; chunk logging is additionally throttled
+to 1/256). `pbscommon.DebugLogFn` and `snapshot.LogFn` route shared-package
+diagnostics into the same log so nothing prints into the void in a service.
+
+## Build & release
+
+* `wails.json` `productVersion` is the release version.
+* CI (`.github/workflows/build-and-release.yml`) on `v*` tags and PRs:
+  check-deps → **security** (gosec ×2 + golangci-lint) → **test** →
+  build-cli (3 OS) / build-gui (Windows: Wails GUI + service build with a
+  goversioninfo `.syso` so `NimbusBackupSVC.exe` carries proper version
+  metadata — an AV-false-positive mitigation) → **release** (tag-gated:
+  archives, SHA256SUMS, Sigstore build-provenance attestation, VirusTotal
+  links gated on 0 detections, generated notes).
+* MSI via WiX (`installer/wix/`), incl. the KEEP_CONFIG uninstall dialog.
+* Release flow: bump `wails.json`, commit, tag `vX.Y.Z`, push tag. A failed
+  release is fixed **on the same version**: commit the fix, force-move the
+  tag (rule 17).
 
 ---
 
-## 9b. Theming, font size, and accessibility
+# Part II — Development rules
 
-- **Design language:** Proxmox-flavored — dense bordered panels, dark app
-  bar, 3px corner radius, no external fonts/CDNs. Full token system lives in
-  `gui/frontend/src/index.css`; conceptually shared with the NimbusControl
-  portal for a consistent look across both surfaces.
-- **Base theme + accent (two orthogonal axes)**: `data-theme` = light/dark/
-  (absent = auto/OS) sets structural colors; `data-accent` = orange(default,
-  absent)/pink/forest/sky overlays ONLY the accent-family variables. Each
-  accent ships two shades — brighter on light base, darker/muted on dark base
-  — so a dark-mode user is never blinded by a saturated accent. Default accent
-  is **Proxmox orange** (`#e57000`); choosing the orange swatch removes the
-  attribute. Base mode lives in the Theme dropdown; accents are a swatch row
-  in that dropdown's footer. Persisted: `localStorage['nimbus.theme']` +
-  `['nimbus.accent']`. **Do not turn accents back into full standalone
-  palettes** — that blinded the user once (dark-mode fanatic + saturated
-  light accents).
-- **Three font sizes** — small (baseline)/medium/large — applied via CSS
-  `zoom` on `<html>` per `data-fontsize` (WebView2/Chromium-only technique;
-  this app never runs anywhere else, so it's safe and avoids a risky
-  px-to-rem rewrite of the whole stylesheet). Persisted to
-  `localStorage['nimbus.fontsize']`.
-- **OpenDyslexic** (OFL-1.1, via `@fontsource/opendyslexic`) is the global
-  font at **all three** sizes, not just large. Bundled at build time
-  (`main.jsx` imports `400.css`/`700.css`); zero runtime network dependency,
-  ships inside the MSI.
-- **Zero flash of wrong theme/size**: `index.html` has a small inline
-  `<script>` in `<head>` that reads both localStorage keys and sets the
-  `data-*` attributes on `<html>` before first paint, before React mounts.
-  `components/HeaderControls.jsx` re-applies on mount (keeps React state and
-  the DOM attribute in sync) and owns every subsequent change.
-- **One control type for all three selectors**: `components/Dropdown.jsx` is
-  a themed custom listbox (not native `<select>` — can't be styled/animated
-  cross-platform) used identically for Theme, Font Size, and Language,
-  rendered side by side in `.header-controls` in normal document flow. The
-  font-size trigger shows a literally-sized "A" glyph per option instead of
-  text. **Do not reintroduce `position: absolute` controls in the header** —
-  that caused a real overlap bug (theme toggle drawn on top of the language
-  switcher) once already.
-- **`.tab-content` visibility is load-bearing CSS**: the four top tabs
-  (Servers/Backup/Browse/About) render all panes unconditionally in JSX and
-  rely entirely on `.tab-content{display:none} .tab-content.active{display:
-  block}` in `index.css` to show only the active one. This rule was
-  accidentally dropped during a theme rewrite once (all four tabs rendered
-  stacked on one page, buttons looked inert) — if the tabs ever appear to
-  "do nothing" again, check this rule first, before the click handlers.
+Non-negotiable laws. A change that violates one is wrong even if it works.
+Where a rule has a war story, it is cited — these are not hypotheticals.
 
----
-
-## 10. Logging
-
-- Writers: `logging_gui.go`, `logging_service.go`, rotation in
-  `log_rotation.go`. Files under `C:\ProgramData\NimbusBackup\`
-  (`service-*.log`, `backup-*.log`). `writeDebugLog` / `writeBackupLog`.
-- **Log categories** (`logcat.go`) — launch flag `-logcat pbs,chunks,security,api`
-  (or `all`) enables verbose per-category lines via `writeCatLog(catX, ...)`.
-  Default is quiet (keeps log volume bounded; a 931 GB machine backup is ~240k
-  chunks). Verbose call sites move onto `writeCatLog` incrementally.
-
----
-
-## 11. Build & release
-
-- `wails.json` `productVersion` is the release version (bump per release).
-- CI (`.github/workflows/build-and-release.yml`) triggers on `v*` tags: jobs
-  check-deps → security (gosec + golangci-lint) → test → build-cli/build-gui →
-  release (gated on `refs/tags/v*`). A lint failure skips everything downstream.
-- MSI via WiX (`installer/wix/`, `MSI_BUILD_GUIDE.md`). Local build scripts:
-  `build_gui.bat`/`.sh`, `build_cli.bat`, `Makefile`.
-- Release flow: bump `wails.json`, commit, tag `vX.Y.Z`, push tag.
-
----
-
-## 12. Planned / backlog work
-
-Delivered through 0.2.128: service-only config writes, live service-mode
-progress/stats, upload rate limit, DPAPI+TPM secret encryption, failure-alert
-emails, security-posture warnings, token-file ACL, log categories, full i18n
-(fr/en/es) with coded errors, application-aware Exchange (detection, health,
-log truncation).
-
-Open items:
-
-- **Control server (Phase 4 proper)** — remote transport + mutual-auth agent
-  enrollment, pull-vs-push config, fleet dashboard, log shipping. The
-  authenticated local API + service-as-brain is the substrate; needs a design
-  pass before code. Start from `gui/api/` and `INTEGRATION.md`.
-- **Multi-volume single-snapshot-set** — machine backup currently snapshots each
-  volume in a separate VSS set (separate instants). A database split across
-  volumes (e.g. SQL data on D:, logs on E:) is torn across volumes. Fix needs
-  go-vss extended to `AddToSnapshotSet` all volumes before one `DoSnapshotSet`.
-  Only bites split-volume layouts; single-volume is fine.
-- **pbscommon stdout diagnostics** — the handshake trace prints to stdout
-  (invisible in the service). Thread a logger into the shared package so it lands
-  in `writeDebugLog`/`writeCatLog(catPBS)`.
-- **Restore acceptance test** — machine-image restore via `nbd` map + boot-verify
-  is the one milestone not yet exercised end-to-end.
-- **CBT** — already handled for *upload* (chunk dedup); a read-time skip would
-  need a signed kernel filter driver (out of scope).
-- **Authenticode signing** — pending SignPath OSS certificate (see README).
-- **`FEATURES_STATUS.md`** — historically drifts; keep it or fold into this doc.
+1. **Never commit a torn or truncated backup.** Reader failures abort the
+   pipeline **before** the index closes; per-destination `TryLock` forbids
+   concurrent sessions on a group; run reporting is forward-only with
+   VSS-confirmed phases. A loud failure beats a quiet lie — data safety
+   outranks everything else in this document.
+2. **The service is the single writer of `config.json`.** GUI paths delegate
+   through the local API when a service is present. New settings follow the
+   delegation path or they don't ship.
+3. **Every referenced symbol must exist in all four compile views**
+   ({GUI, service} × {windows, linux}). Declarations shared code depends on
+   live in platform-neutral files; `windows`-only files hold only
+   `windows`-only symbols. Both directions have burned us: `snapshot.LogFn`
+   declared in a `windows`-gated file broke the entire Linux CI leg at
+   v0.2.150 (test AND security jobs — lint compiles too); `unused` fails
+   shared symbols whose only caller is `windows`-gated (`writeCatLog`).
+   Smoke S2 exists to catch this class pre-push.
+4. **VSS snapshots are copy-only and writer-participating** —
+   component-less, never log-truncating, so we never disturb another backup
+   product's chain. Exchange log truncation is exclusively the supported
+   diskshadow path; manual `.log` deletion is forbidden.
+5. **User-facing errors are `[NB-xxxx]` codes.** Logs keep the stable English
+   base; the GUI localizes. No hardcoded French (or any language) in Go —
+   that cleanup is done and stays done.
+6. **i18n parity is enforced, not promised.** fr/en/es at equal key counts;
+   no strings in JSX bypassing `t()`; `i18n-audit` gates every frontend
+   build. (The multi-server table once shipped hardcoded French and ignored
+   the language selector entirely; the audit found 66 such strings.)
+7. **Theming via tokens only; accents are overlays, not palettes.** A literal
+   color in a component rule is a review rejection. Accents override only the
+   accent-family variables with per-base shades (full standalone accent
+   palettes blinded a dark-mode user once — do not reintroduce them).
+   7a. **Load-bearing UI laws:** `.tab-content{display:none}` +
+   `.active{display:block}` is what makes the top tabs work — it was dropped
+   in a theme rewrite once and every pane rendered stacked; check it first if
+   tabs "do nothing". No `position:absolute` controls in the header (caused a
+   real overlap of theme toggle over language switcher).
+8. **No native COM dialogs. Ever.** `wailsruntime.SaveFileDialog` /
+   `OpenDirectoryDialog` kill the process with an uncatchable COM fault (both
+   processes; observed repeatedly). The webview PathPicker is the only
+   sanctioned picker.
+9. **The local API is the only cross-process boundary.** Shared token,
+   constant-time compare, DACL'd token file; typed JSON in; fixed
+   `exec.Command` names; secrets never in responses.
+10. **The agent dials out; nothing dials in.** Enrollment tokens are one-time
+    and wiped; per-agent secrets live in the sealed store; policy resolution
+    is fail-closed when the server is unreachable. `controlplane/` stays
+    **stdlib-only** — it is the security-critical module and its supply chain
+    stays empty. New dependencies anywhere require written justification in
+    this file.
+11. **Secrets are sealed or absent.** Everything sensitive at rest goes
+    through the `encv1:` DEK chain (TPM → DPAPI → loud plaintext fallback),
+    round-trip-verified, auto-upgrading. Decrypt failure means "re-enter",
+    never a crash. Nothing secret in code, logs, or commits — a PAT and PBS
+    credentials have leaked into logs before; rotation is standing hygiene,
+    prevention is the law.
+12. **The user picks the partition — always.** Auto-selecting the first NTFS
+    volume put people inside WinRE. `ListImagePartitions` returns every
+    partition with filesystem + sizes; `partIndex < 1` is an error, never a
+    default.
+13. **Space safety before bytes move.** Downloads/restores compute
+    usage-after: BLOCK if it won't fit, WARN at ≥90%. Restore metadata is
+    best-effort AFTER data placement — mtimes, then ADS, then the security
+    descriptor LAST (a restrictive DACL could lock us out of a file we still
+    need to write). An over-cap folder errors rather than silently partial.
+14. **Image browsing is read-only forensics.** No mounts, no drivers, no
+    writes to the image, and no guessing: unsupported (ReFS) or locked
+    (BitLocker) filesystems are refused with the reason. A restore tool that
+    guesses at structures returns corrupt files with a straight face.
+15. **Every feature ships with tests, and CI runs them.** The smoke ledger
+    (Part III, Phase 1) is law: a smoke test listed there is either green in
+    CI or has an open phase item; "passes locally" is not a state. Red main
+    is an incident. The class of bug a smoke would have caught, found in the
+    field, adds that smoke in the fix commit.
+16. **Windows-only behavior claims require Windows validation.**
+    Compile-clean ≠ works: VSS, DPAPI/TPM, registry, diskshadow, icacls, and
+    Exchange paths lint on Linux but prove nothing there. What can run on a
+    `windows-latest` runner runs there (see smokes S6–S9); what needs real
+    hardware (Exchange, TPM presence, boot-verify) is called out as a manual
+    acceptance item, never silently assumed.
+17. **Releases are tags, and a failed release keeps its number.** Artifacts
+    come only from the tag workflow (attested, checksummed, VT-gated). When a
+    tagged release fails CI, fix on the same version and force-move the tag —
+    version numbers mark what shipped, not how many attempts it took.
+18. **Docs move with code.** A change that alters behavior described in
+    README / ARCHITECTURE / CONTROL-PLANE / the NimbusControl AGENT-API
+    updates the doc in the same commit. This file's "current version" line
+    and Phase 0 are part of that contract.
 
 ---
 
-## 13. Operational footnotes for a new session
+# Part III — Roadmap
 
-- Secrets have appeared in prior development logs. Standing hygiene: rotate the
-  PBS API token and any GitHub PAT used for pushes; never hardcode them.
-- Windows-only code paths (VSS, DPAPI, TPM/ncrypt, registry, diskshadow, icacls,
-  `NtQuerySystemInformation`) compile- and lint-check in CI but need real Windows
-  (and, for Exchange, a real Exchange host) to validate behavior.
-- When in doubt about where code compiles, re-read §3 before pushing.
+Phases are strictly ordered; each phase's exit criteria gate the next. Every
+item lands with rules 1–18 applied.
+
+## Phase 0 — Current state (shipped, v0.2.150)
+
+Verified by CI on every tag; delivered since the fork:
+
+* Service-as-brain architecture: single-writer config, authenticated local
+  API with DACL'd token, live service-mode progress/stats, scheduled jobs,
+  VSS cleanup at start.
+* Secrets: `encv1:` AES-256-GCM under TPM→DPAPI→fallback chain with
+  auto-upgrade.
+* NimbusControl attachment: enrollment, check-in/command/policy loop
+  (fail-closed), forward-only VSS-phase run reporting; SMTP alerting removed
+  in favor of server-side alerts; portal-delegated image browsing over the
+  command channel (data-only ZIPs).
+* Engine: directory (PXAR/DIDX, auto-split) + machine (FIDX, 4 MB pipeline,
+  shared zstd encoder, 128 MB elastic buffer, abort-before-index-close);
+  upload rate limit; honest byte-based ETA; VSS diagnostics through
+  `snapshot.LogFn` (nothing prints into the void in a service).
+* Image browse/restore: GPT/MBR + NTFS/FAT/exFAT read-only stack, $MFT
+  fast-tree with plan-driven prefetch, ADS + security descriptors, unified
+  restore ordering, partition picker law, ReFS/BitLocker refusals.
+* UI: full theme system (base + accent overlays, font sizes, OpenDyslexic),
+  webview PathPicker (COM dialogs retired), fr/en/es i18n with the audit
+  gate (395 × 3), `[NB-xxxx]` error codes.
+* Release engineering: tag-driven pipeline with gosec + golangci-lint gates,
+  provenance attestation, checksums, VT-gated links, MSI with KEEP_CONFIG
+  uninstall, service `.syso` version metadata.
+
+Known debts entering Phase 1: **CI executes tests for only two of the
+workspace's modules** (`gui`, `controlplane`) — `pbscommon`, `imagebrowse`,
+`snapshot`, and `pkg/*` suites exist but never run in CI (GOWORK=off +
+per-module `go test` means dependencies compile, their tests don't);
+cross-view compile breakage is caught only when the matching CI leg happens
+to run (rule 3's war story); MSI install/uninstall is a manual doc
+(`MSI_UNINSTALL_TEST.md`); machine-image restore has never been
+boot-verified end-to-end; Authenticode signing pending (SignPath);
+`FEATURES_STATUS.md` drifts.
+
+## Phase 1 — CI truth: the smoke-test ledger
+
+The control server's lesson, imported: its HTTP smoke suite found a role that
+every unit test swore worked and that had never existed in the database. The
+client's equivalent blind spots are listed below. **This table is the
+authoritative ledger of smoke tests that must be in CI**; each row is either
+green in CI or an open item in this phase — no third state.
+
+| # | Smoke test | Proves | Runner | Status |
+|---|---|---|---|---|
+| S1 | **Workspace test sweep** — `go test -race` across every module (`pbscommon`, `imagebrowse`, `snapshot`, `clientcommon`, `pkg/retry`, `pkg/security`, `pkg/logger`), not just `gui` + `controlplane` | The protocol layer, filesystem parsers, and snapshot scaffolding actually pass their suites on every push — today they are compiled but untested in CI | ubuntu | **missing** |
+| S2 | **Four-view compile smoke** — `go vet` the `gui` module under `GOOS=windows` and `GOOS=linux`, each with and without `-tags service` (no first-party cgo exists and Wails' Windows backend is syscall-based, so cross-vet from the Linux runner typechecks the Windows views) | No symbol referenced in shared code is missing from any compile view — the exact v0.2.150 `snapshot.LogFn` failure class, caught in seconds instead of at tag time | ubuntu | **missing** |
+| S3 | **Local API smoke** — boot the real `gui/api` server on loopback with a stub `BackupHandler`; over real HTTP: missing token → 401, wrong token → 401 (constant-time path), then the full route table (status, backup start + progress poll round-trip, jobs CRUD, PBS CRUD + fingerprint pin, config save, controlplane status/save) | The auth gate and every JSON contract the GUI and NimbusControl depend on, at the wire level — not via direct method calls | ubuntu | **missing** |
+| S4 | **Control-plane loop smoke** — against an `httptest` NimbusControl stub: enroll (one-time token → sealed secret) → check-in (inventory up, policy down, fail-closed on 5xx/cert mismatch) → drain `run_backup` → forward-only report incl. 429 retry | The entire agent↔server contract from `docs/AGENT-API.md` survives refactors | ubuntu | **partial** — exists as `controlplane` unit tests and runs in CI; promote assertions to cover fail-closed policy + cert-mismatch paths explicitly |
+| S5 | **Image-browse fixture smoke** — the real mkfs-made NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → **$MFT fast-tree ≡ generic walk** → `ExtractFile` golden hashes → ReFS/BitLocker refused with reasons | The restore-side parsers against ground-truth filesystems, incl. the fast path's identity guarantee | ubuntu | **partial** — tests exist; not run in CI until S1 lands |
+| S6 | **PXAR/index round-trip smoke** — build a pxar from a fixture tree and read it back byte-identical; FIDX/DIDX reader span + EOF + bad-magic cases; chunker determinism on a fixed corpus | The wire formats we write are the wire formats we (and PBS) can read | ubuntu | **partial** — reader/chunker/catalog tests exist (S1 gates them); writer→reader round-trip needs adding |
+| S7 | **Secret-store smoke (Windows)** — on `windows-latest`: seal → unseal a secret through the real chain (no TPM on runners ⇒ asserts the documented DPAPI fallback + loud log), corrupt the blob ⇒ "re-enter" not crash, protector auto-upgrade path | Rule 11's chain behaves on real Windows crypto APIs, not just in cross-compiled theory | windows | **missing** |
+| S8 | **Service binary smoke (Windows)** — after the CI build: `NimbusBackupSVC.exe` launches; token file created with the expected DACL (`icacls` assert); `/status` answers with auth and refuses without; clean stop. Plus: the `.syso` took — `(Get-Item).VersionInfo` shows CompanyName/ProductVersion (the AV-false-positive mitigation must not silently regress) | The artifact we ship starts, guards its API, and carries its identity metadata | windows | **missing** |
+| S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + files present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly; upgrade-in-place from the previous release's MSI | The installer customers actually run, incl. the uninstall dialog contract and upgrades — currently a manual checklist (`MSI_UNINSTALL_TEST.md`) | windows | **missing** |
+| S10 | **VSS snapshot smoke (Windows)** — create a real VSS snapshot of `C:` on the runner via the production code path, assert the diagnostic lines land through `LogFn`, clean up; busy-retry path exercised where feasible | The single most privileged thing the product does, on real Windows, with its new diagnostics | windows | **missing** — land as `continue-on-error` first; promote to blocking once runner stability is proven |
+| S11 | **Frontend gate, early** — `npm run i18n-audit` + an esbuild parse of `App.jsx` as a fast ubuntu job | Parity/hardcoded-string violations fail in minutes on the cheap runner, not after 20 minutes inside the Windows Wails build (where the audit currently runs via `prebuild`) | ubuntu | **partial** — gate exists, runs late/expensive; add the early job |
+| S12 | **CLI start smoke** — each `build-cli` artifact executes `--version`/`--help` on its build OS | Cross-compiled binaries at least start (init panics, missing dynamic deps) | all three | **missing** |
+
+Explicitly **out of CI** (and honestly labeled as such): full machine-image
+restore with `nbd` map + boot-verify (needs a real PBS + KVM lab — Phase 3),
+Exchange health/truncation behavior (needs a real Exchange host — rule 16),
+and TPM-present protector paths (runners have no TPM; S7 covers the fallback
+leg, the TPM leg is a lab checklist item).
+
+Exit: every row above is green-in-CI or consciously deferred with a phase
+reference; the `test` job name stops lying (it runs the workspace, not a
+tenth of it); a rule-3 violation cannot reach a tag build again.
+
+## Phase 2 — MSI provisioning pipeline (the NimbusControl contract)
+
+Implements the client side of NimbusControl Phase 6 against the frozen
+`docs/MSI-PROVISIONING.md` interface: per-org install profiles (server URL,
+org enrollment token, default backup mode baked in), an MSI build that
+consumes a profile and produces a preconfigured installer, and the signing
+hook so profiles are verifiable. First-boot behavior: enroll with the baked
+token, adopt the delivered default mode, wipe the token (rule 10).
+
+Exit: a profile downloaded from a NimbusControl org page produces an MSI
+that enrolls itself on first service start in a lab VM; S9 extended to cover
+the preconfigured variant; the contract doc versions locked between repos.
+
+## Phase 3 — Engine correctness milestones
+
+1. **Multi-volume single-snapshot-set** — machine backup currently snapshots
+   each volume in a separate VSS set (separate instants); a database split
+   across volumes (SQL data on D:, logs on E:) is torn across volumes.
+   Requires extending go-vss to `AddToSnapshotSet` all volumes before one
+   `DoSnapshotSet`. Single-volume layouts are unaffected today.
+2. **Restore acceptance** — the one milestone never exercised end-to-end:
+   machine-image restore via `nbd` map + boot-verify in the PBS+KVM lab, as
+   a documented, repeatable runbook (out-of-CI by declaration above).
+3. **CBT read-time skip** — stays out of scope: upload-side dedup already
+   handles unchanged chunks; a read-time skip needs a signed kernel filter
+   driver.
+
+Exit: split-volume test case captures one instant; a machine image restored
+and booted, with the runbook committed.
+
+## Phase 4 — Beta hardening
+
+1. **Authenticode signing** — SignPath OSS certificate integrated into
+   build-gui; S8 extended to assert a valid signature; the release-notes
+   false-positive banner retired.
+2. **`FEATURES_STATUS.md` resolved** — folded into this document or deleted;
+   drift ends either way (rule 18).
+3. **Dependency review** — written justification per direct dependency in
+   this file (rule 10's clause), supply-chain pass over the Wails/go-ntfs/
+   go-vss surface.
+4. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
+   MULTI_PBS guides current; upgrade notes since 0.2.x.
+
+Exit = **beta**, aligned with NimbusControl v0.9.0: smoke ledger fully green,
+no known data-safety or security debt, signed artifacts, provisioning
+round-trip demonstrated org-to-agent.
