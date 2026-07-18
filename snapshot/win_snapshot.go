@@ -16,13 +16,6 @@ import (
 	"github.com/st-matskevich/go-vss"
 )
 
-// LogFn receives every VSS diagnostic line. The old code fmt.Println'd them
-// — which in the Windows SERVICE goes nowhere, so snapshot successes,
-// failures, writer warnings and shadow IDs were all computed and then
-// discarded. The host wires this to its debug log at startup; nil falls back
-// to stdout so CLI use still prints.
-var LogFn = func(msg string) { fmt.Println(msg) }
-
 // writerErrorLines extracts the diagnostic core from `vssadmin list writers`
 // output: each writer name with a non-zero last error and its state — the
 // same facts Event Viewer's VSS entries carry, so a failed snapshot is
