@@ -48,7 +48,23 @@ type Agent struct {
 
 	AgentVersion string
 
+	// PolicyMaxAge optionally bounds how long a delivered policy stays in
+	// force without confirmation. Zero (the default) keeps the historical
+	// behavior: the last policy the server delivered stays in force
+	// indefinitely while the server is unreachable.
+	//
+	// That default is fail-closed only at STARTUP. Once a capability has been
+	// granted, an agent that can no longer reach the control server keeps it
+	// forever — so an attacker who blocks egress to the control plane (trivial
+	// from the same LAN) freezes the policy at whatever was last granted, and
+	// a revocation issued afterwards never lands. Setting PolicyMaxAge makes
+	// the grant expire instead, at the cost of losing server-granted
+	// capabilities during a genuine outage. That is a real availability
+	// tradeoff, which is why it is a knob and not a hardcoded timeout.
+	PolicyMaxAge time.Duration
+
 	policy   atomic.Value // Policy
+	policyAt atomic.Value // time.Time — when policy was last confirmed
 	interval atomic.Int64 // seconds, server-driven
 	mu       sync.Mutex   // serializes forced check-ins with the loop
 
@@ -80,14 +96,40 @@ func (a *Agent) recordAttempt(err error) {
 	a.status.LastSuccess = a.status.LastAttempt
 }
 
-// CurrentPolicy returns the last policy the server delivered. Before the
-// first successful check-in it returns the SAFE defaults (everything off) —
-// fail closed, never open.
+// CurrentPolicy returns the policy currently in force.
+//
+// Before the first successful check-in it returns the SAFE defaults
+// (everything off) — deny by default. If PolicyMaxAge is set and the last
+// confirmation is older than that, it reverts to those same safe defaults
+// rather than continuing to honor a grant the server has had no chance to
+// revoke. With PolicyMaxAge unset, the last delivered policy stays in force
+// for as long as the server is unreachable (see the field docs).
 func (a *Agent) CurrentPolicy() Policy {
-	if p, ok := a.policy.Load().(Policy); ok {
-		return p
+	p, ok := a.policy.Load().(Policy)
+	if !ok {
+		return Policy{} // zero value: FileRestore=false — deny by default
 	}
-	return Policy{} // zero value: FileRestore=false — deny by default
+	if a.PolicyMaxAge > 0 {
+		at, ok := a.policyAt.Load().(time.Time)
+		if !ok || time.Since(at) > a.PolicyMaxAge {
+			return Policy{}
+		}
+	}
+	return p
+}
+
+// PolicyIsStale reports whether the in-force policy has been downgraded to the
+// safe defaults because it could not be reconfirmed. Surfaced so the UI can
+// explain WHY a capability disappeared instead of looking broken.
+func (a *Agent) PolicyIsStale() bool {
+	if a.PolicyMaxAge <= 0 {
+		return false
+	}
+	if _, ok := a.policy.Load().(Policy); !ok {
+		return false
+	}
+	at, ok := a.policyAt.Load().(time.Time)
+	return !ok || time.Since(at) > a.PolicyMaxAge
 }
 
 // Run blocks, checking in on the server-provided cadence until stop closes.
@@ -131,6 +173,7 @@ func (a *Agent) CheckinNow() {
 	// Policy is applied BEFORE commands run, so a command executes under
 	// the policy that shipped alongside it.
 	a.policy.Store(resp.Policy)
+	a.policyAt.Store(time.Now())
 	if a.OnPolicy != nil {
 		a.OnPolicy(resp.Policy)
 	}

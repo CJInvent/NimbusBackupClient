@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -43,6 +44,10 @@ type Client struct {
 // the same bound so a MITM'd or broken server can't balloon agent memory.
 const MaxBodyBytes = 256 << 10
 
+// ErrCertPinMismatch reports that the server presented a certificate other
+// than the pinned one. It is a PERMANENT condition — callers must not retry it.
+var ErrCertPinMismatch = errors.New("controlplane: certificate fingerprint mismatch")
+
 func (c *Client) http() *http.Client {
 	if c.httpc != nil {
 		return c.httpc
@@ -59,11 +64,11 @@ func (c *Client) http() *http.Client {
 		// gosec G123.
 		verifyPin := func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("controlplane: no peer certificate")
+				return ErrCertPinMismatch
 			}
 			got := sha256.Sum256(cs.PeerCertificates[0].Raw)
 			if hex.EncodeToString(got[:]) != want {
-				return fmt.Errorf("controlplane: certificate fingerprint mismatch")
+				return ErrCertPinMismatch
 			}
 			return nil
 		}
@@ -160,6 +165,14 @@ func (c *Client) post(path string, in, out interface{}, authed bool) error {
 		var he *httpError
 		if asHTTPError(last, &he) && he.status != 429 && he.status < 500 {
 			return last // non-retryable
+		}
+		// A pin mismatch is permanent, not transient: the certificate on the
+		// other end will not become the pinned one by waiting. Retrying it
+		// burned ~40s per call, and under an active MITM meant hammering the
+		// impostor on every cycle while delaying the error the operator needs
+		// to see.
+		if errors.Is(last, ErrCertPinMismatch) {
+			return last
 		}
 		_ = attempt
 	}

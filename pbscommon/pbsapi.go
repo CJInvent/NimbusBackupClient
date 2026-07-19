@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -214,19 +213,31 @@ func (pbs *PBSClient) buildTLSConfig() *tls.Config {
 	// fail every connection.
 	if pbs.CertFingerPrint == "" {
 		// No fingerprint: trust the system CA, unless explicitly insecure.
-		return &tls.Config{InsecureSkipVerify: pbs.Insecure}
+		// MinVersion is pinned here too so the unpinned path can never
+		// negotiate TLS 1.0/1.1 if a future Go default relaxes.
+		// #nosec G402 -- InsecureSkipVerify only when the caller explicitly asked for it (nbd)
+		return &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: pbs.Insecure}
 	}
 	// Fingerprint configured: skip CA validation but pin the peer cert's SHA-256.
+	//
+	// The pin is wired through VerifyConnection rather than
+	// VerifyPeerCertificate for the same reason controlplane/client.go does it:
+	// VerifyPeerCertificate is NOT invoked on a resumed TLS session, so a pin
+	// installed there stops being enforced exactly when the handshake is
+	// abbreviated. VerifyConnection runs on every handshake, resumption
+	// included. With InsecureSkipVerify set, the pin is the only trust anchor
+	// there is, so it must never be skippable. (Client-side resumption also
+	// needs a ClientSessionCache, which nothing here sets today — this is
+	// defence in depth against that changing, not a live hole.)
 	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		// #nosec G402 -- deliberate certificate pinning; verification is done by VerifyConnection, not the system trust store
 		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("no certificates presented by the peer")
 			}
-			peerCert, err := x509.ParseCertificate(rawCerts[0])
-			if err != nil {
-				return fmt.Errorf("failed to parse certificate: %v", err)
-			}
+			peerCert := cs.PeerCertificates[0]
 			expectedFingerprint := strings.ReplaceAll(pbs.CertFingerPrint, ":", "")
 			sum := sha256.Sum256(peerCert.Raw)
 			calculatedFingerprint := hex.EncodeToString(sum[:])

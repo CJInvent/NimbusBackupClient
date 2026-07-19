@@ -165,6 +165,11 @@ Update staleness), `GetExchangeStatus()`, `QueryExchangeLogMode()`.
 * **Local API auth** — shared token, constant-time compare, DACL'd token file.
 * **Enrollment secrecy** — the enroll token is one-time and wiped; the agent
   secret lives in the same sealed store; the server stores sha256 only.
+* **Untrusted path data** — PXAR entry names and filenames parsed out of a
+  backup image never reach `filepath.Join` directly; `security.SafeJoin` /
+  `SafeBaseName` screen them syntactically and then prove containment, so a
+  crafted or corrupted image cannot write outside the restore destination.
+  This matters most in the service, which restores as LocalSystem.
 * **Residual risk** — malware on an already-compromised host can request
   DPAPI/TPM unwrap in-process; posture warnings make hardware-mitigation gaps
   visible but userland cannot fully close this.
@@ -383,10 +388,15 @@ Where a rule has a war story, it is cited — these are not hypotheticals.
     best-effort AFTER data placement — mtimes, then ADS, then the security
     descriptor LAST (a restrictive DACL could lock us out of a file we still
     need to write). An over-cap folder errors rather than silently partial.
-14. **Image browsing is read-only forensics.** No mounts, no drivers, no
-    writes to the image, and no guessing: unsupported (ReFS) or locked
-    (BitLocker) filesystems are refused with the reason. A restore tool that
-    guesses at structures returns corrupt files with a straight face.
+14. **Image browsing is read-only forensics, and image paths are untrusted
+    input.** No mounts, no drivers, no writes to the image, and no guessing:
+    unsupported (ReFS) or locked (BitLocker) filesystems are refused with the
+    reason. A restore tool that guesses at structures returns corrupt files
+    with a straight face. Names taken from an image's own directory entries
+    are attacker- or corruption-controlled — nothing in NTFS/FAT on disk
+    forbids a separator or a `..` component, and `filepath.Join` RESOLVES
+    `..` rather than rejecting it — so every join of backup-derived path data
+    goes through `security.SafeJoin`, never `filepath.Join`.
 15. **Every feature ships with tests, and CI runs them.** The smoke ledger
     (Part III, Phase 1) is law: a smoke test listed there is either green in
     CI or has an open phase item; "passes locally" is not a state. Red main
@@ -521,6 +531,62 @@ code CI had never executed:
   chunker should look like. A green test that asserts nothing is worse than a
   missing one — it buys false confidence in the dedup layer.
 
+### Security review findings
+
+A follow-on audit of the paths Phase 1 had just made testable:
+
+* **Image restore could write outside the destination (fixed).** The
+  image-restore path joined filenames taken from the image's own $MFT / FAT
+  directory entries straight onto the destination. The PXAR path guards this
+  exact class explicitly; the image path did not. The parsers reject a
+  component equal to `..`, so a well-formed volume was never affected — but
+  nothing rejected a separator INSIDE a name, and a crafted or corrupted
+  image can carry `..\..\..\Windows\System32\evil.dll` in a name field,
+  because that is a Windows API restriction rather than an on-disk format
+  one. `filepath.Join` then resolves the `..` instead of refusing it. The
+  service performs delegated restores as LocalSystem, so the ceiling was an
+  arbitrary write as SYSTEM. Now routed through `security.SafeJoin` /
+  `SafeBaseName` (flattening does not sanitize: `Base("..")` is `".."`).
+  Refused entries are counted and reported separately from metadata
+  warnings — a refused file was NOT restored, and saying otherwise would be
+  a lie about backup contents.
+* **PBS certificate pinning was skippable on resumed sessions (fixed).**
+  `pbscommon` pinned via `VerifyPeerCertificate`, which is not invoked when a
+  TLS session is resumed — while `controlplane` already used
+  `VerifyConnection` for precisely that reason, with a comment saying so. The
+  same defect class, ruled on in one module and not the other. Now both use
+  `VerifyConnection`. Nothing sets a `ClientSessionCache` today, so this was
+  defence in depth rather than a live hole; the unpinned branch also gained
+  an explicit TLS 1.2 floor.
+* **A certificate pin mismatch was retried for 40 seconds (fixed).** The
+  control-plane retry ladder treated every transport error as transient. A
+  pin mismatch is permanent — the certificate will not become the pinned one
+  by waiting — so under an active MITM the agent hammered the impostor on
+  every cycle while delaying the error an operator needs to see. Now a
+  sentinel (`ErrCertPinMismatch`) marks it non-retryable. Side effect: the
+  controlplane suite went from 60s to under 4s, because the pre-existing pin
+  test had been walking that ladder.
+* **"Fail-closed" was true only at startup (documented, knob added).** The
+  agent denies everything before its first check-in, but once a capability is
+  granted it stayed in force forever while the server was unreachable — so
+  blocking the agent's egress to the control plane, trivial from the same
+  LAN, freezes its capabilities and a later revocation never lands. That is
+  an availability/security tradeoff rather than an outright bug, so the
+  behavior is now bounded by an OPT-IN `Agent.PolicyMaxAge` (default: the
+  historical behavior, unchanged) and both branches are tested. Deciding the
+  default is a product call, tracked for Phase 4.
+* **Dependencies.** `npm audit` reports one high and one moderate against the
+  frontend toolchain (vite `server.fs.deny` bypass on Windows alternate
+  paths, launch-editor NTLMv2 hash disclosure via UNC, esbuild dev-server
+  request forgery). All are DEV-SERVER only — the shipped artifact is a Go
+  binary with pre-built embedded assets — but they are live risks on a
+  Windows developer workstation running `wails dev`. On the Go side the
+  `gui` module still pins `golang.org/x/net v0.12.0`, which predates the
+  HTTP/2 Rapid Reset and CONTINUATION-flood fixes (`pbscommon` is on
+  v0.23.0), and the Wails library (v2.8.0) trails the pinned CLI (v2.12.0).
+  Scheduled with the Phase 4 dependency review; none is reachable from
+  untrusted input in the shipped agent today.
+
 S2 also corrected this document. It was first written to check **four**
 views ({GUI, service} × {windows, linux}), and the linux+service leg failed
 immediately with `undefined: NimbusService` — not a defect, but an artifact
@@ -577,8 +643,15 @@ and booted, with the runbook committed.
    drift ends either way (rule 18).
 3. **Dependency review** — written justification per direct dependency in
    this file (rule 10's clause), supply-chain pass over the Wails/go-ntfs/
-   go-vss surface.
-4. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
+   go-vss surface. Concretely: bump `golang.org/x/net` in `gui` off v0.12.0,
+   align the Wails library with the pinned v2.12.0 CLI, refresh the frontend
+   toolchain for the dev-server advisories, and add `govulncheck` +
+   `npm audit` as CI gates so this list maintains itself.
+4. **Decide the `PolicyMaxAge` default** — whether a server-granted
+   capability should expire when the control plane cannot be reached. Today
+   it does not, which means blocked egress freezes policy; the mechanism
+   exists and is tested, only the default is open.
+5. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
    MULTI_PBS guides current; upgrade notes since 0.2.x.
 
 Exit = **beta**, aligned with NimbusControl v0.9.0: smoke ledger fully green,

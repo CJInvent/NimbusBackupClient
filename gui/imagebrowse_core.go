@@ -29,6 +29,7 @@ import (
 
 	"imagebrowse"
 	"pbscommon"
+	"security"
 )
 
 // imageWalkCap bounds a full-tree listing: memory AND the number of image
@@ -591,7 +592,7 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	// system drive holding %TEMP%, could fail the staging write for a large
 	// file even when the DESTINATION drive had ample room. Direct placement
 	// needs space only where the files actually land, which is what we checked.
-	count, warned := 0, 0
+	count, warned, refused := 0, 0, 0
 	err = a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, true,
 		func(fs imagebrowse.Filesystem, _ imagebrowse.Partition, _ *pbscommon.FIDXReaderAt) error {
 			files, totalBytes, ferr := planSelection(fs, includePaths)
@@ -614,10 +615,40 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 
 				// Where this file lands. keepStructure=false flattens to the base
 				// name (matches the directory-restore option of the same name).
-				rel := filepath.FromSlash(strings.TrimPrefix(f, "/"))
-				target := filepath.Join(destDir, rel)
-				if !keepStructure {
-					target = filepath.Join(destDir, filepath.Base(rel))
+				//
+				// These names come from the IMAGE's own directory entries, not
+				// from the user. Nothing in NTFS/FAT on disk prevents a name
+				// from holding a separator or a ".." component — that is a
+				// Windows API restriction, not a format one — and
+				// filepath.Join RESOLVES ".." instead of rejecting it. Joining
+				// them unchecked let a crafted or corrupted image write
+				// anywhere the process could reach, and the service restores as
+				// LocalSystem. Refuse and keep going, as the PXAR path does: one
+				// hostile entry must not abort a 10,000-file restore, but it
+				// must never be silent either.
+				var target string
+				if keepStructure {
+					t, perr := security.SafeJoin(destDir, strings.TrimPrefix(f, "/"))
+					if perr != nil {
+						writeBackupLog(fmt.Sprintf("ImageBrowse: REFUSED unsafe path from image: %v", perr))
+						refused++
+						continue
+					}
+					target = t
+				} else {
+					base, berr := security.SafeBaseName(f)
+					if berr != nil {
+						writeBackupLog(fmt.Sprintf("ImageBrowse: REFUSED unsafe file name from image: %v", berr))
+						refused++
+						continue
+					}
+					t, perr := security.SafeJoin(destDir, base)
+					if perr != nil {
+						writeBackupLog(fmt.Sprintf("ImageBrowse: REFUSED unsafe path from image: %v", perr))
+						refused++
+						continue
+					}
+					target = t
 				}
 				if _, serr := os.Stat(target); serr == nil && !overwrite {
 					return fmt.Errorf("[NB-3427] %s already exists (tick Overwrite to replace it)", target)
@@ -694,10 +725,16 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	if warned > 0 {
 		writeBackupLog(fmt.Sprintf("ImageBrowse: restore finished with %d metadata warning(s) — files themselves are intact", warned))
 	}
+	if refused > 0 {
+		writeBackupLog(fmt.Sprintf("ImageBrowse: %d file(s) REFUSED — their names in the image could have written outside %s. This indicates a crafted or corrupted image; the remaining files restored normally.", refused, destDir))
+	}
 
 	doneMsg := fmt.Sprintf("Restored %d file(s)", count)
 	if warned > 0 {
 		doneMsg += fmt.Sprintf(" — %d metadata warning(s), see the log", warned)
+	}
+	if refused > 0 {
+		doneMsg += fmt.Sprintf(" — %d unsafe path(s) refused, see the log", refused)
 	}
 	emit(100, doneMsg)
 	writeBackupLog(fmt.Sprintf("ImageBrowse: restored %d file(s) from %s partition %d to %s",
