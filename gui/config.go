@@ -28,10 +28,15 @@ type Config struct {
 	Namespace       string `json:"namespace,omitempty"`
 
 	// ==================== BACKUP SETTINGS ====================
-	BackupDir      string   `json:"backupdir,omitempty"`
-	BackupID       string   `json:"backup-id,omitempty"`
-	UseVSS         bool     `json:"usevss"`
-	LastBackupDirs []string `json:"last_backup_dirs,omitempty"` // Remember last used directories
+	// DefaultBackupMode is the org's preferred mode ("directory" or "machine")
+	// as delivered by a provisioning profile. It seeds the UI's initial choice
+	// on a freshly provisioned machine; it is NOT a policy and never overrides
+	// what the machine has since chosen for itself.
+	DefaultBackupMode string   `json:"default_backup_mode,omitempty"`
+	BackupDir         string   `json:"backupdir,omitempty"`
+	BackupID          string   `json:"backup-id,omitempty"`
+	UseVSS            bool     `json:"usevss"`
+	LastBackupDirs    []string `json:"last_backup_dirs,omitempty"` // Remember last used directories
 	// Auto-split settings. DisableSplit defaults to false (zero value) so existing
 	// configs keep auto-splitting. SplitSizeGB is both the split threshold and the
 	// per-bin target size; 0 means the default (DefaultSplitSizeGB).

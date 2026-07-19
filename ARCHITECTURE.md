@@ -524,6 +524,7 @@ now run every gate.
 | S6 | **PXAR/index round-trip** — chunker determinism + size distribution, FIDX spans/EOF/bad-magic, catalog round-trip | The wire formats we write are the ones we can read back | ubuntu | **green via S1** — and it immediately found the chunker suite was measuring zeros (below). A pxar *writer→reader* round-trip is still to be written |
 | S7 | **Secret-store smoke (Windows)** — seal/unseal through the real chain, corrupt/tampered/foreign-key degradation to "re-enter", protector auto-upgrade preserving the DEK | Dev rule 11 on real Windows crypto. Runners have no TPM, so the load-bearing assertion is that the chain does **not** fall through to `plaintext` | windows | **green** |
 | S8 | **Artifact identity + API credential (Windows)** — `EnsureToken` idempotence and the icacls DACL (locale-independent: no inherited `(I)` ACEs); shipped binaries exist, are plausible, and `NimbusBackupSVC.exe` carries CompanyName/ProductName/ProductVersion | The token guarding the privileged API is really restricted, and the `.syso` AV-false-positive mitigation has not silently stopped linking | windows | **green** |
+| S9b | **Provisioned MSI smoke** — build a preconfigured MSI from a profile, install it, assert the payload lands where the service looks; assert a malformed profile fails the BUILD; assert the stock MSI carries no profile | The provisioning contract end to end, and that one org's enrollment token cannot ship to every customer | windows | **green, non-blocking** |
 | S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + binaries present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly | The installer customers actually run, and the uninstall contract that a customer's PBS credentials survive unless they say otherwise | windows | **green, non-blocking** — advisory until it has a track record on hosted runners |
 | S10 | **VSS snapshot smoke (Windows)** — real snapshot through the production path; asserts the 0.2.150 diagnostics reach `LogFn`, then the lifecycle and cleanup | The most privileged thing the product does. The diagnostics assertion holds even where a runner refuses to snapshot — silence means the "prints into the void in a service" regression is back | windows | **green, non-blocking** — same reason |
 | S11 | **Frontend gate, early** — `npm run i18n-audit` + full frontend build on ubuntu | Parity/hardcoded-string violations fail in a minute on a cheap runner instead of 20 minutes into the Windows Wails build, where the audit previously only ran as a `prebuild` hook | ubuntu | **green** |
@@ -687,18 +688,49 @@ reason; the `test` job no longer stands for a tenth of the workspace; a rule-3
 violation cannot reach a tag build again; and the gates run on the branch
 development actually happens on.
 
-## Phase 2 — MSI provisioning pipeline (the NimbusControl contract)
+## Phase 2 — MSI provisioning pipeline (client side shipped)
 
-Implements the client side of NimbusControl Phase 6 against the frozen
-`docs/MSI-PROVISIONING.md` interface: per-org install profiles (server URL,
-org enrollment token, default backup mode baked in), an MSI build that
-consumes a profile and produces a preconfigured installer, and the signing
-hook so profiles are verifiable. First-boot behavior: enroll with the baked
-token, adopt the delivered default mode, wipe the token (rule 10).
+A technician images a machine and walks away, instead of typing a URL and a
+token into a GUI on every endpoint. The contract is `docs/MSI-PROVISIONING.md`
+— **version 1, frozen**, and the interface NimbusControl's Phase 6 implements
+against. It did not exist before this phase; the client side defines it.
 
-Exit: a profile downloaded from a NimbusControl org page produces an MSI
-that enrolls itself on first service start in a lab VM; S9 extended to cover
-the preconfigured variant; the contract doc versions locked between repos.
+Shipped:
+
+* **Profile format and parser** (`controlplane/profile.go`). https-only
+  control URL, one-time org enrollment token, optional SHA-256 pin normalized
+  from whatever colon-grouping was pasted, optional default backup mode.
+  Unknown fields are a HARD error — a field this build does not understand may
+  be load-bearing on the server, and half-applying a security profile is worse
+  than refusing it. That makes adding a field a version bump, deliberately.
+* **Ingestion** (`gui/provisioning.go`), run by the SERVICE before enrollment.
+  Two rules, both because violating them fails silently: an already-enrolled
+  agent is never re-pointed (an in-place upgrade re-delivers the same profile,
+  and a machine that has been backing up for a year must not change allegiance
+  quietly), and the token is destroyed on every path — applied, refused, or
+  discarded — because leaving it to "retry later" turns a provisioning artifact
+  into a permanent credential on the endpoint (rule 10).
+* **Build pipeline** — `scripts/build-provisioned-msi.ps1` plus a WiX component
+  behind a preprocessor guard, so the stock MSI is unchanged when no profile is
+  supplied. The script validates with `controlplane/cmd/profilecheck`, which
+  calls the agent's own parser: build-time and run-time cannot disagree about
+  what a valid profile is, and a broken profile fails on the MSP's workstation
+  rather than at first boot on a customer endpoint.
+* **S9b** covers the preconfigured variant end to end, including the assertion
+  that would otherwise fail silently — that the STOCK installer carries no
+  profile. A stock MSI shipping one org's token to every customer has no
+  symptom until it is someone else's incident.
+
+Deliberately NOT claimed: `signature` is reserved and unverified. Verifying it
+needs a trust anchor the agent would have to hold before it has ever contacted
+the server, which is the distribution problem the installer signature already
+solves. The integrity boundary is Authenticode on the MSI (Phase 4), and the
+contract says so in those words rather than implying a control that is not there.
+
+Remaining for exit: the server side (NimbusControl Phase 6) generating
+profiles per org, and a lab-VM run proving a downloaded profile enrolls itself
+on first service start against a real control server — S9b proves the payload
+arrives and is intact, not that enrollment completes.
 
 ## Phase 3 — Engine correctness milestones
 

@@ -718,6 +718,72 @@ jobs:
           }
           Write-Host 'S9 OK: both KEEP_CONFIG branches behave as documented.'
 
+      # S9b — the preconfigured variant (docs/MSI-PROVISIONING.md). Proves the
+      # WiX guard compiles in, the payload lands where the service looks for
+      # it, and — the part that would fail silently — that the STOCK installer
+      # does not carry a profile. A stock MSI shipping someone's org token
+      # would be a credential leak with no symptom.
+      - name: Provisioned MSI smoke (S9b)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cfgDir = "$env:ProgramData\NimbusBackup"
+          $profilePath = "$env:TEMP\ci-profile.json"
+
+          @{
+            profile_version     = 1
+            org_name            = 'CI Test Org'
+            control_server_url  = 'https://control.invalid'
+            control_cert_fp     = ('ab' * 32)
+            enroll_token        = 'ci-one-time-token'
+            default_backup_mode = 'directory'
+            issued_at           = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            issued_by           = 'ci'
+          } | ConvertTo-Json | Set-Content -Path $profilePath -Encoding utf8
+
+          # A malformed profile must fail the BUILD, not the endpoint.
+          '{"profile_version":1,"control_server_url":"http://plaintext","enroll_token":"x"}' |
+            Set-Content "$env:TEMP\bad-profile.json" -Encoding utf8
+          $rejected = $false
+          try {
+            & ./scripts/build-provisioned-msi.ps1 -Profile "$env:TEMP\bad-profile.json" -Version '${{ steps.version.outputs.VERSION_MSI }}' 2>&1 | Out-Null
+          } catch { $rejected = $true }
+          if (-not $rejected) { throw 'a plaintext-http profile was accepted by the build script' }
+
+          & ./scripts/build-provisioned-msi.ps1 -Profile $profilePath -Version '${{ steps.version.outputs.VERSION_MSI }}' -Out "$env:TEMP\provisioned.msi"
+          if (-not (Test-Path "$env:TEMP\provisioned.msi")) { throw 'provisioned MSI was not produced' }
+
+          # The staged copy must not survive in the source tree: it holds a
+          # live org token and sits next to files that get committed.
+          if (Test-Path 'installer/wix/provisioning.json') {
+            throw 'build left the provisioning profile in the source tree'
+          }
+
+          Remove-Item "$cfgDir\provisioning.json" -ErrorAction SilentlyContinue
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', "$env:TEMP\provisioned.msi", '/qn') -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "provisioned install failed ($($p.ExitCode))" }
+
+          if (-not (Test-Path "$cfgDir\provisioning.json")) {
+            throw 'provisioned MSI did not install provisioning.json where the service looks for it'
+          }
+          $got = Get-Content "$cfgDir\provisioning.json" -Raw | ConvertFrom-Json
+          if ($got.control_server_url -ne 'https://control.invalid') { throw 'profile contents did not survive the MSI' }
+          Write-Host 'S9b: provisioned payload present and intact.'
+
+          $p = Start-Process msiexec.exe -ArgumentList @('/x', "$env:TEMP\provisioned.msi", 'KEEP_CONFIG=0', '/qn') -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "provisioned uninstall failed ($($p.ExitCode))" }
+          Remove-Item "$cfgDir\provisioning.json" -ErrorAction SilentlyContinue
+
+          # And the stock installer must carry nothing.
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', (Resolve-Path 'dist/NimbusBackup.msi').Path, '/qn') -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "stock install failed ($($p.ExitCode))" }
+          if (Test-Path "$cfgDir\provisioning.json") {
+            throw 'the STOCK MSI installed a provisioning profile — that would ship one org''s token to every customer'
+          }
+          $p = Start-Process msiexec.exe -ArgumentList @('/x', (Resolve-Path 'dist/NimbusBackup.msi').Path, 'KEEP_CONFIG=0', '/qn') -Wait -PassThru
+          Write-Host 'S9b OK: stock installer carries no profile.'
+
       - name: Upload GUI artifacts
         uses: actions/upload-artifact@v4
         with:

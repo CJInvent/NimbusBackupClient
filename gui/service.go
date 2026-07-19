@@ -75,6 +75,12 @@ func (s *NimbusService) run() {
 	// Control plane (NimbusControl): the service is the brain, so the
 	// enroll/check-in loop lives here. No-op unless control_server_url is
 	// configured. The GUI reads status via /controlplane/status.
+	//
+	// A preconfigured MSI leaves a provisioning profile beside config.json;
+	// consume it FIRST so a freshly imaged machine enrolls itself on this
+	// start rather than waiting for a technician. Consuming it is also what
+	// destroys the one-time org token it carries.
+	s.app.ApplyProvisioningProfile()
 	s.app.StartControlPlane()
 
 	// Start HTTP API server for GUI communication (token-authenticated — H-01).

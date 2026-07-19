@@ -38,6 +38,11 @@
       </Directory>
 
       <!-- Start Menu shortcut -->
+      <!-- ProgramData\NimbusBackup — where config.json lives, and where a
+           preconfigured build drops its provisioning profile. -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="NIMBUSDATAFOLDER" Name="NimbusBackup" />
+      </Directory>
       <Directory Id="ProgramMenuFolder">
         <Directory Id="ApplicationProgramsFolder" Name="Nimbus Backup"/>
       </Directory>
@@ -112,6 +117,20 @@
     </DirectoryRef>
 
     <!-- Features -->
+    <?ifdef ProvisioningProfile ?>
+    <!-- Preconfigured build: see docs/MSI-PROVISIONING.md. The service
+         consumes this file on first start and destroys it — it carries a
+         one-time org enrollment token. NOT installed by the stock MSI. -->
+    <DirectoryRef Id="NIMBUSDATAFOLDER">
+      <Component Id="ProvisioningProfile" Guid="*" Win64="yes" NeverOverwrite="yes">
+        <File Id="ProvisioningJSON"
+              Source="$(var.ProvisioningProfile)"
+              Name="provisioning.json"
+              KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <?endif?>
+
     <Feature Id="ProductFeature"
              Title="Nimbus Backup"
              Level="1"
@@ -120,6 +139,9 @@
       <ComponentRef Id="ServiceExecutable" />
       <ComponentRef Id="ApplicationShortcut" />
       <ComponentRef Id="AutoStartRegistry" />
+      <?ifdef ProvisioningProfile ?>
+      <ComponentRef Id="ProvisioningProfile" />
+      <?endif?>
     </Feature>
 
     <!-- Add/Remove Programs metadata: publisher trust signals shown in
