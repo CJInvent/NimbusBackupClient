@@ -382,12 +382,22 @@ jobs:
           fail=0
           for m in $modules; do
             echo "::group::govulncheck $m"
-            if ( cd "$m" && go mod tidy >/dev/null 2>&1; govulncheck ./... ); then
-              echo "OK   $m"
-            else
+            ( cd "$m" && go mod tidy >/dev/null 2>&1; govulncheck ./... ) > vuln.txt 2>&1
+            rc=$?
+            cat vuln.txt
+            if [ $rc -ne 0 ]; then
+              # Surface the ID and the fix, not just "something is wrong":
+              # workflow log blobs are not always reachable, and the whole
+              # point of this job is to replace inference with an answer.
+              grep -E '^Vulnerability #|Found in:|Fixed in:|^  Module:' vuln.txt \
+                | sed 's/^ *//' \
+                | while read -r l; do echo "::error::$m: $l"; done
               echo "::error::govulncheck found reachable vulnerabilities in $m"
               fail=1
+            else
+              echo "OK   $m"
             fi
+            rm -f vuln.txt
             echo "::endgroup::"
           done
           exit $fail
