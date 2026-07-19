@@ -542,6 +542,16 @@ jobs:
           echo "VERSION_MSI=$version_msi" >> $env:GITHUB_OUTPUT
           echo "Building version: $version (MSI: $version_msi)"
 
+      - name: Resolve Go dependencies
+        working-directory: gui
+        env:
+          GOWORK: off
+        run: |
+          # wails build does not tidy, and gui/ carries no committed go.sum,
+          # so resolve explicitly here — otherwise a dependency bump lands as a
+          # "missing go.sum entry" at build time instead of at review time.
+          go mod tidy
+
       - name: Build GUI
         working-directory: gui
         env:

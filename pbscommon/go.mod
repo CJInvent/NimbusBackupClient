@@ -5,7 +5,7 @@ go 1.25
 require (
 	golang.org/x/time v0.5.0
 	github.com/klauspost/compress v1.17.9
-	golang.org/x/net v0.23.0
+	golang.org/x/net v0.55.0
 )
 
 require (
