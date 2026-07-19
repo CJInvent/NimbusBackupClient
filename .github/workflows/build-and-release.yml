@@ -382,10 +382,14 @@ jobs:
           fail=0
           for m in $modules; do
             echo "::group::govulncheck $m"
-            ( cd "$m" && go mod tidy >/dev/null 2>&1; govulncheck ./... ) > vuln.txt 2>&1
-            rc=$?
-            cat vuln.txt
-            if [ $rc -ne 0 ]; then
+            # Must stay an `if` CONDITION: Actions runs steps under `set -e`,
+            # so capturing $? from a failing command aborts the step before the
+            # reporting below can run. govulncheck exits 3 on findings.
+            if ( cd "$m" && go mod tidy >/dev/null 2>&1; govulncheck ./... ) > vuln.txt 2>&1; then
+              cat vuln.txt
+              echo "OK   $m"
+            else
+              cat vuln.txt
               # Surface the ID and the fix, not just "something is wrong":
               # workflow log blobs are not always reachable, and the whole
               # point of this job is to replace inference with an answer.
@@ -394,8 +398,6 @@ jobs:
                 | while read -r l; do echo "::error::$m: $l"; done
               echo "::error::govulncheck found reachable vulnerabilities in $m"
               fail=1
-            else
-              echo "OK   $m"
             fi
             rm -f vuln.txt
             echo "::endgroup::"
