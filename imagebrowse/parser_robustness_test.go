@@ -14,6 +14,7 @@ package imagebrowse
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math/rand"
 	"testing"
@@ -241,5 +242,131 @@ func TestExFATClusterSizeIsSpecBounded(t *testing.T) {
 				"above the 32 MB the spec allows — the reader allocates a whole "+
 				"cluster per read", c.bps, c.spc, ex.clusterSize, ex.clusterSize>>20)
 		}
+	}
+}
+
+// validNTFS builds a boot sector plausible enough that go-ntfs proceeds to
+// parse the volume, so mutations of it exercise the reader rather than
+// bouncing off the first sanity check.
+func validNTFS(volBytes int) []byte {
+	b := make([]byte, volBytes)
+	b[0], b[1], b[2] = 0xEB, 0x52, 0x90
+	copy(b[3:], []byte("NTFS    "))
+	binary.LittleEndian.PutUint16(b[0x0B:], 512) // bytes/sector
+	b[0x0D] = 8                                  // sectors/cluster -> 4 KiB clusters
+	b[0x15] = 0xF8                               // media descriptor
+	binary.LittleEndian.PutUint16(b[0x18:], 63)  // sectors/track
+	binary.LittleEndian.PutUint16(b[0x1A:], 255) // heads
+	binary.LittleEndian.PutUint64(b[0x28:], uint64(volBytes/512))
+	binary.LittleEndian.PutUint64(b[0x30:], 4) // $MFT cluster
+	binary.LittleEndian.PutUint64(b[0x38:], 8) // $MFTMirr cluster
+	b[0x40] = 0xF6                             // signed -10 => 1024-byte records
+	b[0x44] = 0x01                             // clusters per index record
+	binary.LittleEndian.PutUint64(b[0x48:], 0x0123456789ABCDEF)
+	b[510], b[511] = 0x55, 0xAA
+	return b
+}
+
+// NTFS is parsed by a third-party library (go-ntfs) walking deeply nested
+// on-disk structures, which is the largest untrusted-input surface in this
+// module. A crafted offset there surfaces as an index-out-of-range, not an
+// error return — so without a panic boundary a bad image takes the process
+// down, and in the service that means an unrelated running backup dies too.
+func TestNTFSParserHostileInput(t *testing.T) {
+	rng := rand.New(rand.NewSource(44))
+	const vol = 1 << 20
+	for i := 0; i < 60; i++ {
+		img := validNTFS(vol)
+		for m := 0; m < 1+rng.Intn(6); m++ {
+			img[0x0B+rng.Intn(0x40)] = byte(rng.Intn(256)) // corrupt the BPB
+		}
+		for j := 0x200; j < len(img); j += rng.Intn(64) + 1 {
+			img[j] = byte(rng.Intn(256)) // noise where the $MFT would live
+		}
+		openAndDrive(t, "ntfs-mutated", img, FSNTFS)
+	}
+}
+
+// Deterministic NTFS geometries that a corrupt or crafted volume can carry.
+// Each is an allocation or an offset sized by the IMAGE rather than by us.
+func TestNTFSAdversarialGeometry(t *testing.T) {
+	const vol = 1 << 20
+
+	cases := []struct {
+		name   string
+		mutate func(b []byte)
+	}{
+		{"mft beyond end of volume", func(b []byte) {
+			binary.LittleEndian.PutUint64(b[0x30:], 0xFFFFFFFF)
+		}},
+		{"record size 2^128 via signed shift", func(b []byte) {
+			b[0x40] = 0x80 // signed -128 => 1<<128, overflows any int
+		}},
+		{"record size 127 clusters", func(b []byte) {
+			b[0x40] = 0x7F // 127 * 4 KiB per record
+		}},
+		{"zero bytes per sector", func(b []byte) {
+			binary.LittleEndian.PutUint16(b[0x0B:], 0) // division by zero shape
+		}},
+		{"zero sectors per cluster", func(b []byte) {
+			b[0x0D] = 0
+		}},
+		{"huge sectors per cluster", func(b []byte) {
+			b[0x0D] = 0xFF
+		}},
+		{"total sectors overflows int64", func(b []byte) {
+			binary.LittleEndian.PutUint64(b[0x28:], ^uint64(0))
+		}},
+		{"index record 127 clusters", func(b []byte) {
+			b[0x44] = 0x7F
+		}},
+		{"mft and mirror identical", func(b []byte) {
+			binary.LittleEndian.PutUint64(b[0x38:], 4)
+		}},
+	}
+	for _, c := range cases {
+		img := validNTFS(vol)
+		c.mutate(img)
+		openAndDrive(t, "ntfs/"+c.name, img, FSNTFS)
+	}
+
+	// Truncation: an image cut short mid-structure is the commonest real
+	// corruption, and every offset the boot sector declares is now past EOF.
+	for _, n := range []int{512, 1024, 4096, 16384, 65536} {
+		img := validNTFS(vol)[:n]
+		openAndDrive(t, "ntfs/truncated", img, FSNTFS)
+	}
+}
+
+// The boundary itself: a parser panic must become a classifiable error, and
+// must not hand the caller a half-built result alongside it.
+func TestPanicGuardConvertsToError(t *testing.T) {
+	boom := func() (_ []Entry, err error) {
+		defer catchPanic("ntfs: list /x", &err)
+		out := []Entry{{Path: "/partial"}}
+		_ = out
+		var s []int
+		_ = s[5] // the shape a crafted offset produces inside go-ntfs
+		return out, nil
+	}
+	got, err := boom()
+	if err == nil {
+		t.Fatal("a parser panic did not become an error — it would reach the process")
+	}
+	if !errors.Is(err, ErrCorruptStructure) {
+		t.Errorf("error is not classifiable as corruption: %v", err)
+	}
+	if got != nil {
+		t.Errorf("a partial result leaked alongside the error: %v", got)
+	}
+
+	// The (value, ok) accessors carry no error, so a panic degrades to
+	// "unknown" — which those APIs already model.
+	usedBytes := func() (_ int64, ok bool) {
+		defer catchPanicBool(&ok)
+		panic("bad cluster geometry")
+	}
+	if _, ok := usedBytes(); ok {
+		t.Error("a panicking size probe reported success")
 	}
 }

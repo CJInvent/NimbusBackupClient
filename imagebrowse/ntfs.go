@@ -36,7 +36,8 @@ type ntfsFS struct {
 	sdsErr  error
 }
 
-func openNTFS(r io.ReaderAt) (Filesystem, error) {
+func openNTFS(r io.ReaderAt) (_ Filesystem, err error) {
+	defer catchPanic("ntfs: open volume", &err)
 	ctx, err := ntfs.GetNTFSContext(r, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open NTFS volume: %w", err)
@@ -87,7 +88,8 @@ func (f *ntfsFS) open(p string) (*ntfs.MFT_ENTRY, error) {
 	return e, nil
 }
 
-func (f *ntfsFS) List(dir string) ([]Entry, error) {
+func (f *ntfsFS) List(dir string) (_ []Entry, err error) {
+	defer catchPanic("ntfs: list "+dir, &err)
 	d, err := f.open(dir)
 	if err != nil {
 		return nil, err
@@ -115,7 +117,8 @@ func (f *ntfsFS) List(dir string) ([]Entry, error) {
 	return out, nil
 }
 
-func (f *ntfsFS) Stat(p string) (Entry, error) {
+func (f *ntfsFS) Stat(p string) (_ Entry, err error) {
+	defer catchPanic("ntfs: stat "+p, &err)
 	if CleanPath(p) == "/" {
 		return Entry{Path: "/", IsDir: true}, nil
 	}
@@ -137,7 +140,8 @@ func (f *ntfsFS) Stat(p string) (Entry, error) {
 	return Entry{}, fmt.Errorf("no metadata for %q", p)
 }
 
-func (f *ntfsFS) ExtractFile(p string, w io.Writer) (int64, error) {
+func (f *ntfsFS) ExtractFile(p string, w io.Writer) (_ int64, err error) {
+	defer catchPanic("ntfs: extract "+p, &err)
 	e, err := f.Stat(p)
 	if err != nil {
 		return 0, err
@@ -165,7 +169,9 @@ func (f *ntfsFS) ExtractFile(p string, w io.Writer) (int64, error) {
 // UsedBytes popcounts $Bitmap (one bit per cluster). Bounded by
 // ntfsUsedBitmapCap; beyond that we honestly report "unknown" instead of
 // downloading a huge bitmap just to render a size column.
-func (f *ntfsFS) UsedBytes() (int64, bool) {
+func (f *ntfsFS) UsedBytes() (_ int64, ok bool) {
+	// A panic here degrades to "unknown", which this API already models.
+	defer catchPanicBool(&ok)
 	clusterSize := f.ctx.ClusterSize
 	if clusterSize <= 0 {
 		return 0, false
@@ -227,7 +233,8 @@ const ntfsMaxRecords = 4_000_000
 // disk reads at all — this is how WizTree lists a volume in seconds, and over
 // a PBS chunk reader it means fetching ~the MFT's size instead of most of the
 // volume.
-func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done, total int64)) ([]Entry, error) {
+func (f *ntfsFS) FullTree(maxEntries int, cancel func() bool, progress func(done, total int64)) (_ []Entry, err error) {
+	defer catchPanic("ntfs: full tree", &err)
 	if maxEntries <= 0 {
 		// Unlimited. The result lives in the GO-side session cache and is
 		// served to the UI one directory at a time — there is no JSON-size
@@ -381,7 +388,8 @@ func pickBestName(names []string) string {
 // can hold the MFT in hundreds of fragments; sequential-in-file is then
 // scattered-on-disk, and any image-linear read-ahead drags in unrelated data.
 // This plan is what lets the reader fetch exactly the MFT's chunks instead.
-func (f *ntfsFS) StoragePlan() (int64, []Extent, error) {
+func (f *ntfsFS) StoragePlan() (_ int64, _ []Extent, err error) {
+	defer catchPanic("ntfs: storage plan", &err)
 	e0, err := f.ctx.GetMFT(0)
 	if err != nil {
 		return 0, nil, fmt.Errorf("read $MFT record: %w", err)
@@ -421,7 +429,8 @@ const ntfsAttrData = 128 // $DATA attribute type
 
 // ListStreams implements StreamLister: the named $DATA attributes of a file.
 // (The unnamed attribute is the file's main content and is not listed.)
-func (f *ntfsFS) ListStreams(p string) ([]StreamInfo, error) {
+func (f *ntfsFS) ListStreams(p string) (_ []StreamInfo, err error) {
+	defer catchPanic("ntfs: list streams "+p, &err)
 	e, err := f.open(p)
 	if err != nil {
 		return nil, err
@@ -443,7 +452,8 @@ func (f *ntfsFS) ListStreams(p string) ([]StreamInfo, error) {
 }
 
 // ExtractStream implements StreamLister for one named stream.
-func (f *ntfsFS) ExtractStream(p, stream string, w io.Writer) (int64, error) {
+func (f *ntfsFS) ExtractStream(p, stream string, w io.Writer) (_ int64, err error) {
+	defer catchPanic("ntfs: extract stream "+p+":"+stream, &err)
 	if stream == "" {
 		return f.ExtractFile(p, w)
 	}

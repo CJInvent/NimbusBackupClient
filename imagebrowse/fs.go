@@ -99,7 +99,8 @@ func sortEntries(e []Entry) {
 // between directories. A single unreadable directory is skipped rather than
 // failing the whole listing — one corrupt record should not cost the user
 // access to the rest of their backup.
-func Walk(fs Filesystem, startPath string, maxEntries int, cancel func() bool) ([]Entry, error) {
+func Walk(fs Filesystem, startPath string, maxEntries int, cancel func() bool) (_ []Entry, err error) {
+	defer catchPanic("walk "+startPath, &err)
 	if maxEntries <= 0 {
 		maxEntries = int(^uint(0) >> 1) // unlimited: results stay in Go memory
 	}
@@ -131,7 +132,9 @@ func Walk(fs Filesystem, startPath string, maxEntries int, cancel func() bool) (
 // OpenFilesystem opens the filesystem in p, reading through image (whole-disk
 // io.ReaderAt). The partition is presented to the implementation as its own
 // SectionReader, so every filesystem sees offsets relative to its volume start.
-func OpenFilesystem(image io.ReaderAt, p Partition) (Filesystem, error) {
+func OpenFilesystem(image io.ReaderAt, p Partition) (_ Filesystem, err error) {
+	// Backstop for every parser's open path, first-party ones included.
+	defer catchPanic(fmt.Sprintf("open %s partition %d", p.Filesystem, p.Index), &err)
 	if p.Length <= 0 {
 		return nil, fmt.Errorf("partition %d has zero length", p.Index)
 	}
@@ -172,7 +175,8 @@ type TreeLister interface {
 // FullTree lists the whole tree of fs the fastest way it supports: the
 // TreeLister fast path when present, the generic breadth-first Walk otherwise
 // (FAT/exFAT volumes are small enough that walking them is fine).
-func FullTree(fs Filesystem, maxEntries int, cancel func() bool, progress func(done, total int64)) ([]Entry, error) {
+func FullTree(fs Filesystem, maxEntries int, cancel func() bool, progress func(done, total int64)) (_ []Entry, err error) {
+	defer catchPanic("full tree", &err)
 	if tl, ok := fs.(TreeLister); ok {
 		return tl.FullTree(maxEntries, cancel, progress)
 	}
@@ -221,4 +225,43 @@ type StreamLister interface {
 // the option for them, which is the honest representation of the format.
 type SecurityReader interface {
 	SecurityDescriptor(p string) ([]byte, error)
+}
+
+// ErrCorruptStructure reports that a filesystem parser hit input it could not
+// survive. It always means the image is corrupt or crafted, never that the
+// caller did anything wrong.
+var ErrCorruptStructure = errors.New("corrupt or hostile filesystem structure")
+
+// catchPanic converts a parser panic into an error on the named return.
+//
+// Everything below this package's API is parsing bytes that came out of a
+// backup image, and an image is untrusted input: it can be corrupt, it can be
+// a backup of a machine an attacker already owned, or it can be served by a
+// hostile PBS. The NTFS reader in particular is a third-party library
+// (go-ntfs) walking deeply nested on-disk structures, where a crafted offset
+// surfaces as an index-out-of-range rather than an error return.
+//
+// Without this boundary such a panic kills the PROCESS. In the GUI that loses
+// the user's session; in the service it aborts whatever backup happened to be
+// running for an unrelated job. Browsing a bad image must fail that browse and
+// nothing else.
+//
+// Use with a blank value result — func (...) (_ []Entry, err error) — so a
+// panic mid-way returns the zero value rather than a half-built one:
+//
+//	defer catchPanic("ntfs: list "+dir, &err)
+func catchPanic(op string, err *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	*err = fmt.Errorf("%s: %w (%v)", op, ErrCorruptStructure, r)
+}
+
+// catchPanicBool is catchPanic for the (value, ok) accessors that carry no
+// error: a panic degrades to "unknown", which those APIs already model.
+func catchPanicBool(ok *bool) {
+	if r := recover(); r != nil {
+		*ok = false
+	}
 }

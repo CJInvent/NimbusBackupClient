@@ -43,7 +43,8 @@ func (f *ntfsFS) loadSecurityIndex() error {
 	return f.sdsErr
 }
 
-func (f *ntfsFS) scanSDS() (map[uint32][]byte, error) {
+func (f *ntfsFS) scanSDS() (_ map[uint32][]byte, err error) {
+	defer catchPanic("ntfs: scan $Secure/$SDS", &err)
 	secure, err := f.ctx.GetMFT(9) // $Secure is MFT record 9 by definition
 	if err != nil {
 		return nil, fmt.Errorf("read $Secure record: %w", err)
@@ -137,7 +138,8 @@ const ntfsAttrSecurityDescriptor = 80 // legacy per-file $SECURITY_DESCRIPTOR
 //     SecurityId indexing the shared $Secure/$SDS store.
 //   - Legacy (and ntfs-3g-written volumes): a per-file $SECURITY_DESCRIPTOR
 //     attribute (type 0x50) holds the SD inline.
-func (f *ntfsFS) SecurityDescriptor(p string) ([]byte, error) {
+func (f *ntfsFS) SecurityDescriptor(p string) (_ []byte, err error) {
+	defer catchPanic("ntfs: security descriptor "+p, &err)
 	e, err := f.open(p)
 	if err != nil {
 		return nil, err
