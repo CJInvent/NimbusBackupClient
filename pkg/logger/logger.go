@@ -4,7 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sync"
+	"sync/atomic"
 )
 
 // Logger is the interface for structured logging throughout the application
@@ -21,31 +21,36 @@ type DefaultLogger struct {
 	logger *slog.Logger
 }
 
-var (
-	defaultLogger *DefaultLogger
-	once          sync.Once
-)
+// defaultLogger is read on every log call and replaced by Init, so it is held
+// in an atomic pointer rather than a plain global: Get() racing an Init() is
+// otherwise a data race under -race.
+var defaultLogger atomic.Pointer[DefaultLogger]
 
-// Init initializes the global logger
+// Init installs the global logger, replacing any previously installed one.
+//
+// This used to be wrapped in a sync.Once, which made every call after the
+// first a silent no-op: Init(w, level) accepted a writer and a level and threw
+// them away, so a process that re-initialized its logger (after loading
+// config, or when a service restarts its log sink) kept writing to the ORIGINAL
+// destination with no error anywhere. That also broke this package's own test
+// suite — four of five tests handed Init a fresh buffer and asserted on output
+// that was still going to the first test's buffer. The bug survived because
+// nothing in the workspace ran these tests until S1.
 func Init(w io.Writer, level slog.Level) {
-	once.Do(func() {
-		opts := &slog.HandlerOptions{
-			Level: level,
-		}
-		handler := slog.NewJSONHandler(w, opts)
-		defaultLogger = &DefaultLogger{
-			logger: slog.New(handler),
-		}
-	})
+	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
+	defaultLogger.Store(&DefaultLogger{logger: slog.New(handler)})
 }
 
-// Get returns the global logger instance
+// Get returns the global logger instance, initializing it to stderr if Init
+// has not been called.
 func Get() Logger {
-	if defaultLogger == nil {
-		// Initialize with stderr if not explicitly initialized
-		Init(os.Stderr, slog.LevelInfo)
+	if l := defaultLogger.Load(); l != nil {
+		return l
 	}
-	return defaultLogger
+	// CompareAndSwap so two racing first-callers cannot install two loggers.
+	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	defaultLogger.CompareAndSwap(nil, &DefaultLogger{logger: slog.New(handler)})
+	return defaultLogger.Load()
 }
 
 // Debug logs a debug message

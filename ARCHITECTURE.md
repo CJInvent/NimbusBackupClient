@@ -446,38 +446,72 @@ to run (rule 3's war story); MSI install/uninstall is a manual doc
 boot-verified end-to-end; Authenticode signing pending (SignPath);
 `FEATURES_STATUS.md` drifts.
 
-## Phase 1 — CI truth: the smoke-test ledger
+## Phase 1 — CI truth: the smoke-test ledger (shipped)
 
 The control server's lesson, imported: its HTTP smoke suite found a role that
 every unit test swore worked and that had never existed in the database. The
-client's equivalent blind spots are listed below. **This table is the
-authoritative ledger of smoke tests that must be in CI**; each row is either
-green in CI or an open item in this phase — no third state.
+client's equivalent blind spots are below. **This table is the authoritative
+ledger of smoke tests that must be in CI**; each row is either green in CI or
+an open item — no third state.
+
+**0. CI did not run on the default branch.** Before anything else: the
+workflow triggered on `main`/`develop`/`github-release` and `v*` tags, but the
+default branch is `master`. Every historical run was a tag run, so the entire
+suite only ever executed at release time — which is how a Linux build break
+reached the v0.2.150 tag instead of failing the commit that caused it. A smoke
+ledger is worthless behind a trigger that never fires; `master` and PRs to it
+now run every gate.
 
 | # | Smoke test | Proves | Runner | Status |
 |---|---|---|---|---|
-| S1 | **Workspace test sweep** — `go test -race` across every module (`pbscommon`, `imagebrowse`, `snapshot`, `clientcommon`, `pkg/retry`, `pkg/security`, `pkg/logger`), not just `gui` + `controlplane` | The protocol layer, filesystem parsers, and snapshot scaffolding actually pass their suites on every push — today they are compiled but untested in CI | ubuntu | **missing** |
-| S2 | **Four-view compile smoke** — `go vet` the `gui` module under `GOOS=windows` and `GOOS=linux`, each with and without `-tags service` (no first-party cgo exists and Wails' Windows backend is syscall-based, so cross-vet from the Linux runner typechecks the Windows views) | No symbol referenced in shared code is missing from any compile view — the exact v0.2.150 `snapshot.LogFn` failure class, caught in seconds instead of at tag time | ubuntu | **missing** |
-| S3 | **Local API smoke** — boot the real `gui/api` server on loopback with a stub `BackupHandler`; over real HTTP: missing token → 401, wrong token → 401 (constant-time path), then the full route table (status, backup start + progress poll round-trip, jobs CRUD, PBS CRUD + fingerprint pin, config save, controlplane status/save) | The auth gate and every JSON contract the GUI and NimbusControl depend on, at the wire level — not via direct method calls | ubuntu | **missing** |
-| S4 | **Control-plane loop smoke** — against an `httptest` NimbusControl stub: enroll (one-time token → sealed secret) → check-in (inventory up, policy down, fail-closed on 5xx/cert mismatch) → drain `run_backup` → forward-only report incl. 429 retry | The entire agent↔server contract from `docs/AGENT-API.md` survives refactors | ubuntu | **partial** — exists as `controlplane` unit tests and runs in CI; promote assertions to cover fail-closed policy + cert-mismatch paths explicitly |
-| S5 | **Image-browse fixture smoke** — the real mkfs-made NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → **$MFT fast-tree ≡ generic walk** → `ExtractFile` golden hashes → ReFS/BitLocker refused with reasons | The restore-side parsers against ground-truth filesystems, incl. the fast path's identity guarantee | ubuntu | **partial** — tests exist; not run in CI until S1 lands |
-| S6 | **PXAR/index round-trip smoke** — build a pxar from a fixture tree and read it back byte-identical; FIDX/DIDX reader span + EOF + bad-magic cases; chunker determinism on a fixed corpus | The wire formats we write are the wire formats we (and PBS) can read | ubuntu | **partial** — reader/chunker/catalog tests exist (S1 gates them); writer→reader round-trip needs adding |
-| S7 | **Secret-store smoke (Windows)** — on `windows-latest`: seal → unseal a secret through the real chain (no TPM on runners ⇒ asserts the documented DPAPI fallback + loud log), corrupt the blob ⇒ "re-enter" not crash, protector auto-upgrade path | Rule 11's chain behaves on real Windows crypto APIs, not just in cross-compiled theory | windows | **missing** |
-| S8 | **Service binary smoke (Windows)** — after the CI build: `NimbusBackupSVC.exe` launches; token file created with the expected DACL (`icacls` assert); `/status` answers with auth and refuses without; clean stop. Plus: the `.syso` took — `(Get-Item).VersionInfo` shows CompanyName/ProductVersion (the AV-false-positive mitigation must not silently regress) | The artifact we ship starts, guards its API, and carries its identity metadata | windows | **missing** |
-| S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + files present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly; upgrade-in-place from the previous release's MSI | The installer customers actually run, incl. the uninstall dialog contract and upgrades — currently a manual checklist (`MSI_UNINSTALL_TEST.md`) | windows | **missing** |
-| S10 | **VSS snapshot smoke (Windows)** — create a real VSS snapshot of `C:` on the runner via the production code path, assert the diagnostic lines land through `LogFn`, clean up; busy-retry path exercised where feasible | The single most privileged thing the product does, on real Windows, with its new diagnostics | windows | **missing** — land as `continue-on-error` first; promote to blocking once runner stability is proven |
-| S11 | **Frontend gate, early** — `npm run i18n-audit` + an esbuild parse of `App.jsx` as a fast ubuntu job | Parity/hardcoded-string violations fail in minutes on the cheap runner, not after 20 minutes inside the Windows Wails build (where the audit currently runs via `prebuild`) | ubuntu | **partial** — gate exists, runs late/expensive; add the early job |
-| S12 | **CLI start smoke** — each `build-cli` artifact executes `--version`/`--help` on its build OS | Cross-compiled binaries at least start (init panics, missing dynamic deps) | all three | **missing** |
+| S1 | **Workspace test sweep** — `go test -race` across `pbscommon`, `imagebrowse`, `snapshot`, `clientcommon`, `pkg/*`, `gui/api`, and the CLI modules | The protocol layer, filesystem parsers and shared helpers pass on every push; also the only Linux compile check `nbd/`, `directorybackup/` and `machinebackup/` get | ubuntu | **green** |
+| S2 | **Four-view compile smoke** — `go vet` on `gui/` across {linux, windows} × {default, `-tags service`} | No symbol referenced in shared code is missing from any compile view — the v0.2.150 `snapshot.LogFn` failure class, in seconds instead of at tag time. linux+service was previously checked nowhere | ubuntu | **green** |
+| S3 | **Local API smoke** — the real server on a real listener through the real `authMiddleware`: token absent/wrong/prefix/suffix, browser-`Origin` refusal, 1 MiB body cap, every route's auth + method gate, jobs/PBS/config/controlplane delegation, progress relay round-trip, handler-error propagation | The auth gate and every JSON contract the GUI and NimbusControl depend on, at the wire level rather than via direct method calls | ubuntu | **green** (10 tests) |
+| S4 | **Control-plane loop smoke** — enroll → check-in → command drain → forward-only report, incl. 429 retry | The agent↔server contract in `docs/AGENT-API.md` survives refactors | ubuntu | **partial** — runs in CI as `controlplane` unit tests; explicit fail-closed-policy and cert-mismatch assertions still to add |
+| S5 | **Image-browse fixture smoke** — real mkfs NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → $MFT fast-tree ≡ generic walk → extract → ReFS/BitLocker refused | The restore-side parsers against ground-truth filesystems, incl. the fast path's identity guarantee | ubuntu | **green via S1** (previously never executed) |
+| S6 | **PXAR/index round-trip** — chunker determinism, FIDX spans/EOF/bad-magic, catalog round-trip | The wire formats we write are the ones we can read back | ubuntu | **partial** — existing suites now execute via S1; a pxar *writer→reader* round-trip is still to be written |
+| S7 | **Secret-store smoke (Windows)** — seal/unseal through the real chain, corrupt/tampered/foreign-key degradation to "re-enter", protector auto-upgrade preserving the DEK | Dev rule 11 on real Windows crypto. Runners have no TPM, so the load-bearing assertion is that the chain does **not** fall through to `plaintext` | windows | **green** |
+| S8 | **Artifact identity + API credential (Windows)** — `EnsureToken` idempotence and the icacls DACL (locale-independent: no inherited `(I)` ACEs); shipped binaries exist, are plausible, and `NimbusBackupSVC.exe` carries CompanyName/ProductName/ProductVersion | The token guarding the privileged API is really restricted, and the `.syso` AV-false-positive mitigation has not silently stopped linking | windows | **green** |
+| S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + binaries present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly | The installer customers actually run, and the uninstall contract that a customer's PBS credentials survive unless they say otherwise | windows | **green, non-blocking** — advisory until it has a track record on hosted runners |
+| S10 | **VSS snapshot smoke (Windows)** — real snapshot through the production path; asserts the 0.2.150 diagnostics reach `LogFn`, then the lifecycle and cleanup | The most privileged thing the product does. The diagnostics assertion holds even where a runner refuses to snapshot — silence means the "prints into the void in a service" regression is back | windows | **green, non-blocking** — same reason |
+| S11 | **Frontend gate, early** — `npm run i18n-audit` + full frontend build on ubuntu | Parity/hardcoded-string violations fail in a minute on a cheap runner instead of 20 minutes into the Windows Wails build, where the audit previously only ran as a `prebuild` hook | ubuntu | **green** |
+| S12 | **CLI start smoke** — every `dist/proxmoxbackup-*` runs `-h` on its build OS under a portable watchdog; empty output or a startup crash fails | Cross-compiled binaries at least start (init panics, missing dynamic deps) before they reach a customer | all three | **green** |
 
-Explicitly **out of CI** (and honestly labeled as such): full machine-image
+Explicitly **out of CI**, and labeled rather than pretended: full machine-image
 restore with `nbd` map + boot-verify (needs a real PBS + KVM lab — Phase 3),
-Exchange health/truncation behavior (needs a real Exchange host — rule 16),
-and TPM-present protector paths (runners have no TPM; S7 covers the fallback
-leg, the TPM leg is a lab checklist item).
+Exchange health/truncation behavior (needs a real Exchange host — rule 16), and
+TPM-present protector paths (runners have no TPM; S7 covers the DPAPI leg, the
+TPM leg is a lab checklist item).
 
-Exit: every row above is green-in-CI or consciously deferred with a phase
-reference; the `test` job name stops lying (it runs the workspace, not a
-tenth of it); a rule-3 violation cannot reach a tag build again.
+### What the ledger found on its first run
+
+Landing S1 immediately produced the thing it was built to produce — bugs in
+code CI had never executed:
+
+* **The `snapshot` suite did not compile on Linux at all.** `snapshot_test.go`
+  carried no build tag but referenced `SymlinkSnapshot` and
+  `getAppDataFolder`, which exist only in the `windows`-gated file. The tests
+  guarded themselves with *runtime* `runtime.GOOS` skips, which do not stop the
+  compiler. Split into `snapshot_windows_test.go`; the module now builds and
+  passes on Linux for the first time. This is dev rule 3 in the test tree
+  rather than the source tree — the same class, one directory over.
+* **`pkg/logger` failed 4 of its 5 tests.** `Init(w, level)` was wrapped in
+  `sync.Once`, so every call after the first silently discarded its writer and
+  level. Not merely a test artifact: any process that re-initializes its logger
+  (after loading config, or a service restarting its sink) would keep writing
+  to the original destination with no error anywhere. `Init` now rebinds, with
+  the global held in an `atomic.Pointer` so `Get()` racing `Init()` is
+  race-clean. Nothing in the workspace imports this package yet — worth
+  deciding in Phase 4 whether it is adopted or deleted, but shipping a helper
+  whose entry point ignores its arguments is worse than either.
+
+Both had been in the tree, untested, across many releases. Neither was
+reachable by any gate that existed before this phase.
+
+Exit criteria met: every row is green-in-CI or consciously deferred with a
+reason; the `test` job no longer stands for a tenth of the workspace; a rule-3
+violation cannot reach a tag build again; and the gates run on the branch
+development actually happens on.
 
 ## Phase 2 — MSI provisioning pipeline (the NimbusControl contract)
 

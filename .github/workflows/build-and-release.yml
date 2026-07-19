@@ -2,11 +2,14 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main, develop, github-release ]
+    # master is the default branch: without it here the entire suite only ever
+    # ran on tag pushes, i.e. at release time, which is how a Linux build break
+    # reached the v0.2.150 tag. Every gate below must run on ordinary pushes.
+    branches: [ main, master, develop, github-release ]
     tags:
       - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 env:
   GO_VERSION: '1.25'
@@ -35,6 +38,78 @@ jobs:
           echo ""
           echo "Legend: module current-version [latest-version]"
           echo "No brackets = already at latest version"
+
+  # S11 — frontend gate, early and cheap. The i18n audit also runs as the
+  # frontend's `prebuild` hook, but that is 20 minutes into the Windows Wails
+  # build; a parity break should cost a minute on ubuntu instead.
+  frontend-gate:
+    name: Frontend Gate (S11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: gui/frontend
+        run: npm ci
+
+      - name: i18n audit (key parity + hardcoded strings)
+        working-directory: gui/frontend
+        run: npm run i18n-audit
+
+      - name: Frontend build (full parse of the JSX tree)
+        working-directory: gui/frontend
+        run: npm run build
+
+  # S2 — four-view compile smoke. gui/ code is split by TWO orthogonal build
+  # constraints (service/!service and windows/!windows), so a symbol must exist
+  # in all four combinations. Nothing else checks them all: golangci-lint sees
+  # only linux+!service, `go test` the same, and the Windows GUI/service builds
+  # run 20 minutes later behind other gates. linux+service was never checked at
+  # all. This is the exact failure class that broke the v0.2.150 tag
+  # (snapshot.LogFn declared in a windows-only file, referenced from shared
+  # code), and it costs seconds here.
+  compile-views:
+    name: Compile Views (S2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
+      - name: Vet all four compile views
+        working-directory: gui
+        env:
+          GOWORK: off
+        run: |
+          go mod tidy
+          fail=0
+          for goos in linux windows; do
+            for tags in "" "service"; do
+              label="GOOS=$goos tags=${tags:-none}"
+              echo "::group::$label"
+              if [ "$goos" = "windows" ]; then export CGO_ENABLED=0; else export CGO_ENABLED=1; fi
+              if [ -z "$tags" ]; then
+                GOOS=$goos go vet ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
+              else
+                GOOS=$goos go vet -tags "$tags" ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
+              fi
+              echo "::endgroup::"
+            done
+          done
+          exit $fail
 
   # Security and quality checks
   security:
@@ -131,10 +206,103 @@ jobs:
         with:
           files: ./gui/coverage.out
 
+  # S1 — workspace test sweep. The `test` job above covers gui + controlplane
+  # only; every other module's suite existed but NEVER EXECUTED in CI, because
+  # GOWORK=off + per-module `go test` compiles dependencies without running
+  # their tests. That silently excluded the PBS wire layer (chunking
+  # determinism, FIDX spans, catalog round-trip), the image-browse filesystem
+  # parsers against their real mkfs fixtures, and the shared pkg/* helpers.
+  # Modules with no tests are still built here, which is the only Linux
+  # compile check nbd/, directorybackup/ and machinebackup/ get.
+  workspace-tests:
+    name: Workspace Tests (S1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
+      - name: Test every workspace module
+        env:
+          GOWORK: off
+        run: |
+          # gui and controlplane are covered by the `test` job; everything else
+          # is here. Keep this list in sync with go.work + pkg/*.
+          modules="clientcommon pbscommon snapshot imagebrowse directorybackup machinebackup nbd pkg/logger pkg/retry pkg/security gui/api"
+          failed=""
+          for m in $modules; do
+            echo "::group::$m"
+            if ( cd "$m" && go mod tidy && go test -race -count=1 ./... ); then
+              echo "PASS $m"
+            else
+              echo "::error::module tests failed: $m"
+              failed="$failed $m"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "Failed modules:$failed"
+            exit 1
+          fi
+          echo "All workspace modules passed."
+
+  # S7 + S8(token) + S10 — behavior that only real Windows can prove. VSS,
+  # DPAPI and icacls compile on Linux and demonstrate nothing there.
+  windows-smoke:
+    name: Windows Smoke (S7/S8/S10)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # S8 (token half): EnsureToken + the icacls DACL that guards the
+      # privileged local API. acl_nonwindows.go is a no-op, so this is the only
+      # place the real ACL path runs.
+      - name: Local API token + DACL smoke (S8)
+        working-directory: gui/api
+        env:
+          GOWORK: off
+        run: go test -count=1 -v ./...
+
+      # S7: the encv1 DEK chain against real Windows crypto. Runners have no
+      # TPM, so this proves the DPAPI leg and — the assertion that matters —
+      # that the chain does NOT silently fall through to plaintext.
+      - name: Secret store smoke (S7)
+        working-directory: gui
+        env:
+          GOWORK: off
+        run: |
+          go mod tidy
+          go test -count=1 -v -run 'TestSecretStore' ./...
+
+      # S10: create a real VSS snapshot through the production code path and
+      # confirm the 0.2.150 diagnostics actually emit. Non-blocking on its
+      # first outings: VSS on a hosted runner is not yet proven stable, and a
+      # flaky gate that everyone learns to ignore is worse than an honest
+      # advisory one. Promote to blocking once it has a track record.
+      - name: VSS snapshot smoke (S10)
+        continue-on-error: true
+        working-directory: snapshot
+        env:
+          GOWORK: off
+        run: |
+          go mod tidy
+          go test -count=1 -v -run 'TestVSS' ./...
+
   # Build CLI for all platforms
   build-cli:
     name: Build CLI
-    needs: [security, test]
+    needs: [security, test, workspace-tests, compile-views, frontend-gate]
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -152,6 +320,47 @@ jobs:
           GOWORK: off
         run: make cli
 
+      # S12 — the cross-compiled binaries at least start. A CLI that panics in
+      # init, or was linked against something the target OS lacks, otherwise
+      # ships and fails on the customer's machine. All three CLIs parse flags
+      # with the stdlib flag package, so -h prints usage and exits 2 without
+      # touching PBS, VSS, or (on Windows) the missing-args GUI dialog.
+      - name: CLI start smoke (S12)
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bins=(dist/proxmoxbackup-*)
+          if [ ${#bins[@]} -eq 0 ]; then
+            echo "::error::no CLI binaries found in dist/"
+            exit 1
+          fi
+          rc=0
+          for b in "${bins[@]}"; do
+            echo "::group::$b -h"
+            # Portable watchdog: a binary that ignores -h and blocks must not
+            # hang the job (macOS runners have no coreutils `timeout`).
+            "$b" -h > smoke.out 2>&1 &
+            pid=$!
+            ( sleep 30; kill -9 $pid 2>/dev/null ) & watchdog=$!
+            wait $pid 2>/dev/null
+            kill -9 $watchdog 2>/dev/null || true
+            out="$(cat smoke.out || true)"
+            echo "$out"
+            echo "::endgroup::"
+            if [ -z "$out" ]; then
+              echo "::error::$b produced no output — it may not start on $(uname -s)"
+              rc=1
+            fi
+            case "$out" in
+              *panic:*|*"fatal error:"*)
+                echo "::error::$b crashed on startup"
+                rc=1
+                ;;
+            esac
+          done
+          rm -f smoke.out
+          exit $rc
+
       - name: Upload CLI artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -161,7 +370,7 @@ jobs:
   # Build GUI (Windows only for now)
   build-gui:
     name: Build GUI
-    needs: [security, test]
+    needs: [security, test, workspace-tests, compile-views, frontend-gate]
     runs-on: windows-latest
 
     steps:
@@ -275,6 +484,36 @@ jobs:
           Copy-Item gui/build/bin/NimbusBackupSVC.exe dist/
         shell: pwsh
 
+      # S8 (binary half) — the artifact we actually ship carries its identity.
+      # The .syso is an AV false-positive mitigation: an unsigned, UNVERSIONED
+      # service binary is exactly what heuristic scanners flag. If the resource
+      # ever silently stops linking (it is generated, stripped and rebuilt in
+      # adjacent steps), nothing else in the pipeline would notice — the build
+      # still succeeds and the binary still runs.
+      - name: Binary identity smoke (S8)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($exe in @('dist/NimbusBackup.exe', 'dist/NimbusBackupSVC.exe')) {
+            if (-not (Test-Path $exe)) { throw "$exe was not produced by the build" }
+            if ((Get-Item $exe).Length -lt 1MB) { throw "$exe is implausibly small" }
+          }
+          $vi = (Get-Item 'dist/NimbusBackupSVC.exe').VersionInfo
+          Write-Host "Company=$($vi.CompanyName) Product=$($vi.ProductName) Version=$($vi.ProductVersion) File=$($vi.FileVersion)"
+          if ([string]::IsNullOrWhiteSpace($vi.CompanyName)) {
+            throw "NimbusBackupSVC.exe has no CompanyName - the versioninfo .syso did not link"
+          }
+          if ($vi.ProductName -ne 'Nimbus Backup') {
+            throw "NimbusBackupSVC.exe ProductName is '$($vi.ProductName)', expected 'Nimbus Backup'"
+          }
+          if ([string]::IsNullOrWhiteSpace($vi.ProductVersion)) {
+            throw "NimbusBackupSVC.exe has no ProductVersion"
+          }
+          if ($vi.ProductVersion -notlike "${{ steps.version.outputs.VERSION_MSI }}*") {
+            throw "NimbusBackupSVC.exe reports version '$($vi.ProductVersion)', expected it to start with '${{ steps.version.outputs.VERSION_MSI }}'"
+          }
+          Write-Host "S8 OK: service binary carries vendor identity and version metadata."
+
       - name: Install WiX Toolset
         run: |
           choco install wixtoolset -y
@@ -292,6 +531,66 @@ jobs:
           Copy-Item NimbusBackup.msi ../../dist/
         shell: pwsh
 
+      # S9 — the installer customers actually run. Until now this was a manual
+      # checklist (MSI_UNINSTALL_TEST.md), which means in practice it was
+      # verified when someone remembered to. Exercises both KEEP_CONFIG
+      # branches, since the uninstall dialog's whole contract is "your config
+      # survives unless you say otherwise" — and silently deleting a customer's
+      # PBS credentials on uninstall is a data-safety failure (dev rule 1).
+      #
+      # Non-blocking on its first outings: msiexec on a hosted runner installs
+      # and starts a real Windows service, and an advisory signal beats a flaky
+      # gate people learn to ignore. Promote once it has a track record.
+      - name: MSI install/uninstall smoke (S9)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Resolve-Path 'dist/NimbusBackup.msi').Path
+          $cfgDir = "$env:ProgramData\NimbusBackup"
+
+          function Invoke-Msi($msiArgs, $label) {
+            $log = "$env:TEMP\msi-$label.log"
+            $p = Start-Process msiexec.exe -ArgumentList ($msiArgs + @('/qn', '/l*v', $log)) -Wait -PassThru
+            Write-Host "$label exit code: $($p.ExitCode)"
+            if ($p.ExitCode -ne 0) {
+              Get-Content $log -Tail 60 | ForEach-Object { Write-Host $_ }
+              throw "$label failed with exit code $($p.ExitCode)"
+            }
+          }
+
+          # --- install ---
+          Invoke-Msi @('/i', $msi) 'install'
+
+          $svc = Get-Service -Name 'NimbusBackup' -ErrorAction SilentlyContinue
+          if (-not $svc) { throw 'the NimbusBackup service was not registered by the MSI' }
+          Write-Host "service registered, status=$($svc.Status)"
+
+          $installed = "$env:ProgramFiles\NimbusBackup\NimbusBackup.exe"
+          if (-not (Test-Path $installed)) { throw "GUI binary not installed at $installed" }
+
+          # Plant a config so the KEEP_CONFIG contract is observable.
+          New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+          Set-Content -Path "$cfgDir\config.json" -Value '{"smoke":true}'
+
+          # --- uninstall keeping config (the default) ---
+          Invoke-Msi @('/x', $msi, 'KEEP_CONFIG=1') 'uninstall-keep'
+          if (-not (Test-Path "$cfgDir\config.json")) {
+            throw 'KEEP_CONFIG=1 deleted the configuration - customer PBS credentials would be lost on uninstall'
+          }
+          if (Get-Service -Name 'NimbusBackup' -ErrorAction SilentlyContinue) {
+            throw 'the service survived uninstall'
+          }
+          Write-Host 'KEEP_CONFIG=1 OK: config preserved, service removed.'
+
+          # --- reinstall, then uninstall discarding config ---
+          Invoke-Msi @('/i', $msi) 'reinstall'
+          Invoke-Msi @('/x', $msi, 'KEEP_CONFIG=0') 'uninstall-purge'
+          if (Test-Path "$cfgDir\config.json") {
+            throw 'KEEP_CONFIG=0 left the configuration behind'
+          }
+          Write-Host 'S9 OK: both KEEP_CONFIG branches behave as documented.'
+
       - name: Upload GUI artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -304,7 +603,7 @@ jobs:
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-cli, build-gui]
+    needs: [build-cli, build-gui, windows-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
