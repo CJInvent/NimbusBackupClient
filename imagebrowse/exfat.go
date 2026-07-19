@@ -70,7 +70,15 @@ func openExFAT(r io.ReaderAt) (Filesystem, error) {
 	}
 	bpsShift := b[0x6C]
 	spcShift := b[0x6D]
-	if bpsShift < 9 || bpsShift > 12 || spcShift > 25 {
+	// Per the exFAT spec, BytesPerSectorShift is 9..12 and
+	// SectorsPerClusterShift may not exceed 25 - BytesPerSectorShift, i.e. a
+	// cluster is at most 32 MB. Bounding spcShift ALONE at 25 was not the same
+	// check: bpsShift=9 with spcShift=22 yields a 2 GB cluster that passed
+	// every subsequent test, and the reader allocates a whole cluster per read
+	// (readRun, readDirBytes, ExtractFile). A 64 KB crafted boot sector was
+	// enough to force multi-GB allocations and take the process down —
+	// browsing an image must survive a corrupted one.
+	if bpsShift < 9 || bpsShift > 12 || spcShift > 25-bpsShift {
 		return nil, fmt.Errorf("implausible exFAT geometry (shifts %d/%d)", bpsShift, spcShift)
 	}
 	f := &exfatFS{

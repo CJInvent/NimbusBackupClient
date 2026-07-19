@@ -483,7 +483,7 @@ now run every gate.
 | S2 | **Compile-view smoke** — `go vet` on `gui/` for linux+GUI, windows+GUI and windows+service | No symbol referenced in shared code is missing from a shippable compile view — the v0.2.150 `snapshot.LogFn` failure class, in seconds instead of at tag time. The two Windows views were previously proven only by the Windows build, 20 minutes later and behind other gates | ubuntu | **green** |
 | S3 | **Local API smoke** — the real server on a real listener through the real `authMiddleware`: token absent/wrong/prefix/suffix, browser-`Origin` refusal, 1 MiB body cap, every route's auth + method gate, jobs/PBS/config/controlplane delegation, progress relay round-trip, handler-error propagation | The auth gate and every JSON contract the GUI and NimbusControl depend on, at the wire level rather than via direct method calls | ubuntu | **green** (10 tests) |
 | S4 | **Control-plane loop smoke** — enroll → check-in → command drain → forward-only report, incl. 429 retry | The agent↔server contract in `docs/AGENT-API.md` survives refactors | ubuntu | **partial** — runs in CI as `controlplane` unit tests; explicit fail-closed-policy and cert-mismatch assertions still to add |
-| S5 | **Image-browse fixture smoke** — real mkfs NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → $MFT fast-tree ≡ generic walk → extract → ReFS/BitLocker refused | The restore-side parsers against ground-truth filesystems, incl. the fast path's identity guarantee | ubuntu | **green via S1** (previously never executed) |
+| S5 | **Image-browse fixture smoke** — real mkfs NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → $MFT fast-tree ≡ generic walk → extract → ReFS/BitLocker refused. Plus `parser_robustness_test.go`: ~2,300 mutated images and adversarial geometries must fail, never panic, hang, or allocate from image-controlled sizes | The restore-side parsers against ground-truth filesystems AND against hostile ones — a backup image is untrusted input | ubuntu | **green via S1** (previously never executed) |
 | S6 | **PXAR/index round-trip** — chunker determinism + size distribution, FIDX spans/EOF/bad-magic, catalog round-trip | The wire formats we write are the ones we can read back | ubuntu | **green via S1** — and it immediately found the chunker suite was measuring zeros (below). A pxar *writer→reader* round-trip is still to be written |
 | S7 | **Secret-store smoke (Windows)** — seal/unseal through the real chain, corrupt/tampered/foreign-key degradation to "re-enter", protector auto-upgrade preserving the DEK | Dev rule 11 on real Windows crypto. Runners have no TPM, so the load-bearing assertion is that the chain does **not** fall through to `plaintext` | windows | **green** |
 | S8 | **Artifact identity + API credential (Windows)** — `EnsureToken` idempotence and the icacls DACL (locale-independent: no inherited `(I)` ACEs); shipped binaries exist, are plausible, and `NimbusBackupSVC.exe` carries CompanyName/ProductName/ProductVersion | The token guarding the privileged API is really restricted, and the `.syso` AV-false-positive mitigation has not silently stopped linking | windows | **green** |
@@ -575,6 +575,29 @@ A follow-on audit of the paths Phase 1 had just made testable:
   behavior is now bounded by an OPT-IN `Agent.PolicyMaxAge` (default: the
   historical behavior, unchanged) and both branches are tested. Deciding the
   default is a product call, tracked for Phase 4.
+* **A crafted exFAT boot sector could OOM the process (fixed).** The spec
+  bounds a cluster to 32 MB — `SectorsPerClusterShift` may not exceed
+  `25 - BytesPerSectorShift` — but the parser bounded
+  `SectorsPerClusterShift` alone at 25, which is not the same check.
+  `bpsShift=9` with `spcShift=22` yields a 2 GB `clusterSize` that passed
+  every later validation, and the reader allocates a whole cluster per read
+  (`readRun`, `readDirBytes`, `ExtractFile`). A 64 KB crafted boot sector was
+  enough to get the process OOM-killed; with the old check restored the
+  regression test dies with `signal: killed`, with the fix it passes in
+  milliseconds. Browsing an image must survive a corrupted one — this is the
+  DoS half of dev rule 14.
+* **The rest of the parsers held up.** ~2,300 mutated images plus deterministic
+  adversarial geometries (integer overflow in `numFATs * fatSize`, volumes
+  claiming more space than the image holds, root clusters past the end,
+  truncated volumes) produced no panic, hang, or unbounded allocation. Cluster-
+  chain traversal already has cycle detection and bounds in both FAT and
+  exFAT, and the large reads are capped (`maxFAT`, `exMaxBitmapBytes`,
+  `exMaxDirBytes`, `exMaxChainCluster`). That is a real negative result, and
+  it is now a permanent test (`imagebrowse/parser_robustness_test.go`, ~8s in
+  S1) rather than a one-off audit. The first version of that fuzz reached only
+  5.6% of the parsers because it never satisfied the filesystem sniffer —
+  coverage was checked precisely because a fuzz that bounces off validation
+  proves nothing, which is the same failure mode as the chunker test above.
 * **Dependencies.** `npm audit` reports one high and one moderate against the
   frontend toolchain (vite `server.fs.deny` bypass on Windows alternate
   paths, launch-editor NTLMv2 hash disclosure via UNC, esbuild dev-server
