@@ -152,6 +152,43 @@ returned): `upload_limit_mbps`, `usevss`, `exchange_aware`,
 posture surfaced: `GetSecurityWarnings()` (CPU speculation-control / Windows
 Update staleness), `GetExchangeStatus()`, `QueryExchangeLogMode()`.
 
+## Break-glass: emergency file restore
+
+A managed agent that cannot reach NimbusControl keeps the policy it was last
+given. When that policy has file restore OFF, a technician working an incident
+can be locked out at the worst possible moment: the site is down, the control
+server is unreachable for the same reason, and the MSP console cannot reach the
+agent either. A full MACHINE restore is unaffected — it is not behind this gate
+— but pulling individual files out of a backup is.
+
+The escape hatch is a local flag, honored only during a real outage:
+
+    reg add HKLM\SOFTWARE\NimbusBackup /v EmergencyFileRestore /t REG_DWORD /d 1 /f
+
+Four properties make it a break-glass rather than a policy bypass:
+
+* **HKLM, not HKCU** — setting it requires Administrator. A per-user key would
+  let any logged-in user grant themselves the capability.
+* **Inert while the server is reachable.** The flag is necessary but not
+  sufficient: `controlplane.BreakGlassActive` also requires that the last
+  successful check-in be older than `BreakGlassMinOutage` (15 minutes — several
+  consecutive missed check-ins at the 120s default cadence, so a blip does not
+  count). An agent that has NEVER reached the server qualifies, which is the
+  restored-into-a-dead-network case. If the server answers and says no, the
+  answer is no.
+* **Loud.** Every activation is written to both the debug and backup logs
+  (throttled to once per 5 minutes, since the gate is consulted per call) naming
+  the last successful check-in, so the decision is auditable afterwards.
+* **Visible.** `GetControlServerStatus` reports `break_glass_file_restore` so
+  the UI can say the capability is on because the server is unreachable, never
+  presenting it as an ordinary grant.
+
+The residual risk is deliberate and accepted: an administrator on the box can
+isolate it and set the flag. That is a local admin escalating locally, which no
+userland control can prevent — the design goal is that they cannot do it
+*silently*. Reporting activations to the server on the next successful check-in
+needs a field in the agent API contract and is tracked for Phase 2.
+
 ## Security model (zero-trust posture)
 
 * **Single privileged writer** — config writes are service-only.
@@ -566,15 +603,25 @@ A follow-on audit of the paths Phase 1 had just made testable:
   sentinel (`ErrCertPinMismatch`) marks it non-retryable. Side effect: the
   controlplane suite went from 60s to under 4s, because the pre-existing pin
   test had been walking that ladder.
-* **"Fail-closed" was true only at startup (documented, knob added).** The
+* **"Fail-closed" was true only at startup — DECIDED: policy persists.** The
   agent denies everything before its first check-in, but once a capability is
-  granted it stayed in force forever while the server was unreachable — so
-  blocking the agent's egress to the control plane, trivial from the same
-  LAN, freezes its capabilities and a later revocation never lands. That is
-  an availability/security tradeoff rather than an outright bug, so the
-  behavior is now bounded by an OPT-IN `Agent.PolicyMaxAge` (default: the
-  historical behavior, unchanged) and both branches are tested. Deciding the
-  default is a product call, tracked for Phase 4.
+  granted it stays in force while the server is unreachable. The mechanism to
+  bound that exists (`Agent.PolicyMaxAge`, tested both ways) and is
+  deliberately left OFF: an org's policy is the org's decision, and expiring
+  it during an outage would revoke a capability at exactly the moment an
+  incident makes it necessary — the times the control plane is unreachable
+  correlate hard with the times a restore is needed. The narrow risk it left
+  (an isolated machine keeps a capability an admin has since revoked) is
+  addressed by making the override explicit and auditable instead — see
+  break-glass below.
+* **The policy did not cover the local image browser (fixed).** `file_restore`
+  gated PXAR browse/restore and the PORTAL-delegated image path, but the
+  GUI's own image browse and extract methods — `ListImagePartitions`,
+  `ListImageContents`, `ListImageDirectory`, `DownloadImageSelection`,
+  `RestoreImageSelection`, all bound straight to the frontend — checked
+  nothing. An org that switched file restore off still had every one of those
+  files reachable from the machine's own UI, which is the same capability on
+  the same data. All five now consult `ControlPolicy()`.
 * **A crafted exFAT boot sector could OOM the process (fixed).** The spec
   bounds a cluster to 32 MB — `SectorsPerClusterShift` may not exceed
   `25 - BytesPerSectorShift` — but the parser bounded
@@ -682,11 +729,13 @@ and booted, with the runbook committed.
    go-vss surface. Concretely: bump `golang.org/x/net` in `gui` off v0.12.0,
    align the Wails library with the pinned v2.12.0 CLI, refresh the frontend
    toolchain for the dev-server advisories, and add `govulncheck` +
-   `npm audit` as CI gates so this list maintains itself.
-4. **Decide the `PolicyMaxAge` default** — whether a server-granted
-   capability should expire when the control plane cannot be reached. Today
-   it does not, which means blocked egress freezes policy; the mechanism
-   exists and is tested, only the default is open.
+   `npm audit` as CI gates so this list maintains itself. (Both now run in
+   the `deps-audit` job; `npm audit` stays advisory until the breaking vite
+   major bump clears the dev-server findings, then becomes blocking.)
+4. **Report break-glass activations upstream** — `EmergencyFileRestore` is
+   logged locally and shown in the GUI, but the MSP cannot see it until
+   someone reads the machine's log. Needs an inventory field in
+   `docs/AGENT-API.md`, so it lands with the Phase 2 contract work.
 5. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
    MULTI_PBS guides current; upgrade notes since 0.2.x.
 

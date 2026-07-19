@@ -157,6 +157,13 @@ func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 		out["last_error"] = st.LastError
 		out["checkin_seconds"] = st.CheckinPeriod
 		out["policy_file_restore"] = st.Policy.FileRestore
+		// Distinguish "the org grants this" from "the org denies it but the
+		// control server is unreachable and an admin set the local override".
+		// The UI must never present the second as if it were the first.
+		if bg := BreakGlassInEffect(); bg {
+			out["break_glass_file_restore"] = true
+			out["policy_file_restore"] = true
+		}
 		if !st.LastSuccess.IsZero() {
 			out["last_checkin"] = st.LastSuccess.UTC().Format(time.RFC3339)
 		}
@@ -260,11 +267,59 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 // semantics are inherited from Agent.CurrentPolicy (zero value = all off);
 // a standalone install (no control server configured) is intentionally
 // ungoverned and gets everything enabled locally.
+//
+// A managed agent may additionally honour the local break-glass flag, but
+// ONLY while the control plane is genuinely unreachable — see
+// controlplane/breakglass.go. A reachable server that says no still means no.
 func ControlPolicy() controlplane.Policy {
 	if cpAgent == nil {
 		return controlplane.Policy{FileRestore: true} // standalone: no MSP policy applies
 	}
-	return cpAgent.CurrentPolicy()
+	p := cpAgent.CurrentPolicy()
+	if !p.FileRestore && cpAgent.BreakGlassEligible(emergencyFileRestoreRequested(), 0) {
+		noteBreakGlassUse()
+		p.FileRestore = true
+	}
+	return p
+}
+
+var breakGlassLogMu sync.Mutex
+var breakGlassLoggedAt time.Time
+
+// noteBreakGlassUse records that the emergency override took effect. Throttled
+// because ControlPolicy is consulted on every browse and restore call, but
+// never silent: an override of an administrator's policy has to leave a trail
+// someone can find afterwards.
+func noteBreakGlassUse() {
+	breakGlassLogMu.Lock()
+	defer breakGlassLogMu.Unlock()
+	if time.Since(breakGlassLoggedAt) < 5*time.Minute {
+		return
+	}
+	breakGlassLoggedAt = time.Now()
+	last := cpAgent.Status().LastSuccess
+	when := "never"
+	if !last.IsZero() {
+		when = last.Format(time.RFC3339)
+	}
+	msg := fmt.Sprintf("[controlplane] BREAK-GLASS: local EmergencyFileRestore flag is enabling file restore "+
+		"because the control server is unreachable (last successful check-in: %s). "+
+		"Org policy has file restore DISABLED; clear the flag once the server is reachable again.", when)
+	writeDebugLog(msg)
+	writeBackupLog(msg)
+}
+
+// BreakGlassInEffect reports whether the local override is currently
+// substituting for an unreachable control server, so the UI can say so rather
+// than silently showing a capability the org disabled.
+func BreakGlassInEffect() bool {
+	if cpAgent == nil {
+		return false
+	}
+	if cpAgent.CurrentPolicy().FileRestore {
+		return false // granted by policy, not by the override
+	}
+	return cpAgent.BreakGlassEligible(emergencyFileRestoreRequested(), 0)
 }
 
 // ErrRestoreDisabled is surfaced verbatim in the GUI.

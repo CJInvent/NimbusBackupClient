@@ -333,6 +333,77 @@ jobs:
             exit 1
           fi
 
+  # Dependency audit. govulncheck is the useful half: it filters by
+  # REACHABILITY, so it reports a vulnerable package only when this code
+  # actually calls into the affected function. That distinction matters here —
+  # reasoning about which x/net version MVS selects, and whether the HTTP/2
+  # server-side CVEs apply to a client-only transport, is exactly the guesswork
+  # this replaces with an answer.
+  deps-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Resolved dependency versions
+        env:
+          GOWORK: off
+        run: |
+          # Which version MVS actually selects, rather than what a stale
+          # `// indirect` line in a go.mod claims.
+          for m in gui pbscommon; do
+            echo "::group::$m selected versions"
+            ( cd "$m" && go mod tidy >/dev/null 2>&1 || true
+              go list -m golang.org/x/net golang.org/x/crypto golang.org/x/sys 2>/dev/null || true )
+            echo "::endgroup::"
+          done
+
+      - name: govulncheck
+        env:
+          GOWORK: off
+        run: |
+          modules="gui pbscommon controlplane imagebrowse snapshot clientcommon pkg/logger pkg/retry pkg/security gui/api"
+          fail=0
+          for m in $modules; do
+            echo "::group::govulncheck $m"
+            if ( cd "$m" && go mod tidy >/dev/null 2>&1; govulncheck ./... ); then
+              echo "OK   $m"
+            else
+              echo "::error::govulncheck found reachable vulnerabilities in $m"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      # Advisory: the current findings are all vite/esbuild DEV-SERVER issues.
+      # They are not in the shipped artifact (a Go binary with pre-built
+      # embedded assets) but are live for `wails dev` on a Windows workstation.
+      # Clearing them needs a breaking vite major bump — tracked in Phase 4,
+      # at which point this becomes blocking.
+      - name: npm audit (advisory)
+        continue-on-error: true
+        working-directory: gui/frontend
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
   # Build CLI for all platforms
   build-cli:
     name: Build CLI

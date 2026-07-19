@@ -265,6 +265,9 @@ func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive
 // of whether we can browse it — with its filesystem, allocated size, and used
 // size. The user chooses; we never choose for them.
 func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]ImagePartition, error) {
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
 	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive, false)
 	if err != nil {
 		return nil, err
@@ -335,6 +338,9 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskA
 // such limit. Directory entries carry rolled-up sizes.
 func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
 
 	key := strings.Join([]string{pbsID, backupID, snapshotID, backupType, diskArchive, fmt.Sprint(partIndex)}, "|")
 	imageTreeMu.Lock()
@@ -415,6 +421,9 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 // holds one directory's worth of rows, so nothing needs truncating.
 func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, dir string) ([]SnapshotEntry, error) {
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
 	key := strings.Join([]string{pbsID, backupID, snapshotID, backupType, diskArchive, fmt.Sprint(partIndex)}, "|")
 	imageTreeMu.Lock()
 	c, ok := imageTreeCache[key]
@@ -439,6 +448,9 @@ func (a *App) LastImageListTruncated() bool { return a.lastImageTruncated }
 // they asked for.
 func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
+	if !ControlPolicy().FileRestore {
+		return ErrRestoreDisabled
+	}
 
 	writeDebugLog(fmt.Sprintf("DownloadImageSelection(disk=%s part=%d includes=%d dest=%s needed=%d)",
 		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
@@ -538,6 +550,9 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destDir string, keepStructure, overwrite bool,
 	restoreMtimes, restoreACLs, restoreADS bool, neededBytes int64) error {
+	if !ControlPolicy().FileRestore {
+		return ErrRestoreDisabled
+	}
 
 	writeDebugLog(fmt.Sprintf("RestoreImageSelection(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
 		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
