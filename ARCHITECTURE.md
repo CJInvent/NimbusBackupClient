@@ -474,7 +474,7 @@ now run every gate.
 | S3 | **Local API smoke** — the real server on a real listener through the real `authMiddleware`: token absent/wrong/prefix/suffix, browser-`Origin` refusal, 1 MiB body cap, every route's auth + method gate, jobs/PBS/config/controlplane delegation, progress relay round-trip, handler-error propagation | The auth gate and every JSON contract the GUI and NimbusControl depend on, at the wire level rather than via direct method calls | ubuntu | **green** (10 tests) |
 | S4 | **Control-plane loop smoke** — enroll → check-in → command drain → forward-only report, incl. 429 retry | The agent↔server contract in `docs/AGENT-API.md` survives refactors | ubuntu | **partial** — runs in CI as `controlplane` unit tests; explicit fail-closed-policy and cert-mismatch assertions still to add |
 | S5 | **Image-browse fixture smoke** — real mkfs NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → $MFT fast-tree ≡ generic walk → extract → ReFS/BitLocker refused | The restore-side parsers against ground-truth filesystems, incl. the fast path's identity guarantee | ubuntu | **green via S1** (previously never executed) |
-| S6 | **PXAR/index round-trip** — chunker determinism, FIDX spans/EOF/bad-magic, catalog round-trip | The wire formats we write are the ones we can read back | ubuntu | **partial** — existing suites now execute via S1; a pxar *writer→reader* round-trip is still to be written |
+| S6 | **PXAR/index round-trip** — chunker determinism + size distribution, FIDX spans/EOF/bad-magic, catalog round-trip | The wire formats we write are the ones we can read back | ubuntu | **green via S1** — and it immediately found the chunker suite was measuring zeros (below). A pxar *writer→reader* round-trip is still to be written |
 | S7 | **Secret-store smoke (Windows)** — seal/unseal through the real chain, corrupt/tampered/foreign-key degradation to "re-enter", protector auto-upgrade preserving the DEK | Dev rule 11 on real Windows crypto. Runners have no TPM, so the load-bearing assertion is that the chain does **not** fall through to `plaintext` | windows | **green** |
 | S8 | **Artifact identity + API credential (Windows)** — `EnsureToken` idempotence and the icacls DACL (locale-independent: no inherited `(I)` ACEs); shipped binaries exist, are plausible, and `NimbusBackupSVC.exe` carries CompanyName/ProductName/ProductVersion | The token guarding the privileged API is really restricted, and the `.syso` AV-false-positive mitigation has not silently stopped linking | windows | **green** |
 | S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + binaries present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly | The installer customers actually run, and the uninstall contract that a customer's PBS credentials survive unless they say otherwise | windows | **green, non-blocking** — advisory until it has a track record on hosted runners |
@@ -509,6 +509,17 @@ code CI had never executed:
   race-clean. Nothing in the workspace imports this package yet — worth
   deciding in Phase 4 whether it is adopted or deleted, but shipping a helper
   whose entry point ignores its arguments is worse than either.
+
+* **`pbscommon`'s chunker suite measured nothing.** `chunkData` read
+  `c.chunk_size` after `Scan` returned — but `Scan` zeroes `chunk_size`, the
+  rolling hash and the window immediately before returning a boundary, so
+  every chunk measured 0. The min/max and average-size tests failed once they
+  finally ran; worse, `TestChunkerDeterministic` had been *passing* the whole
+  time, because two runs of all-zeros compare equal. The chunker itself is
+  fine: reading the boundary from `Scan`'s return value shows a 912 KB average
+  against a 1 MB target over 114 chunks, which is what a content-defined
+  chunker should look like. A green test that asserts nothing is worse than a
+  missing one — it buys false confidence in the dedup layer.
 
 S2 also corrected this document. It was first written to check **four**
 views ({GUI, service} × {windows, linux}), and the linux+service leg failed

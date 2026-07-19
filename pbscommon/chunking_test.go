@@ -271,6 +271,14 @@ func TestBuzhashTable(t *testing.T) {
 }
 
 // Helper function to chunk data and return slice of chunk sizes
+// chunkData splits data into chunk LENGTHS using the production chunker.
+//
+// The chunk length is Scan's RETURN VALUE, not c.chunk_size: Scan resets
+// chunk_size (and the rolling hash and window) to zero immediately before
+// returning a boundary, so reading the field afterwards always yields 0. This
+// helper used to do exactly that, which made every chunk measure 0 — and
+// TestChunkerDeterministic still passed, because two runs of zeros compare
+// equal. The suite never ran in CI, so nothing caught it.
 func chunkData(t *testing.T, data []byte, avgSize uint64) []uint64 {
 	t.Helper()
 
@@ -285,17 +293,15 @@ func chunkData(t *testing.T, data []byte, avgSize uint64) []uint64 {
 		pos := c.Scan(remaining)
 
 		if pos == 0 {
-			// No chunk boundary found, feed more data
-			offset = len(data)
+			// No boundary in what is left: the tail is a short final chunk
+			// that the chunker never emits a boundary for.
 			break
 		}
 
-		// Chunk boundary found
-		chunkSize := c.chunk_size
-		chunks = append(chunks, chunkSize)
+		// Each Scan starts at a chunk boundary (the chunker resets its state
+		// when it emits one), so pos is exactly this chunk's length.
+		chunks = append(chunks, pos)
 		offset += int(pos)
-
-		// Reset state for next chunk (this happens in Scan internally)
 	}
 
 	return chunks
