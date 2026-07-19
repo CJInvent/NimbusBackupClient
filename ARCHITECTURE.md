@@ -586,6 +586,19 @@ A follow-on audit of the paths Phase 1 had just made testable:
   regression test dies with `signal: killed`, with the fix it passes in
   milliseconds. Browsing an image must survive a corrupted one — this is the
   DoS half of dev rule 14.
+* **A crafted FAT boot sector could hang the process (fixed).** `UsedBytes()`
+  walks `countOfClusters`, which came straight from the BPB. A volume can
+  declare `totalSectors = 0xFFFFFFFF` while carrying a 32 KB FAT, yielding
+  ~4.3e9 declared clusters — so browsing one corrupt image looped for
+  billions of iterations and never returned. A cluster with no FAT entry does
+  not exist, so the FAT's own size is the real bound; the declared count is
+  merely a claim, and is now clamped to what the FAT can address (the FAT
+  *type* is left as parsed, so a legitimate volume is never reclassified).
+  Found by CI, not locally: the case completed inside the watchdog on the
+  sandbox and blew past 20s on the runner, which is precisely why the harness
+  drives every image under a watchdog rather than just a panic recover.
+  Verified against the real mkfs FAT32/exFAT fixtures afterwards — clamping
+  must not change what a good volume reports.
 * **The rest of the parsers held up.** ~2,300 mutated images plus deterministic
   adversarial geometries (integer overflow in `numFATs * fatSize`, volumes
   claiming more space than the image holds, root clusters past the end,

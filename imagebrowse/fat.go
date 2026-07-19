@@ -166,6 +166,36 @@ func openFAT(r io.ReaderAt) (Filesystem, error) {
 	if _, err := r.ReadAt(fat, int64(g.reservedSectors)*int64(g.bytesPerSector)); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("read FAT table: %w", err)
 	}
+
+	// A cluster with no FAT entry does not exist, so the FAT's own size is the
+	// real upper bound on the cluster count — the BPB's declared count is
+	// merely a claim. A corrupt or crafted BPB can declare ~4.3e9 clusters
+	// while carrying a 32 KB FAT (totalSectors=0xFFFFFFFF does it), and
+	// trusting that number made UsedBytes() walk billions of entries and
+	// never return: browsing one bad image hung the process. Clamp to what
+	// the FAT can address. The FAT TYPE stays as parsed — clamping must not
+	// reclassify a legitimate volume.
+	entryBytes := uint64(4) // FAT32
+	switch g.bits {
+	case 12:
+		entryBytes = 0 // handled below: 12 bits = 1.5 bytes per entry
+	case 16:
+		entryBytes = 2
+	}
+	var addressable uint64
+	if entryBytes == 0 {
+		addressable = uint64(fatBytes) * 2 / 3
+	} else {
+		addressable = uint64(fatBytes) / entryBytes
+	}
+	if addressable > 2 {
+		addressable -= 2 // FAT entries 0 and 1 are reserved
+	} else {
+		addressable = 0
+	}
+	if uint64(g.countOfClusters) > addressable {
+		g.countOfClusters = uint32(addressable)
+	}
 	f := &fatFS{r: r, g: g, fat: fat, label: g.labelFromBoot(boot)}
 	// The root-directory volume-id entry, when present, beats the BPB copy.
 	if lbl := f.rootVolumeLabel(); lbl != "" {
