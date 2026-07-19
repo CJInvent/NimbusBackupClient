@@ -141,12 +141,18 @@ func TestSecretStoreCorruptDegradesToReentryWindows(t *testing.T) {
 	for name, bad := range map[string]string{
 		"not base64":  secretPrefixV1 + "!!!not-base64!!!",
 		"truncated":   secretPrefixV1 + base64.StdEncoding.EncodeToString([]byte{1, 2, 3}),
-		"empty body":  secretPrefixV1 + base64.StdEncoding.EncodeToString(nil),
 		"tag flipped": flipLastByte(sealed),
 	} {
 		if got := decryptSecret(bad); got != "" {
 			t.Errorf("%s: decryptSecret = %q, want empty (re-enter)", name, got)
 		}
+	}
+
+	// A bare prefix with no payload is NOT a sealed value: isEncryptedSecret
+	// requires content after the prefix, so it passes through as legacy
+	// plaintext rather than being reported as an unrecoverable secret.
+	if got := decryptSecret(secretPrefixV1); got != secretPrefixV1 {
+		t.Errorf("bare prefix = %q, want it passed through unchanged", got)
 	}
 
 	// A foreign master key (machine replaced, key lost) must also degrade to

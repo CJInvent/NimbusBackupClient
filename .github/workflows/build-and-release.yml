@@ -89,26 +89,37 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
-      - name: Vet all four compile views
+      - name: Vet all real compile views
         working-directory: gui
         env:
           GOWORK: off
         run: |
           go mod tidy
           fail=0
-          for goos in linux windows; do
-            for tags in "" "service"; do
-              label="GOOS=$goos tags=${tags:-none}"
-              echo "::group::$label"
-              if [ "$goos" = "windows" ]; then export CGO_ENABLED=0; else export CGO_ENABLED=1; fi
-              if [ -z "$tags" ]; then
-                GOOS=$goos go vet ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
-              else
-                GOOS=$goos go vet -tags "$tags" ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
-              fi
-              echo "::endgroup::"
-            done
-          done
+          run_view() {
+            goos="$1"; tags="$2"
+            label="GOOS=$goos tags=${tags:-none}"
+            echo "::group::$label"
+            if [ "$goos" = "windows" ]; then export CGO_ENABLED=0; else export CGO_ENABLED=1; fi
+            if [ -z "$tags" ]; then
+              GOOS="$goos" go vet ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
+            else
+              GOOS="$goos" go vet -tags "$tags" ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
+            fi
+            echo "::endgroup::"
+          }
+          # linux+default is what golangci-lint and `go test` see.
+          run_view linux ""
+          # windows+default is the shipped GUI; windows+service is the shipped
+          # service. Neither was checked until this job, except indirectly by
+          # the Windows build 20 minutes later behind other gates.
+          run_view windows ""
+          run_view windows service
+          # linux+service is deliberately NOT a view: the service is a Windows
+          # service (service.go is //+build windows, and main.go is !service),
+          # so that combination has neither NimbusService nor a main() and
+          # could never be built or shipped. Checking it would assert a
+          # configuration the product does not have.
           exit $fail
 
   # Security and quality checks
@@ -239,9 +250,13 @@ jobs:
           failed=""
           for m in $modules; do
             echo "::group::$m"
-            if ( cd "$m" && go mod tidy && go test -race -count=1 ./... ); then
+            if ( cd "$m" && go mod tidy && go test -race -count=1 ./... > mod.log 2>&1 ); then
+              cat "$m/mod.log"; rm -f "$m/mod.log"
               echo "PASS $m"
             else
+              cat "$m/mod.log" || true
+              grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' "$m/mod.log" 2>/dev/null | head -12 | while read -r l; do echo "::error::S1 $m: $l"; done
+              rm -f "$m/mod.log"
               echo "::error::module tests failed: $m"
               failed="$failed $m"
             fi
@@ -269,21 +284,35 @@ jobs:
       # privileged local API. acl_nonwindows.go is a no-op, so this is the only
       # place the real ACL path runs.
       - name: Local API token + DACL smoke (S8)
+        shell: bash
         working-directory: gui/api
         env:
           GOWORK: off
-        run: go test -count=1 -v ./...
+        run: |
+          if go test -count=1 -v ./... > smoke.log 2>&1; then cat smoke.log; else
+            cat smoke.log
+            grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::S8: $l"; done
+            exit 1
+          fi
 
       # S7: the encv1 DEK chain against real Windows crypto. Runners have no
       # TPM, so this proves the DPAPI leg and — the assertion that matters —
       # that the chain does NOT silently fall through to plaintext.
       - name: Secret store smoke (S7)
+        shell: bash
         working-directory: gui
         env:
           GOWORK: off
         run: |
           go mod tidy
-          go test -count=1 -v -run 'TestSecretStore' ./...
+          # Failures are surfaced as annotations as well as log lines: workflow
+          # log blobs are not always reachable, and a failure you cannot read is
+          # a failure you cannot fix.
+          if go test -count=1 -v -run 'TestSecretStore' ./... > smoke.log 2>&1; then cat smoke.log; else
+            cat smoke.log
+            grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::S7: $l"; done
+            exit 1
+          fi
 
       # S10: create a real VSS snapshot through the production code path and
       # confirm the 0.2.150 diagnostics actually emit. Non-blocking on its
@@ -292,12 +321,17 @@ jobs:
       # advisory one. Promote to blocking once it has a track record.
       - name: VSS snapshot smoke (S10)
         continue-on-error: true
+        shell: bash
         working-directory: snapshot
         env:
           GOWORK: off
         run: |
           go mod tidy
-          go test -count=1 -v -run 'TestVSS' ./...
+          if go test -count=1 -v -run 'TestVSS' ./... > smoke.log 2>&1; then cat smoke.log; else
+            cat smoke.log
+            grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::S10: $l"; done
+            exit 1
+          fi
 
   # Build CLI for all platforms
   build-cli:

@@ -75,10 +75,13 @@ CI has failed repeatedly on this. Files in `gui/` fall into three scopes:
 
 Orthogonally, `//go:build windows` vs `!windows` split platform code
 (`secrets_windows.go`/`secrets_nonwindows.go`, `tpm_windows.go`,
-`exchange_windows.go`, `machine_backup_windows.go`, …). The compile matrix is
-therefore **four views**: {GUI, service} × {windows, linux}. A symbol
-referenced from a shared file must exist in **every** view — see rule 3 and
-smoke S2, both born from real breakage.
+`exchange_windows.go`, `machine_backup_windows.go`, …). That gives **three
+real compile views**: linux+GUI (what the linter and `go test` see),
+windows+GUI (the shipped app), and windows+service (the shipped service).
+linux+service is not a view — `service.go` is `windows`-only and `main.go` is
+`!service`, so it has neither `NimbusService` nor a `main()` and could never
+be built or shipped. A symbol referenced from a shared file must exist in
+every REAL view — see rule 3 and smoke S2, both born from real breakage.
 
 ### The lint trap
 
@@ -322,10 +325,12 @@ Where a rule has a war story, it is cited — these are not hypotheticals.
 2. **The service is the single writer of `config.json`.** GUI paths delegate
    through the local API when a service is present. New settings follow the
    delegation path or they don't ship.
-3. **Every referenced symbol must exist in all four compile views**
-   ({GUI, service} × {windows, linux}). Declarations shared code depends on
-   live in platform-neutral files; `windows`-only files hold only
-   `windows`-only symbols. Both directions have burned us: `snapshot.LogFn`
+3. **Every referenced symbol must exist in all three real compile views**
+   (linux+GUI, windows+GUI, windows+service — linux+service is not a
+   shippable configuration). Declarations shared code depends on live in
+   platform-neutral files; `windows`-only files hold only `windows`-only
+   symbols. This applies to test files too: a `runtime.GOOS` skip does not
+   stop the compiler. Both directions have burned us: `snapshot.LogFn`
    declared in a `windows`-gated file broke the entire Linux CI leg at
    v0.2.150 (test AND security jobs — lint compiles too); `unused` fails
    shared symbols whose only caller is `windows`-gated (`writeCatLog`).
@@ -465,7 +470,7 @@ now run every gate.
 | # | Smoke test | Proves | Runner | Status |
 |---|---|---|---|---|
 | S1 | **Workspace test sweep** — `go test -race` across `pbscommon`, `imagebrowse`, `snapshot`, `clientcommon`, `pkg/*`, `gui/api`, and the CLI modules | The protocol layer, filesystem parsers and shared helpers pass on every push; also the only Linux compile check `nbd/`, `directorybackup/` and `machinebackup/` get | ubuntu | **green** |
-| S2 | **Four-view compile smoke** — `go vet` on `gui/` across {linux, windows} × {default, `-tags service`} | No symbol referenced in shared code is missing from any compile view — the v0.2.150 `snapshot.LogFn` failure class, in seconds instead of at tag time. linux+service was previously checked nowhere | ubuntu | **green** |
+| S2 | **Compile-view smoke** — `go vet` on `gui/` for linux+GUI, windows+GUI and windows+service | No symbol referenced in shared code is missing from a shippable compile view — the v0.2.150 `snapshot.LogFn` failure class, in seconds instead of at tag time. The two Windows views were previously proven only by the Windows build, 20 minutes later and behind other gates | ubuntu | **green** |
 | S3 | **Local API smoke** — the real server on a real listener through the real `authMiddleware`: token absent/wrong/prefix/suffix, browser-`Origin` refusal, 1 MiB body cap, every route's auth + method gate, jobs/PBS/config/controlplane delegation, progress relay round-trip, handler-error propagation | The auth gate and every JSON contract the GUI and NimbusControl depend on, at the wire level rather than via direct method calls | ubuntu | **green** (10 tests) |
 | S4 | **Control-plane loop smoke** — enroll → check-in → command drain → forward-only report, incl. 429 retry | The agent↔server contract in `docs/AGENT-API.md` survives refactors | ubuntu | **partial** — runs in CI as `controlplane` unit tests; explicit fail-closed-policy and cert-mismatch assertions still to add |
 | S5 | **Image-browse fixture smoke** — real mkfs NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → $MFT fast-tree ≡ generic walk → extract → ReFS/BitLocker refused | The restore-side parsers against ground-truth filesystems, incl. the fast path's identity guarantee | ubuntu | **green via S1** (previously never executed) |
@@ -505,7 +510,16 @@ code CI had never executed:
   deciding in Phase 4 whether it is adopted or deleted, but shipping a helper
   whose entry point ignores its arguments is worse than either.
 
-Both had been in the tree, untested, across many releases. Neither was
+S2 also corrected this document. It was first written to check **four**
+views ({GUI, service} × {windows, linux}), and the linux+service leg failed
+immediately with `undefined: NimbusService` — not a defect, but an artifact
+of asserting a configuration that cannot exist: the service is a Windows
+service, so on Linux there is neither a service implementation nor a `main()`.
+The rule and the job now describe the three views the product actually ships.
+A gate that fails on an impossible configuration teaches people to ignore
+gates.
+
+Both bugs had been in the tree, untested, across many releases. Neither was
 reachable by any gate that existed before this phase.
 
 Exit criteria met: every row is green-in-CI or consciously deferred with a
