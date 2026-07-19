@@ -156,7 +156,20 @@ jobs:
         env:
           GOWORK: off
         run: |
-          cd controlplane && gosec -severity high -confidence high ./...
+          # Surface findings as annotations: workflow log blobs are not always
+          # reachable, and a security gate whose failure you cannot read is a
+          # gate people learn to re-run instead of fix.
+          cd controlplane
+          if gosec -severity high -confidence high ./... > gosec.txt 2>&1; then
+            cat gosec.txt
+          else
+            cat gosec.txt
+            grep -E '^\[/|Severity|Confidence|Details|^  > ' gosec.txt | head -40 \
+              | while read -r l; do echo "::error::gosec(controlplane): $l"; done
+            rm -f gosec.txt
+            exit 1
+          fi
+          rm -f gosec.txt
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
