@@ -138,6 +138,12 @@ func (r *FIDXReaderAt) PlanPrefetch(ranges [][2]int64, workers int) (stop func()
 					continue
 				}
 				r.inflightMu.Lock()
+				// Same re-check as ensureChunk: without it a worker can
+				// duplicate a fetch that just completed elsewhere.
+				if _, ok := r.cache.get(ci); ok {
+					r.inflightMu.Unlock()
+					continue
+				}
 				if _, busy := r.inflight[ci]; busy {
 					r.inflightMu.Unlock()
 					continue
@@ -283,6 +289,17 @@ func (r *FIDXReaderAt) ensureChunk(ci int) ([]byte, error) {
 			return data, nil
 		}
 		r.inflightMu.Lock()
+		// Re-check the cache under the lock. Another goroutine can finish a
+		// fetch between our cache miss above and this Lock: it caches the data
+		// and only THEN takes inflightMu to deregister, so a goroutine that
+		// missed the cache before that write and locks after the deregister
+		// sees neither the data nor an in-flight marker, and downloads the same
+		// chunk a second time. Holding the mutex makes the other goroutine's
+		// cache write visible (its put happens-before its Unlock).
+		if data, ok := r.cache.get(ci); ok {
+			r.inflightMu.Unlock()
+			return data, nil
+		}
 		if done, busy := r.inflight[ci]; busy {
 			r.inflightMu.Unlock()
 			<-done // fetch finished (or failed); loop to re-check the cache
