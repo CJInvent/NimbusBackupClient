@@ -15,6 +15,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"controlplane"
 )
@@ -24,9 +25,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: profilecheck <profile.json>")
 		os.Exit(2)
 	}
-	raw, err := os.ReadFile(os.Args[1]) // #nosec G304 -- path supplied by the operator building the MSI
+	// The path is named by the operator building the installer, on their own
+	// machine, and reaching an arbitrary file is the entire point of a
+	// validator. gosec's taint analysis cannot know that, hence the explicit
+	// waiver — G703 for the argv taint, G304 for the variable path.
+	path := filepath.Clean(os.Args[1])
+	raw, err := os.ReadFile(path) // #nosec G304,G703 -- operator-supplied path to a build-time CLI
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot read %s: %v\n", os.Args[1], err)
+		fmt.Fprintf(os.Stderr, "cannot read %s: %v\n", path, err)
 		os.Exit(1)
 	}
 	p, err := controlplane.ParseProfile(raw)
