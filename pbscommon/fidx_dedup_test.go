@@ -22,9 +22,14 @@ import (
 
 func TestFIDXConcurrentReadersFetchEachChunkOnce(t *testing.T) {
 	const size, cs = 8 * 4096, 4096 // 8 chunks
+	// Each chunk must be byte-DISTINCT, or they share a digest and the
+	// per-digest accounting below is meaningless. A plain byte(o*11+5) ramp
+	// does not achieve that: 4096*11 is a multiple of 256, so every 4096-byte
+	// block repeats the same pattern and all eight chunks hash identically.
+	// Mixing the chunk index in shifts each block.
 	img := make([]byte, size)
 	for o := range img {
-		img[o] = byte(o*11 + 5)
+		img[o] = byte(o*11 + 5 + (o/cs)*7)
 	}
 	raw, chunks := buildFIDX(t, size, cs, func(i int, b []byte) {
 		copy(b, img[uint64(i)*cs:])
@@ -32,6 +37,14 @@ func TestFIDXConcurrentReadersFetchEachChunkOnce(t *testing.T) {
 	r, err := parseFIDX(raw)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Guard the premise: distinct chunks, distinct digests.
+	seen := map[string]bool{}
+	for _, d := range r.digests {
+		if seen[d] {
+			t.Fatalf("test premise broken: duplicate digest %s — chunks are not distinct", d)
+		}
+		seen[d] = true
 	}
 	// Cache big enough to hold every chunk, so a second fetch can only be a
 	// deduplication failure and never an eviction.
