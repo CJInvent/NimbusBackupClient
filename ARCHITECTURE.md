@@ -758,12 +758,29 @@ and booted, with the runbook committed.
 
 ## Phase 4 — Beta hardening
 
-1. **Authenticode signing** — SignPath OSS certificate integrated into
-   build-gui; S8 extended to assert a valid signature; the release-notes
-   false-positive banner retired.
-2. **`FEATURES_STATUS.md` resolved** — folded into this document or deleted;
+1. **Authenticode signing** — see `docs/CODE-SIGNING.md`. The SignPath OSS
+   certificate named here previously does NOT apply: it requires a public
+   repository under an OSI-approved licence, and would show "SignPath
+   Foundation" as the publisher rather than the vendor. Azure Artifact
+   Signing (formerly Trusted Signing) is the fit for a commercial closed
+   product; the open question is its US/Canada three-year organization
+   history requirement, which is worth checking before anything else is
+   built around it.
+
+   S8 already reads `Get-AuthenticodeSignature` on both shipped binaries and
+   warns while signing is unconfigured; setting the `SIGNING_CLIENT_ID`
+   secret flips it to a hard failure with no workflow edit, because a release
+   that silently STOPS being signed is worse than one never signed. What
+   remains is identity validation (a human with the company identity) and the
+   provider's own signing step. Retire the release-notes false-positive
+   banner once it lands.
+2. **`pkg/logger` deleted** — it was imported by nothing; logging is
+   `writeDebugLog`/`writeBackupLog`/`writeCatLog` in `gui/`. Shipping a
+   helper whose entry point silently ignored its arguments (fixed in Phase 1)
+   and which nothing called was debt in both directions.
+3. **`FEATURES_STATUS.md` resolved** — folded into this document or deleted;
    drift ends either way (rule 18).
-3. **Dependency review** — written justification per direct dependency in
+4. **Dependency review** — written justification per direct dependency in
    this file (rule 10's clause), supply-chain pass over the Wails/go-ntfs/
    go-vss surface. Concretely: bump `golang.org/x/net` in `gui` off v0.12.0,
    align the Wails library with the pinned v2.12.0 CLI, refresh the frontend
@@ -771,11 +788,11 @@ and booted, with the runbook committed.
    `npm audit` as CI gates so this list maintains itself. (Both now run in
    the `deps-audit` job; `npm audit` stays advisory until the breaking vite
    major bump clears the dev-server findings, then becomes blocking.)
-4. **Report break-glass activations upstream** — `EmergencyFileRestore` is
+5. **Report break-glass activations upstream** — `EmergencyFileRestore` is
    logged locally and shown in the GUI, but the MSP cannot see it until
    someone reads the machine's log. Needs an inventory field in
    `docs/AGENT-API.md`, so it lands with the Phase 2 contract work.
-5. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
+6. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
    MULTI_PBS guides current; upgrade notes since 0.2.x.
 
 Exit = **beta**, aligned with NimbusControl v0.9.0: smoke ledger fully green,

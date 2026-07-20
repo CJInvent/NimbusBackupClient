@@ -275,7 +275,7 @@ jobs:
         run: |
           # gui and controlplane are covered by the `test` job; everything else
           # is here. Keep this list in sync with go.work + pkg/*.
-          modules="clientcommon pbscommon snapshot imagebrowse directorybackup machinebackup nbd pkg/logger pkg/retry pkg/security gui/api"
+          modules="clientcommon pbscommon snapshot imagebrowse directorybackup machinebackup nbd pkg/retry pkg/security gui/api"
           failed=""
           for m in $modules; do
             echo "::group::$m"
@@ -407,7 +407,7 @@ jobs:
         env:
           GOWORK: off
         run: |
-          modules="gui pbscommon controlplane imagebrowse snapshot clientcommon pkg/logger pkg/retry pkg/security gui/api"
+          modules="gui pbscommon controlplane imagebrowse snapshot clientcommon pkg/retry pkg/security gui/api"
           fail=0
           for m in $modules; do
             echo "::group::govulncheck $m"
@@ -517,6 +517,11 @@ jobs:
   build-gui:
     name: Build GUI
     needs: [security, test, workspace-tests, compile-views, frontend-gate]
+    env:
+      # Flips the S8/S9 signature checks from advisory to blocking. Set the
+      # signing secrets (see docs/CODE-SIGNING.md) and this becomes true on
+      # its own — no workflow edit needed at the moment it starts mattering.
+      SIGNING_ENABLED: ${{ secrets.SIGNING_CLIENT_ID != '' }}
     runs-on: windows-latest
 
     steps:
@@ -669,6 +674,25 @@ jobs:
             throw "NimbusBackupSVC.exe reports version '$($vi.ProductVersion)', expected it to start with '${{ steps.version.outputs.VERSION_MSI }}'"
           }
           Write-Host "S8 OK: service binary carries vendor identity and version metadata."
+
+          # Authenticode state. Unsigned is the CURRENT expected state and only
+          # warns — failing on it would red the build for a known gap. But once
+          # SIGNING_ENABLED is set, an invalid or missing signature is a hard
+          # failure: a release that silently stops being signed is worse than
+          # one that was never signed, because the trust was already claimed.
+          $signingExpected = "$env:SIGNING_ENABLED" -eq 'true'
+          $unsigned = @()
+          foreach ($art in @('dist/NimbusBackup.exe', 'dist/NimbusBackupSVC.exe')) {
+            $sig = Get-AuthenticodeSignature $art
+            Write-Host "$art -> $($sig.Status) $(if ($sig.SignerCertificate) { '(' + $sig.SignerCertificate.Subject + ')' })"
+            if ($sig.Status -ne 'Valid') { $unsigned += "$art [$($sig.Status)]" }
+          }
+          if ($unsigned.Count -gt 0) {
+            if ($signingExpected) {
+              throw "Signing is configured but these artifacts are not validly signed: $($unsigned -join ', ')"
+            }
+            Write-Host "::warning::Artifacts are unsigned ($($unsigned -join ', ')). Windows SmartScreen will warn users and AV heuristics flag unsigned installers. See docs/CODE-SIGNING.md."
+          }
 
       - name: Install WiX Toolset
         run: |
