@@ -12,8 +12,8 @@ import (
 
 // BackupRunner handles the execution of backup operations
 type BackupRunner struct {
-	config  *Config
-	cmd     *exec.Cmd
+	config     *Config
+	cmd        *exec.Cmd
 	onProgress func(progress float64, status string)
 	onComplete func(success bool, message string)
 }
@@ -136,8 +136,8 @@ func (br *BackupRunner) monitorOutput(reader io.Reader) {
 
 		// General status update
 		if strings.Contains(line, "Uploading") ||
-		   strings.Contains(line, "Processing") ||
-		   strings.Contains(line, "Snapshot") {
+			strings.Contains(line, "Processing") ||
+			strings.Contains(line, "Snapshot") {
 			if br.onProgress != nil {
 				br.onProgress(-1, line)
 			}

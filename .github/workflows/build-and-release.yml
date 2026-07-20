@@ -89,6 +89,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
+      # gofmt is in this repo's own pre-push checklist but nothing enforced it,
+      # so 24 files had drifted — including seven carrying only the LEGACY
+      # `// +build` constraint with no `//go:build` line beside it. That is
+      # more than cosmetic: the modern form is the one the toolchain reads
+      # first, and a file whose two constraint forms disagree is a rule-3
+      # compile-view bug waiting to happen.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(find . -name '*.go' -not -path './gui/frontend/node_modules/*'))
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted" | while read -r f; do echo "::error::not gofmt-clean: $f"; done
+            gofmt -d $unformatted | head -200
+            exit 1
+          fi
+          echo "all Go files are gofmt-clean"
+
       - name: Vet all real compile views
         working-directory: gui
         env:

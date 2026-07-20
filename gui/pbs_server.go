@@ -8,8 +8,8 @@ import (
 
 // PBSServer represents a single Proxmox Backup Server configuration
 type PBSServer struct {
-	ID              string `json:"id"`                // Unique identifier (e.g., "pbs1", "default")
-	Name            string `json:"name"`              // Human-readable name (e.g., "Big Data Storage")
+	ID              string `json:"id"`   // Unique identifier (e.g., "pbs1", "default")
+	Name            string `json:"name"` // Human-readable name (e.g., "Big Data Storage")
 	BaseURL         string `json:"baseurl"`
 	CertFingerprint string `json:"certfingerprint"`
 	AuthID          string `json:"authid"`

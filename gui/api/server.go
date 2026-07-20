@@ -18,12 +18,12 @@ var jobIDSeq atomic.Uint64
 
 // Server handles HTTP API requests from the GUI
 type Server struct {
-	addr            string
-	app             BackupHandler
-	token           string // shared local-auth token required on every route (H-01)
-	mux             *http.ServeMux
-	backupProgress  map[string]*BackupProgress
-	progressMutex   sync.RWMutex
+	addr           string
+	app            BackupHandler
+	token          string // shared local-auth token required on every route (H-01)
+	mux            *http.ServeMux
+	backupProgress map[string]*BackupProgress
+	progressMutex  sync.RWMutex
 }
 
 // BackupHandler interface that the service must implement
@@ -97,7 +97,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := StatusResponse{
 		Running:       true,
 		Version:       "0.1.92", // TODO: get from build
-		ActiveJobs:    0,         // TODO: track active jobs
+		ActiveJobs:    0,        // TODO: track active jobs
 		Configuration: config,
 	}
 
@@ -498,7 +498,8 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]interface{}{"success": true, "message": "Configuration saved"}, http.StatusOK)
 }
 
-func (s *Server) writeJSON(w http.ResponseWriter, data interface{}, status int) {	w.Header().Set("Content-Type", "application/json")
+func (s *Server) writeJSON(w http.ResponseWriter, data interface{}, status int) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
@@ -510,7 +511,6 @@ func (s *Server) writeError(w http.ResponseWriter, message string, status int) {
 	}
 	s.writeJSON(w, errResp, status)
 }
-
 
 // handleControlPlaneStatus returns the control-server connectivity snapshot
 // (never includes secrets — the handler map is built sanitized at source).

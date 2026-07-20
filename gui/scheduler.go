@@ -26,7 +26,7 @@ type ScheduledJob struct {
 	UseVSS       bool     `json:"useVSS"`
 	BackupType   string   `json:"backupType"`
 	ExcludeList  []string `json:"excludeList"`
-	Compression  string   `json:"compression"` // "fastest", "default", "better", "best"
+	Compression  string   `json:"compression"`       // "fastest", "default", "better", "best"
 	LastRun      string   `json:"lastRun,omitempty"` // ISO timestamp
 	NextRun      string   `json:"nextRun,omitempty"` // ISO timestamp
 	Enabled      bool     `json:"enabled"`
@@ -649,4 +649,3 @@ func (a *App) executeScheduledJob(job ScheduledJob) {
 		writeDebugLog(fmt.Sprintf("Warning: Failed to save updated jobs: %v", err))
 	}
 }
-

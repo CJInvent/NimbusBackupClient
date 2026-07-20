@@ -10,19 +10,20 @@ import (
 	"slices"
 	"sync"
 )
+
 const LRU_CACHE_LIFE = 16 //will be 16*4MB usage
 
 type CachedChunk struct {
-	Data []byte
+	Data  []byte
 	Index int64
-	Life int
+	Life  int
 }
 
 type FIDXServer struct {
 	header pbscommon.FIDXHeader
 	cached map[int64]*CachedChunk
 	chunks []string
-	lock sync.RWMutex
+	lock   sync.RWMutex
 	client *pbscommon.PBSClient
 }
 
@@ -38,7 +39,7 @@ func NewFIDXServer(data []byte, client *pbscommon.PBSClient) (*FIDXServer, error
 		return nil, fmt.Errorf("FIDX: Invalid magic %+v", ret.header.Magic)
 	}
 	fmt.Printf("%+v\n", ret.header)
-	for i := uint64(0); i < ret.header.Size/ret.header.ChunkSize + min(1, ret.header.Size%ret.header.ChunkSize); i++ {
+	for i := uint64(0); i < ret.header.Size/ret.header.ChunkSize+min(1, ret.header.Size%ret.header.ChunkSize); i++ {
 		H := make([]byte, 32)
 		nbytes, err := rdr.Read(H)
 		if err != nil {
@@ -55,30 +56,30 @@ func NewFIDXServer(data []byte, client *pbscommon.PBSClient) (*FIDXServer, error
 }
 
 type ChunkIndex struct {
-	Index int64 
-	SliceStart int64 
-	SliceEnd int64
+	Index      int64
+	SliceStart int64
+	SliceEnd   int64
 }
 
-func (f * FIDXServer) getChunksIndexes(offset int64, size int64) ([]ChunkIndex) {
+func (f *FIDXServer) getChunksIndexes(offset int64, size int64) []ChunkIndex {
 	ret := make([]ChunkIndex, 0)
-	for i := int64(offset/pbscommon.PBS_FIXED_CHUNK_SIZE); i < (offset+size)/pbscommon.PBS_FIXED_CHUNK_SIZE+1; i++ {
-		ss := max(0,offset-i*pbscommon.PBS_FIXED_CHUNK_SIZE)
+	for i := int64(offset / pbscommon.PBS_FIXED_CHUNK_SIZE); i < (offset+size)/pbscommon.PBS_FIXED_CHUNK_SIZE+1; i++ {
+		ss := max(0, offset-i*pbscommon.PBS_FIXED_CHUNK_SIZE)
 		se := min(pbscommon.PBS_FIXED_CHUNK_SIZE, (offset+size)-i*pbscommon.PBS_FIXED_CHUNK_SIZE)
 		if se-ss == 0 {
 			continue
 		}
 		ret = append(ret, ChunkIndex{
-			Index: i,
+			Index:      i,
 			SliceStart: ss,
-			SliceEnd: se,
+			SliceEnd:   se,
 		})
 	}
 	//fmt.Printf("%+v %d %d\n", ret, offset, size)
 	return ret
 }
 
-func (f * FIDXServer) ReadAt(p []byte, off int64) (n int, err error) {
+func (f *FIDXServer) ReadAt(p []byte, off int64) (n int, err error) {
 	if off >= int64(f.header.Size) {
 		return 0, io.EOF
 	}
@@ -88,7 +89,7 @@ func (f * FIDXServer) ReadAt(p []byte, off int64) (n int, err error) {
 	for _, idx := range indexes {
 		ch, ok := f.cached[idx.Index]
 		if ok {
-			
+
 		} else {
 			data, err := f.client.GetChunkData(f.chunks[idx.Index])
 			if err != nil {
@@ -99,23 +100,21 @@ func (f * FIDXServer) ReadAt(p []byte, off int64) (n int, err error) {
 				idx2.Life--
 			}
 			f.cached[idx.Index] = &CachedChunk{
-				Data: data,
+				Data:  data,
 				Index: idx.Index,
-				Life: LRU_CACHE_LIFE,
+				Life:  LRU_CACHE_LIFE,
 			}
 
 			fmt.Printf("Got %s\n", f.chunks[idx.Index])
 
-			ch , _ = f.cached[idx.Index]
+			ch, _ = f.cached[idx.Index]
 		}
 
 		copy(p[pos:pos+(idx.SliceEnd-idx.SliceStart)], ch.Data[idx.SliceStart:idx.SliceEnd])
-			
+
 		ch.Life = LRU_CACHE_LIFE
-		pos += (idx.SliceEnd-idx.SliceStart)
+		pos += (idx.SliceEnd - idx.SliceStart)
 	}
-
-
 
 	// Clean up expired cache entries (Go 1.22 compatible)
 	for key := range f.cached {
@@ -135,11 +134,9 @@ func (f * FIDXServer) ReadAt(p []byte, off int64) (n int, err error) {
 }
 
 func (f *FIDXServer) WriteAt(p []byte, off int64) (n int, err error) {
-	
 
 	return 0, fmt.Errorf("Read only")
 }
-
 
 func (f *FIDXServer) Size() (int64, error) {
 
@@ -149,4 +146,3 @@ func (f *FIDXServer) Size() (int64, error) {
 func (f *FIDXServer) Sync() error {
 	return fmt.Errorf("Read only")
 }
-

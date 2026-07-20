@@ -33,8 +33,6 @@ Last error is: {{.ErrorStr}}{{end}}`
 
 var didxMagic = []byte{28, 145, 78, 165, 25, 186, 179, 205}
 
-
-
 type ChunkState struct {
 	assignments        []string
 	index_hash_data    map[uint64][]byte

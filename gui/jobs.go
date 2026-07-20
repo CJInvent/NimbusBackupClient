@@ -35,8 +35,8 @@ type Job struct {
 	Exclusions []string `json:"exclusions"`
 
 	// ==================== SCHEDULE ====================
-	Schedule     string `json:"schedule"`       // cron format or preset
-	ScheduleCron string `json:"schedule_cron"`  // actual cron expression
+	Schedule     string `json:"schedule"`      // cron format or preset
+	ScheduleCron string `json:"schedule_cron"` // actual cron expression
 
 	// ==================== RETENTION ====================
 	KeepLast    int `json:"keep_last"`

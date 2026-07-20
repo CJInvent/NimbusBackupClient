@@ -16,11 +16,11 @@ const (
 )
 
 var (
-	user32           = windows.NewLazySystemDLL("user32.dll")
-	procFindWindow   = user32.NewProc("FindWindowW")
+	user32            = windows.NewLazySystemDLL("user32.dll")
+	procFindWindow    = user32.NewProc("FindWindowW")
 	procSetForeground = user32.NewProc("SetForegroundWindow")
-	procShowWindow   = user32.NewProc("ShowWindow")
-	procIsIconic     = user32.NewProc("IsIconic")
+	procShowWindow    = user32.NewProc("ShowWindow")
+	procIsIconic      = user32.NewProc("IsIconic")
 )
 
 const (

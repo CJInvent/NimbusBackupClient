@@ -19,27 +19,27 @@ import (
 )
 
 func setReadOnly(dev *os.File, readonly bool) error {
-    // BLKROSET constant from <linux/fs.h>
-    const BLKROSET = 4701  // ioctl command to set read-only flag
-    
-    // Convert bool to int (1 for true, 0 for false)
-    value := 0
-    if readonly {
-        value = 1
-    }
-    
-    // Call ioctl with a pointer to the integer value
-    _, _, errno := syscall.Syscall(
-        syscall.SYS_IOCTL,
-        dev.Fd(),
-        BLKROSET,
-        uintptr(unsafe.Pointer(&value)),
-    )
-    
-    if errno != 0 {
-        return fmt.Errorf("ioctl BLKROSET failed: %v", errno)
-    }
-    return nil
+	// BLKROSET constant from <linux/fs.h>
+	const BLKROSET = 4701 // ioctl command to set read-only flag
+
+	// Convert bool to int (1 for true, 0 for false)
+	value := 0
+	if readonly {
+		value = 1
+	}
+
+	// Call ioctl with a pointer to the integer value
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_IOCTL,
+		dev.Fd(),
+		BLKROSET,
+		uintptr(unsafe.Pointer(&value)),
+	)
+
+	if errno != 0 {
+		return fmt.Errorf("ioctl BLKROSET failed: %v", errno)
+	}
+	return nil
 }
 
 func nbdStart(pbsclient *pbscommon.PBSClient, fidxdata []byte, nbd_index int) {
@@ -81,7 +81,7 @@ func nbdStart(pbsclient *pbscommon.PBSClient, fidxdata []byte, nbd_index int) {
 			}()
 		}
 	}()
-	time.Sleep(100*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	conn, err := net.Dial("unix", "/tmp/pbsnbd")
 	if err != nil {
 		panic(err)
@@ -111,7 +111,7 @@ func nbdStart(pbsclient *pbscommon.PBSClient, fidxdata []byte, nbd_index int) {
 	}()
 
 	setReadOnly(f, true)
-    fmt.Printf("Starting NBD on %s...\n", nbddev)
+	fmt.Printf("Starting NBD on %s...\n", nbddev)
 	if err := client.Connect(conn, f, &client.Options{
 		ExportName: "FIDX",
 		BlockSize:  512,

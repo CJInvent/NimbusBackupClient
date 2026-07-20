@@ -39,7 +39,7 @@ type Config struct {
 	BackupStreamName string      `json:"backupstreamname"`
 	PxarOut          string      `json:"pxarout"`
 	SMTP             *SMTPConfig `json:"smtp"`
-	UseVSS 			 bool        `json:"usevss"`
+	UseVSS           bool        `json:"usevss"`
 }
 
 func (c *Config) valid() bool {

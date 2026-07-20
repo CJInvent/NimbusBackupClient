@@ -45,16 +45,16 @@ var catalog_magic = []byte{145, 253, 96, 249, 196, 103, 88, 213}
 // that should not be included in file-mode backups
 var excludedSystemFolders = []string{
 	"System Volume Information", // VSS snapshots storage
-	"$RECYCLE.BIN",               // Windows recycle bin
-	"Recovery",                   // Windows recovery partition data
+	"$RECYCLE.BIN",              // Windows recycle bin
+	"Recovery",                  // Windows recovery partition data
 }
 
 // Windows system files to exclude automatically from backups
 // These are large paging/hibernation files that should not be backed up
 var excludedSystemFiles = []string{
-	"pagefile.sys",  // Windows page file
-	"hiberfil.sys",  // Hibernation file
-	"swapfile.sys",  // Windows swap file
+	"pagefile.sys",      // Windows page file
+	"hiberfil.sys",      // Hibernation file
+	"swapfile.sys",      // Windows swap file
 	"DumpStack.log.tmp", // Crash dump temporary file
 }
 
