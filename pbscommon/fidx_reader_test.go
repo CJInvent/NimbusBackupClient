@@ -233,15 +233,15 @@ func TestFIDXPrefetchParallelism(t *testing.T) {
 	// registered — one legitimate duplicate, not broken dedup. What broken
 	// dedup looks like is many duplicates (e.g. every prefetched chunk
 	// re-fetched on read → ~2x). Bound the slack instead of pinning the count.
-	const chunks = 64
-	if totalFetches < chunks {
-		t.Fatalf("fetched %d chunks, fewer than the %d that exist — a read was skipped", totalFetches, chunks)
+	const wantChunks = 64
+	if totalFetches < wantChunks {
+		t.Fatalf("fetched %d chunks, fewer than the %d that exist — a read was skipped", totalFetches, wantChunks)
 	}
-	if totalFetches > chunks+4 {
-		t.Fatalf("fetched %d chunks for %d distinct chunks — dedupe is not coordinating prefetch with reads", totalFetches, chunks)
+	if totalFetches > wantChunks+4 {
+		t.Fatalf("fetched %d chunks for %d distinct chunks — dedupe is not coordinating prefetch with reads", totalFetches, wantChunks)
 	}
-	if totalFetches != chunks {
-		t.Logf("note: %d fetches for %d chunks (%d benign prefetch/read overlap)", totalFetches, chunks, totalFetches-chunks)
+	if totalFetches != wantChunks {
+		t.Logf("note: %d fetches for %d chunks (%d benign prefetch/read overlap)", totalFetches, wantChunks, totalFetches-wantChunks)
 	}
 	t.Logf("max concurrent fetches: %d (workers=6)", maxInFlight)
 }
