@@ -35,6 +35,13 @@ func (pbs *PBSClient) downloadDIDXIndex(archiveName string) (*didxIndex, error) 
 	if err != nil {
 		return nil, fmt.Errorf("download index %q: %w", archiveName, err)
 	}
+	return parseDIDXIndex(archiveName, indexBytes)
+}
+
+// parseDIDXIndex validates and decodes a .didx image. Split from the network
+// download so the parser — which handles untrusted bytes — is unit-testable
+// without a server. archiveName is used only in error messages.
+func parseDIDXIndex(archiveName string, indexBytes []byte) (*didxIndex, error) {
 	if len(indexBytes) < didxHeaderSize {
 		return nil, fmt.Errorf("index %q: short read (%d bytes, need at least %d)",
 			archiveName, len(indexBytes), didxHeaderSize)
@@ -59,6 +66,28 @@ func (pbs *PBSClient) downloadDIDXIndex(archiveName string) (*didxIndex, error) 
 		idx.offsets[i] = binary.LittleEndian.Uint64(entries[base : base+8])
 		idx.digests[i] = hex.EncodeToString(entries[base+8 : base+40])
 	}
+
+	// The offsets are CUMULATIVE END positions, so each must be strictly
+	// greater than the last: chunkRange derives every chunk's [start,end) from
+	// offsets[i-1]..offsets[i], and both chunkIndexAt (via sort.Search) and
+	// ReadAt (via chunk[pos-start:]) assume that ordering. This is untrusted
+	// input — a .didx served by a hostile or corrupt PBS can carry a repeated
+	// or decreasing offset, which nothing downstream re-checks. Left
+	// unvalidated it is not a wrong answer but a CRASH: a non-increase makes
+	// end-start underflow in uint64, and ReadAt then slices chunk[pos-start:]
+	// with a wrapped index and panics, taking the process — and, in the
+	// service, an unrelated running backup — down. A zero-length chunk
+	// (offset equal to the previous, or a first offset of 0) is equally
+	// degenerate. Reject the whole index here.
+	var prev uint64
+	for i := 0; i < chunkCount; i++ {
+		if idx.offsets[i] <= prev {
+			return nil, fmt.Errorf("index %q: chunk end-offsets must be strictly ascending; entry %d is %d after %d — corrupt or hostile index",
+				archiveName, i, idx.offsets[i], prev)
+		}
+		prev = idx.offsets[i]
+	}
+
 	if chunkCount > 0 {
 		idx.total = idx.offsets[chunkCount-1]
 	}
