@@ -186,8 +186,9 @@ Four properties make it a break-glass rather than a policy bypass:
 The residual risk is deliberate and accepted: an administrator on the box can
 isolate it and set the flag. That is a local admin escalating locally, which no
 userland control can prevent — the design goal is that they cannot do it
-*silently*. Reporting activations to the server on the next successful check-in
-needs a field in the agent API contract and is tracked for Phase 2.
+*silently*. Activations are reported to the server on the next successful check-in via the
+`break_glass_file_restore` inventory field (NimbusControl
+`docs/AGENT-API.md`), so the trail survives the machine.
 
 ## Security model (zero-trust posture)
 
@@ -202,6 +203,12 @@ needs a field in the agent API contract and is tracked for Phase 2.
 * **Local API auth** — shared token, constant-time compare, DACL'd token file.
 * **Enrollment secrecy** — the enroll token is one-time and wiped; the agent
   secret lives in the same sealed store; the server stores sha256 only.
+* **Break-glass is auditable end to end** — an active local override is
+  reported to NimbusControl in the check-in inventory as
+  `break_glass_file_restore`. That is the only way the MSP ever learns it
+  happened: the override is admissible precisely BECAUSE the server was
+  unreachable, so the agent cannot tell anyone at the time, and the first
+  reachable check-in is the first opportunity.
 * **Untrusted path data** — PXAR entry names and filenames parsed out of a
   backup image never reach `filepath.Join` directly; `security.SafeJoin` /
   `SafeBaseName` screen them syntactically and then prove containment, so a

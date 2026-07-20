@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +91,50 @@ func TestBreakGlassEligibleUsesLiveAgentState(t *testing.T) {
 	// And without the local flag, nothing changes either way.
 	if a.BreakGlassEligible(false, BreakGlassMinOutage) {
 		t.Error("override applied without the local flag")
+	}
+}
+
+// Cross-repository wire-shape check for the audit signal.
+//
+// The key name and its position are transcribed BY HAND from NimbusControl
+// docs/AGENT-API.md rather than derived from the struct, for the same reason
+// the server side does it: a test that reads its expectations out of the code
+// under test cannot notice the code drifting away from the contract.
+func TestInventoryReportsBreakGlassOnTheWire(t *testing.T) {
+	raw, err := json.Marshal(CheckinRequest{
+		AgentVersion: "0.2.150",
+		Inventory: &Inventory{
+			Jobs:                  []InventoryJob{{Name: "Nightly", IntervalSeconds: 86400}},
+			BreakGlassFileRestore: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal check-in: %v", err)
+	}
+
+	var wire struct {
+		Inventory map[string]any `json:"inventory"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got, present := wire.Inventory["break_glass_file_restore"]
+	if !present {
+		t.Fatalf("inventory does not carry break_glass_file_restore: %s", raw)
+	}
+	if got != true {
+		t.Errorf("break_glass_file_restore = %v, want true", got)
+	}
+
+	// Always emitted, never omitempty: an absent key would be ambiguous
+	// between "no override" and "an agent too old to report one", which
+	// defeats the point of an audit signal.
+	quiet, err := json.Marshal(&Inventory{Jobs: []InventoryJob{}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(quiet), `"break_glass_file_restore":false`) {
+		t.Errorf("a non-overriding agent omitted the field entirely: %s", quiet)
 	}
 }

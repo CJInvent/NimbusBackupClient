@@ -217,7 +217,14 @@ func (a *App) SaveControlPlaneFromMap(m map[string]interface{}) error {
 // missed-backup expectations. Scheduling is daily-at-HH:MM, so the
 // expectation interval is 24 h per enabled job.
 func (a *App) cpBuildInventory() controlplane.Inventory {
-	inv := controlplane.Inventory{Jobs: []controlplane.InventoryJob{}}
+	// Report an active break-glass override on every check-in. This is the
+	// only way the MSP ever learns it happened: the override is admissible
+	// precisely BECAUSE the server was unreachable, so the agent cannot tell
+	// anyone at the time. The first reachable check-in is the first chance.
+	inv := controlplane.Inventory{
+		Jobs:                  []controlplane.InventoryJob{},
+		BreakGlassFileRestore: BreakGlassInEffect(),
+	}
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
 		return inv

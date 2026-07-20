@@ -30,7 +30,21 @@ type InventoryJob struct {
 // Inventory is display + expectation telemetry. Server-side it is bounded
 // (64 KB / depth 6 / 2000 elements) and sanitized; keep it lean regardless.
 type Inventory struct {
-	Jobs  []InventoryJob         `json:"jobs"`
+	Jobs []InventoryJob `json:"jobs"`
+
+	// BreakGlassFileRestore reports that this agent is honouring its LOCAL
+	// emergency override (see breakglass.go) because the control plane has
+	// been unreachable — i.e. file restore is active here even though the
+	// resolved policy says otherwise.
+	//
+	// Emitted ALWAYS, not omitempty: an absent key would be ambiguous between
+	// "no override" and "an older agent that cannot report one", and the whole
+	// point of the field is an audit trail. Reserved in the server contract
+	// (NimbusControl docs/AGENT-API.md) as an audit signal to SURFACE, never a
+	// policy value to trust — the agent is reporting what it did while the
+	// server was unreachable.
+	BreakGlassFileRestore bool `json:"break_glass_file_restore"`
+
 	Extra map[string]interface{} `json:"extra,omitempty"`
 }
 
