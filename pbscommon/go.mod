@@ -10,5 +10,5 @@ require (
 
 require (
 	github.com/dchest/siphash v1.2.3
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )
