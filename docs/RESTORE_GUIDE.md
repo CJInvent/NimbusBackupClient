@@ -287,7 +287,7 @@ Oui pour les fichiers, mais les ACLs NTFS ne seront pas appliquées sur un parta
 
 ## 🚧 Développement
 
-**Voir:** `TODO.md` section "Restauration - À Développer FROM SCRATCH"
+**Voir:** la feuille de route dans `ARCHITECTURE.md` (Partie III).
 
 **Roadmap:**
 1. Sprint 1 (2 semaines) : NTFS Fidelity ← Blocker

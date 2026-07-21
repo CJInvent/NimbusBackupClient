@@ -502,8 +502,7 @@ per-module `go test` means dependencies compile, their tests don't);
 cross-view compile breakage is caught only when the matching CI leg happens
 to run (rule 3's war story); MSI install/uninstall is a manual doc
 (`MSI_UNINSTALL_TEST.md`); machine-image restore has never been
-boot-verified end-to-end; Authenticode signing pending (SignPath);
-`FEATURES_STATUS.md` drifts.
+boot-verified end-to-end; Authenticode signing pending (SignPath).
 
 ## Phase 1 — CI truth: the smoke-test ledger (shipped)
 
@@ -561,9 +560,10 @@ code CI had never executed:
   (after loading config, or a service restarting its sink) would keep writing
   to the original destination with no error anywhere. `Init` now rebinds, with
   the global held in an `atomic.Pointer` so `Get()` racing `Init()` is
-  race-clean. Nothing in the workspace imports this package yet — worth
-  deciding in Phase 4 whether it is adopted or deleted, but shipping a helper
-  whose entry point ignores its arguments is worse than either.
+  race-clean. Nothing in the workspace imported this package; it was deleted in Phase 4,
+  logging being `writeDebugLog`/`writeBackupLog`/`writeCatLog` in `gui/`. The
+  fix still mattered on the way out — shipping a helper whose entry point
+  ignores its arguments is worse than either adopting or removing it.
 
 * **`pbscommon`'s chunker suite measured nothing.** `chunkData` read
   `c.chunk_size` after `Scan` returned — but `Scan` zeroes `chunk_size`, the
@@ -734,10 +734,12 @@ the server, which is the distribution problem the installer signature already
 solves. The integrity boundary is Authenticode on the MSI (Phase 4), and the
 contract says so in those words rather than implying a control that is not there.
 
-Remaining for exit: the server side (NimbusControl Phase 6) generating
-profiles per org, and a lab-VM run proving a downloaded profile enrolls itself
+Remaining for exit: a lab-VM run proving a downloaded profile enrolls itself
 on first service start against a real control server — S9b proves the payload
-arrives and is intact, not that enrollment completes.
+arrives and is intact, not that enrollment completes. The server side
+(NimbusControl Phase 6) now generates profiles per org and is shipped, so the
+cross-repo contract is closed on both ends and only the end-to-end demo is
+outstanding.
 
 ## Phase 3 — Engine correctness milestones
 
@@ -778,8 +780,11 @@ and booted, with the runbook committed.
    `writeDebugLog`/`writeBackupLog`/`writeCatLog` in `gui/`. Shipping a
    helper whose entry point silently ignored its arguments (fixed in Phase 1)
    and which nothing called was debt in both directions.
-3. **`FEATURES_STATUS.md` resolved** — folded into this document or deleted;
-   drift ends either way (rule 18).
+3. **`FEATURES_STATUS.md` resolved — deleted.** README (both languages)
+   already carries the user-facing feature matrix; this file only duplicated
+   it while drifting (it was pinned at v0.2.128), and ARCHITECTURE owns the
+   design surface and backlog. One drift source removed rather than a second
+   copy to keep in sync (rule 18).
 4. **Dependency review** — written justification per direct dependency in
    this file (rule 10's clause), supply-chain pass over the Wails/go-ntfs/
    go-vss surface. Concretely: bump `golang.org/x/net` in `gui` off v0.12.0,
@@ -788,10 +793,12 @@ and booted, with the runbook committed.
    `npm audit` as CI gates so this list maintains itself. (Both now run in
    the `deps-audit` job; `npm audit` stays advisory until the breaking vite
    major bump clears the dev-server findings, then becomes blocking.)
-5. **Report break-glass activations upstream** — `EmergencyFileRestore` is
-   logged locally and shown in the GUI, but the MSP cannot see it until
-   someone reads the machine's log. Needs an inventory field in
-   `docs/AGENT-API.md`, so it lands with the Phase 2 contract work.
+5. **Report break-glass activations upstream — done.** The agent emits
+   `break_glass_file_restore` in its check-in inventory, always (not
+   `omitempty` — an absent key would be ambiguous between "no override" and
+   "an agent too old to report one"), and `docs/AGENT-API.md` documents it as
+   a reserved audit signal to surface, never a policy value to trust. It
+   landed with the Phase 2 contract work, as planned.
 6. **Docs freeze** — README (both languages), ARCHITECTURE, CONTROL-PLANE,
    MULTI_PBS guides current; upgrade notes since 0.2.x.
 
