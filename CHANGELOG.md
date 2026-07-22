@@ -50,9 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test S10 had never once executed while reporting green. Fixed, and S10 is
   now a blocking gate.
 - The MSI smoke tests S9/S9b now report *why* they failed instead of an
-  anonymous exit code. This immediately surfaced a real defect: the
-  preconfigured (provisioned) MSI does not install `provisioning.json` where
-  the service looks for it. The stock installer is unaffected and passes.
+  anonymous exit code, and are now blocking gates. The named failure showed
+  the defect was in the test, not the installer: the MSI starts the service,
+  and the service consumes `provisioning.json` on first start and destroys it
+  (it carries a one-time org token), so asserting the file exists after
+  `msiexec` returns races a component designed to remove it. The same flaw
+  made the stock-installer leak check fail *open* — a stock MSI that shipped
+  an org token would have had it eaten by the service before the check looked.
+  Both assertions now read the MSI's own File/Component tables, which is
+  deterministic and proves the stronger property: what the installer ships.
 
 ## [0.2.150] - 2026-07-16
 

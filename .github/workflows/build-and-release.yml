@@ -728,7 +728,6 @@ jobs:
       # and starts a real Windows service, and an advisory signal beats a flaky
       # gate people learn to ignore. Promote once it has a track record.
       - name: MSI install/uninstall smoke (S9)
-        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -783,12 +782,16 @@ jobs:
           Write-Host 'S9 OK: both KEEP_CONFIG branches behave as documented.'
 
       # S9b — the preconfigured variant (docs/MSI-PROVISIONING.md). Proves the
-      # WiX guard compiles in, the payload lands where the service looks for
-      # it, and — the part that would fail silently — that the STOCK installer
-      # does not carry a profile. A stock MSI shipping someone's org token
-      # would be a credential leak with no symptom.
+      # WiX guard compiles in, that the payload is bound to the directory the
+      # service reads, and — the part that would fail silently — that the STOCK
+      # installer does not carry a profile. A stock MSI shipping someone's org
+      # token would be a credential leak with no symptom.
+      #
+      # BLOCKING as of 0.2.152, together with S9. Both were advisory, and the
+      # trap-emitted messages added in the same release showed why that was not
+      # tenable: S9b had been failing on an assertion that raced the service,
+      # and nobody could see it behind a green check.
       - name: Provisioned MSI smoke (S9b)
-        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -826,16 +829,60 @@ jobs:
             throw 'build left the provisioning profile in the source tree'
           }
 
+          # Assert on the PACKAGE, not on the filesystem after install.
+          # The MSI starts the service (ServiceControl Start="install"), and the
+          # service consumes provisioning.json on first start and destroys it —
+          # it carries a one-time org token, so deleting it is the design. Any
+          # check that stats the file after msiexec returns is racing a
+          # component built to remove the evidence. Worse, the stock-installer
+          # leak check failed OPEN: a stock MSI that shipped someone's token
+          # would have had it eaten by the service before the check looked.
+          # Reading the MSI's own tables is deterministic and proves the
+          # stronger property — what the installer SHIPS.
+          function Get-MsiRows {
+            param([string]$MsiPath, [string]$Query)
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $db   = $installer.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$installer,@($MsiPath,0))
+            $view = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@($Query))
+            $view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,$null) | Out-Null
+            $rows = New-Object System.Collections.Generic.List[string]
+            while ($true) {
+              $rec = $view.GetType().InvokeMember('Fetch','InvokeMethod',$null,$view,$null)
+              if ($null -eq $rec) { break }
+              $rows.Add([string]$rec.GetType().InvokeMember('StringData','GetProperty',$null,$rec,1))
+            }
+            $view.GetType().InvokeMember('Close','InvokeMethod',$null,$view,$null) | Out-Null
+            return $rows
+          }
+
+          $provFiles = @(Get-MsiRows "$env:TEMP\provisioned.msi" 'SELECT `FileName` FROM `File`')
+          if (-not ($provFiles | Where-Object { $_ -like '*provisioning.json*' })) {
+            throw 'the provisioned MSI does not carry provisioning.json at all'
+          }
+          $provDir = @(Get-MsiRows "$env:TEMP\provisioned.msi" 'SELECT `Directory_` FROM `Component` WHERE `Component` = ''ProvisioningProfile''')
+          if ($provDir -notcontains 'NIMBUSDATAFOLDER') {
+            throw "provisioning.json is not bound to NIMBUSDATAFOLDER (ProgramData\NimbusBackup) - got '$($provDir -join ',')'"
+          }
+          $stockFiles = @(Get-MsiRows (Resolve-Path 'dist/NimbusBackup.msi').Path 'SELECT `FileName` FROM `File`')
+          if ($stockFiles | Where-Object { $_ -like '*provisioning.json*' }) {
+            throw 'the STOCK MSI carries a provisioning profile - that would ship one org''s token to every customer'
+          }
+          Write-Host 'S9b: package contents correct - provisioned carries the profile into ProgramData, stock carries none.'
+
           Remove-Item "$cfgDir\provisioning.json" -ErrorAction SilentlyContinue
           $p = Start-Process msiexec.exe -ArgumentList @('/i', "$env:TEMP\provisioned.msi", '/qn') -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "provisioned install failed ($($p.ExitCode))" }
 
-          if (-not (Test-Path "$cfgDir\provisioning.json")) {
-            throw 'provisioned MSI did not install provisioning.json where the service looks for it'
+          # Both outcomes are correct: the service may already have consumed the
+          # profile, or it may still be on disk. What must never happen is the
+          # payload arriving corrupted.
+          if (Test-Path "$cfgDir\provisioning.json") {
+            $got = Get-Content "$cfgDir\provisioning.json" -Raw | ConvertFrom-Json
+            if ($got.control_server_url -ne 'https://control.invalid') { throw 'profile contents did not survive the MSI' }
+            Write-Host 'S9b: payload on disk and intact (service has not consumed it yet).'
+          } else {
+            Write-Host 'S9b: payload already consumed and destroyed by the service - expected for a one-time token.'
           }
-          $got = Get-Content "$cfgDir\provisioning.json" -Raw | ConvertFrom-Json
-          if ($got.control_server_url -ne 'https://control.invalid') { throw 'profile contents did not survive the MSI' }
-          Write-Host 'S9b: provisioned payload present and intact.'
 
           $p = Start-Process msiexec.exe -ArgumentList @('/x', "$env:TEMP\provisioned.msi", 'KEEP_CONFIG=0', '/qn') -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "provisioned uninstall failed ($($p.ExitCode))" }
@@ -844,9 +891,8 @@ jobs:
           # And the stock installer must carry nothing.
           $p = Start-Process msiexec.exe -ArgumentList @('/i', (Resolve-Path 'dist/NimbusBackup.msi').Path, '/qn') -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "stock install failed ($($p.ExitCode))" }
-          if (Test-Path "$cfgDir\provisioning.json") {
-            throw 'the STOCK MSI installed a provisioning profile — that would ship one org''s token to every customer'
-          }
+          # The authoritative leak gate is the package-table check above; this
+          # install only proves the stock MSI still installs cleanly.
           $p = Start-Process msiexec.exe -ArgumentList @('/x', (Resolve-Path 'dist/NimbusBackup.msi').Path, 'KEEP_CONFIG=0', '/qn') -Wait -PassThru
           Write-Host 'S9b OK: stock installer carries no profile.'
 
