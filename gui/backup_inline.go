@@ -781,7 +781,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		// PBS dedupes chunks, so retrying is cheap for the already-uploaded data.
 		var err error
 		for attempt := 1; attempt <= maxDirAttempts; attempt++ {
-			err = backupDirectory(client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase)
+			err = backupDirectory(opts.Ctx, client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase)
 			if err == nil {
 				break
 			}
@@ -987,7 +987,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	return nil
 }
 
-func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string)) error {
+func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string)) error {
 	writeBackupLog(fmt.Sprintf("Starting backup of %s", backupdir))
 	originalPath := backupdir
 
@@ -1008,7 +1008,7 @@ func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedch
 				backupdir = snap.FullPath
 				break
 			}
-			return backupReal(client, newchunk, reusechunk, failedchunk, backupdir, originalPath, usevss, progress, onStats, excludeList)
+			return backupReal(ctx, client, newchunk, reusechunk, failedchunk, backupdir, originalPath, usevss, progress, onStats, excludeList)
 		})
 		if err != nil && !vssConfirmed {
 			return fmt.Errorf("%s: %w", vssCreateFailedMarker, err)
@@ -1020,10 +1020,10 @@ func backupDirectory(client *pbscommon.PBSClient, newchunk, reusechunk, failedch
 	if onPhase != nil {
 		onPhase("running")
 	}
-	return backupReal(client, newchunk, reusechunk, failedchunk, backupdir, originalPath, usevss, progress, onStats, excludeList)
+	return backupReal(ctx, client, newchunk, reusechunk, failedchunk, backupdir, originalPath, usevss, progress, onStats, excludeList)
 }
 
-func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, originalPath string, vssUsed bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string) (returnErr error) {
+func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, originalPath string, vssUsed bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string) (returnErr error) {
 	// Panic recovery - critical to prevent silent crashes during backup
 	defer func() {
 		if r := recover(); r != nil {
@@ -1121,14 +1121,14 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 		// Checked on every data block written: a Stop aborts WriteDir here,
 		// which unwinds to the CreateVSSSnapshot callback so the shadow copy is
 		// released, and skips index finalization so PBS discards the partial.
-		if err := backupCancelled(opts.Ctx); err != nil {
+		if err := backupCancelled(ctx); err != nil {
 			return err
 		}
 		return pxarChunk.HandleData(b, client)
 	}
 
 	archive.CatalogWriteCB = func(b []byte) error {
-		if err := backupCancelled(opts.Ctx); err != nil {
+		if err := backupCancelled(ctx); err != nil {
 			return err
 		}
 		return pcat1Chunk.HandleData(b, client)
