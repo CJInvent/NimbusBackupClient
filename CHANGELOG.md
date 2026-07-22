@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.152] - 2026-07-22
+
+### Fixed
+- **The ~10-minute stall before the first chunk of a backup.** The previous
+  backup's index was loaded into a lock-free concurrent map whose sequential
+  bulk-insert path is pathological: ~194,000 chunk digests took 9m37s on a
+  931 GB disk (3m8s even in isolation, against 43ms for a native map). The
+  digests now land in a `ChunkSet` — a native map behind an RWMutex — which
+  keeps the concurrent access the upload workers need while making the load
+  effectively instant. Chunk uploads are network-bound, so the lock never
+  becomes the bottleneck.
+- **"Backup in progress" no longer appears three times.** It was shown by the
+  progress tile, the Start button and a toast simultaneously. The tile is now
+  the single indicator: the redundant toasts are gone and the Start button is
+  hidden while a one-shot backup runs rather than relabelling itself.
+- **The Stop button now actually stops the backup.** It previously only zeroed
+  the progress bar in the GUI and never told the backend anything, so the
+  backup ran to completion and the only way out was killing the service —
+  which leaves VSS shadow copies behind. Stop now cancels the running backup
+  wherever it is in the stream: the reader aborts before the index is
+  committed (so the incomplete backup is discarded by PBS) and the VSS
+  snapshot and its symlink are released. A stop is reported as a stop, not as
+  a failure.
+- Full-volume and directory backups both honour cancellation, in service mode
+  and standalone.
+
+### Security
+- `golang.org/x/text` raised to v0.39.0 across all modules that pin it,
+  closing GO-2026-5970, which `govulncheck` reported as reachable through the
+  chunk-download path.
+
+### Hardened
+- The previous-index parser derives its digest count from the downloaded
+  length instead of trusting the index header, so a corrupt or hostile index
+  cannot drive an oversized allocation or a read past the buffer. Truncated
+  headers, bad magic and malformed digest regions are rejected.
+
+### CI
+- The `snapshot` package's tests never compiled on Windows (a missing
+  `runtime` import in a `//go:build windows` file), which meant the VSS smoke
+  test S10 had never once executed while reporting green. Fixed, and S10 is
+  now a blocking gate.
+- The MSI smoke tests S9/S9b now report *why* they failed instead of an
+  anonymous exit code. This immediately surfaced a real defect: the
+  preconfigured (provisioned) MSI does not install `provisioning.json` where
+  the service looks for it. The stock installer is unaffected and passes.
+
 ## [0.2.150] - 2026-07-16
 
 ### Performance
