@@ -11,6 +11,7 @@ package snapshot
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
