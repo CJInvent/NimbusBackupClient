@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cornelk/hashmap"
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/net/http2"
 )
@@ -1148,34 +1147,18 @@ func (pbs *PBSClient) DownloadToBytes(archivename string) ([]byte, error) { //In
 // logged via DebugLogFn because this call sits on the critical path before
 // the first chunk moves: if it is ever slow, the log must say WHERE (server
 // response vs transfer vs parse), not leave a silent ten-minute gap.
-func (pbs *PBSClient) GetKnownSha265FromFIDX(archivename string) (*hashmap.Map[string, bool], error) {
+func (pbs *PBSClient) GetKnownSha265FromFIDX(archivename string) (*ChunkSet, error) {
 	t0 := time.Now()
 	data, err := pbs.DownloadPreviousToBytes(archivename)
 	if err != nil {
 		return nil, err
 	}
 	tDownload := time.Since(t0)
+
 	tp := time.Now()
-	rdr := bytes.NewReader(data)
-	var hdr FIDXHeader
-	err = binary.Read(rdr, binary.LittleEndian, &hdr)
+	ret, err := parseFIDXIndex(data)
 	if err != nil {
 		return nil, err
-	}
-	if !slices.Equal(hdr.Magic[:], []byte{47, 127, 65, 237, 145, 253, 15, 205}) {
-		return nil, fmt.Errorf("FIDX: Invalid magic %+v", hdr.Magic)
-	}
-	ret := hashmap.New[string, bool]()
-	for i := uint64(0); i < hdr.Size/hdr.ChunkSize; i++ {
-		H := make([]byte, 32)
-		nbytes, err := rdr.Read(H)
-		if err != nil {
-			return nil, err
-		}
-		if nbytes != len(H) {
-			return nil, fmt.Errorf("FIDX: Short read")
-		}
-		ret.Insert(hex.EncodeToString(H), true)
 	}
 	if DebugLogFn != nil {
 		DebugLogFn(fmt.Sprintf("Previous index %s: %s downloaded in %s, %d digests parsed in %s",
@@ -1183,7 +1166,49 @@ func (pbs *PBSClient) GetKnownSha265FromFIDX(archivename string) (*hashmap.Map[s
 			ret.Len(), time.Since(tp).Round(time.Millisecond)))
 	}
 	return ret, nil
+}
 
+// parseFIDXIndex parses a downloaded .fidx into the set of known chunk digests.
+// It is a pure []byte -> set seam (no network) so the parse and its
+// untrusted-input guards are testable without a PBS server.
+//
+// Two properties matter here. First, the digest count comes from the
+// downloaded length, not the header's Size/ChunkSize: the index is untrusted (a
+// hostile or corrupt PBS can serve one), and a bogus header must not drive a
+// huge preallocation or a read past the buffer. Second, the digests land in a
+// ChunkSet (native map) rather than a lock-free concurrent map — bulk-inserting
+// ~194k digests into the latter took minutes (see ChunkSet), and this load is
+// single-threaded, so addUnlocked is safe.
+func parseFIDXIndex(data []byte) (*ChunkSet, error) {
+	const fidxHeaderSize = 4096 // FIDXHeader is exactly 4096 bytes
+	if len(data) < fidxHeaderSize {
+		return nil, fmt.Errorf("FIDX: truncated header (%d bytes)", len(data))
+	}
+	rdr := bytes.NewReader(data)
+	var hdr FIDXHeader
+	if err := binary.Read(rdr, binary.LittleEndian, &hdr); err != nil {
+		return nil, err
+	}
+	if !slices.Equal(hdr.Magic[:], []byte{47, 127, 65, 237, 145, 253, 15, 205}) {
+		return nil, fmt.Errorf("FIDX: Invalid magic %+v", hdr.Magic)
+	}
+
+	// Digests are 32-byte SHA-256 values packed immediately after the header.
+	digestBytes := len(data) - fidxHeaderSize
+	if digestBytes%32 != 0 {
+		return nil, fmt.Errorf("FIDX: digest region not a multiple of 32 (%d bytes)", digestBytes)
+	}
+	n := digestBytes / 32
+
+	ret := NewChunkSetSized(n)
+	buf := make([]byte, 32) // reused; hex.EncodeToString copies, so no aliasing
+	for i := 0; i < n; i++ {
+		if _, err := io.ReadFull(rdr, buf); err != nil {
+			return nil, fmt.Errorf("FIDX: reading digest %d/%d: %w", i, n, err)
+		}
+		ret.addUnlocked(hex.EncodeToString(buf))
+	}
+	return ret, nil
 }
 
 func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {

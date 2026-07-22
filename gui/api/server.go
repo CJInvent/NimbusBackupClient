@@ -67,6 +67,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/backup", s.handleBackup)
 	s.mux.HandleFunc("/backup/status/", s.handleBackupStatus)
+	s.mux.HandleFunc("/backup/cancel", s.handleBackupCancel)
 	s.mux.HandleFunc("/jobs", s.handleJobs)
 	s.mux.HandleFunc("/jobs/create", s.handleJobCreate)
 	s.mux.HandleFunc("/jobs/update", s.handleJobUpdate)
@@ -280,6 +281,39 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, progress, http.StatusOK)
+}
+
+// handleBackupCancel stops the running backup. Backups are serialized (one at a
+// time per destination), so this cancels "the active backup" rather than taking
+// a job ID. It marks any still-running job terminal up front; because the async
+// runner only writes a final status when the job is not already complete, the
+// "cancelled" outcome sticks even though the engine also returns an error as it
+// unwinds.
+func (s *Server) handleBackupCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cancelled := false
+	if canceller, ok := s.app.(interface{ CancelActiveBackup() bool }); ok {
+		cancelled = canceller.CancelActiveBackup()
+	}
+
+	s.progressMutex.Lock()
+	for _, progress := range s.backupProgress {
+		if progress.Running && !progress.Complete {
+			progress.Running = false
+			progress.Complete = true
+			progress.Success = false
+			progress.Message = "Backup cancelled"
+			progress.Error = "cancelled by user"
+		}
+	}
+	s.progressMutex.Unlock()
+
+	log.Printf("[API] Backup cancel requested (active backup running: %v)", cancelled)
+	s.writeJSON(w, map[string]interface{}{"success": true, "cancelled": cancelled}, http.StatusOK)
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {

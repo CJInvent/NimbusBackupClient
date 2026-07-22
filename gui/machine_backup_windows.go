@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +25,6 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/cornelk/hashmap"
 	"golang.org/x/sys/windows"
 )
 
@@ -407,10 +407,10 @@ type MachineChunkState struct {
 	currentChunk      []byte
 	newchunk          *atomic.Uint64
 	reusechunk        *atomic.Uint64
-	knownChunks       *hashmap.Map[string, bool]
+	knownChunks       *pbscommon.ChunkSet
 }
 
-func (c *MachineChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool]) {
+func (c *MachineChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *pbscommon.ChunkSet) {
 	c.assignments = make([]string, 0)
 	c.assignmentsOffset = make([]uint64, 0)
 	c.processedSize = 0
@@ -431,7 +431,7 @@ var machineStatsFn func(bytesDone, bytesTotal, newChunks, reusedChunks uint64)
 func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64, ch chan []byte, readerErr <-chan error, progress func(float64, string)) error {
 	var newchunk *atomic.Uint64 = new(atomic.Uint64)
 	var reusechunk *atomic.Uint64 = new(atomic.Uint64)
-	knownChunks := hashmap.New[string, bool]()
+	knownChunks := pbscommon.NewChunkSet()
 
 	// abort unblocks the disk reader before returning an error: the reader
 	// goroutine may be parked on a channel send, and while parked it pins the
@@ -615,7 +615,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 	return nil
 }
 
-func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(float64, string)) (int64, error) {
+func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index int, progress func(float64, string)) (int64, error) {
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
@@ -778,6 +778,10 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 			}
 
 			for idx, P := range parts {
+				if err := backupCancelled(ctx); err != nil {
+					failRead(err)
+					return
+				}
 				writeDebugLog(fmt.Sprintf("Processing partition %d: %s to %s",
 					idx, BytesToString(int64(P.StartByte)), BytesToString(int64(P.EndByte))))
 
@@ -790,6 +794,10 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 					block := make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
 					pos := P.StartByte
 					for pos < P.EndByte {
+						if err := backupCancelled(ctx); err != nil {
+							failRead(err)
+							return
+						}
 						nbytes, err := F.Read(block[:min(uint64(len(block)), P.EndByte-pos)])
 						if err != nil {
 							failRead(fmt.Errorf("raw read at %d failed: %w", pos, err))
@@ -830,6 +838,10 @@ func backupWindowsDisk(client *pbscommon.PBSClient, index int, progress func(flo
 					block := make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
 
 					for {
+						if err := backupCancelled(ctx); err != nil {
+							failRead(err)
+							return
+						}
 						nbytes, err := snapshotFile.Read(block)
 						if err == io.EOF {
 							if pos != P.EndByte {
@@ -931,6 +943,19 @@ func RunMachineBackup(opts BackupOptions) error {
 		return errors.New(machineBackupFailedMsg)
 	}
 
+	// stopped reports a user-initiated Stop. Deliberately distinct from fail:
+	// a stop is not a fault, and labelling it one sends the operator to the log
+	// hunting a failure that never happened. By the time this runs the reader has
+	// already aborted before the index was committed (PBS discards the partial)
+	// and the deferred VSS Release has removed the shadow copy and its symlink.
+	stopped := func() error {
+		writeDebugLog("Machine backup stopped by user — aborted before index commit; partial backup discarded and VSS snapshot released")
+		if opts.OnComplete != nil {
+			opts.OnComplete(false, errBackupStopped)
+		}
+		return errors.New(errBackupStopped)
+	}
+
 	// Create PBS client
 	client := &pbscommon.PBSClient{
 		BaseURL:                opts.BaseURL,
@@ -989,8 +1014,13 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		_, err = backupWindowsDisk(client, int(idx), progress)
+		_, err = backupWindowsDisk(opts.Ctx, client, int(idx), progress)
 		if err != nil {
+			// A cancelled context means the user pressed Stop; the read abort is
+			// the mechanism, not a fault.
+			if backupCancelled(opts.Ctx) != nil {
+				return stopped()
+			}
 			return fail(fmt.Sprintf("Failed to backup PhysicalDrive%d: %v", idx, err))
 		}
 	}

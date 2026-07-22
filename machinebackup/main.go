@@ -21,7 +21,6 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/cornelk/hashmap"
 	"github.com/google/uuid"
 	"github.com/tawesoft/golib/v2/dialog"
 )
@@ -44,7 +43,7 @@ type ChunkState struct {
 	C                  pbscommon.Chunker
 	newchunk           *atomic.Uint64
 	reusechunk         *atomic.Uint64
-	knownChunks        *hashmap.Map[string, bool]
+	knownChunks        *pbscommon.ChunkSet
 }
 
 type Partition struct {
@@ -55,7 +54,7 @@ type Partition struct {
 	Letter      string
 }
 
-func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool]) {
+func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *pbscommon.ChunkSet) {
 	c.assignments = make([]string, 0)
 	c.assignments_offset = make([]uint64, 0)
 	c.processed_size = 0
@@ -87,7 +86,7 @@ func BytesToString(b int64) string {
 func uploadWorker(client *pbscommon.PBSClient, filename string, total_size uint64, ch chan []byte) error {
 	var newchunk *atomic.Uint64 = new(atomic.Uint64)
 	var reusechunk *atomic.Uint64 = new(atomic.Uint64)
-	knownChunks := hashmap.New[string, bool]()
+	knownChunks := pbscommon.NewChunkSet()
 
 	knownChunks2, err := client.GetKnownSha265FromFIDX(filename)
 	if err == nil {

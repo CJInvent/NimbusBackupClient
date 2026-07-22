@@ -26,6 +26,8 @@ const (
 	errVSSAdminRequired   = "[NB-2006] VSS (Shadow Copy) requires administrator privileges - relaunch as administrator or disable VSS"
 	errServiceComm        = "[NB-2007] communication with the service failed"
 	errDirRequired        = "[NB-2008] at least one backup directory required"
+	errBackupStopped      = "[NB-2009] Backup stopped - the partial backup was discarded and the snapshot released"
+	errNoBackupRunning    = "[NB-2010] no backup is running"
 	errServerIDExists     = "[NB-1007] a PBS server with this ID already exists"
 
 	errSnapshotList       = "[NB-3001] listing snapshots failed"

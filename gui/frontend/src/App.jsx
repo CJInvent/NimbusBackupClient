@@ -5,7 +5,7 @@ import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory, CancelImageRestore
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, StopBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory, CancelImageRestore
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
@@ -33,6 +33,7 @@ if (window.go) {
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
+  StopBackup = window.go.main.App.StopBackup
   ListSnapshots = window.go.main.App.ListSnapshots
   ListSnapshotContents = window.go.main.App.ListSnapshotContents
   GetSnapshotMeta = window.go.main.App.GetSnapshotMeta
@@ -873,7 +874,6 @@ function App() {
       // selected root. Fall back to a normal full backup of the roots, which
       // always captures everything.
       if (!splitPlan || splitPlan.length <= 1) {
-        showStatus(`🚀 ${t('statusBackupStarting')}`, 'info')
         setProgress(5)
         await StartBackup(
           backupType,
@@ -884,7 +884,6 @@ function App() {
           config.usevss,
           ''
         )
-        showStatus(`⏳ ${t('statusBackupRunning')}`, 'info')
         return
       }
 
@@ -1019,7 +1018,6 @@ function App() {
     }
 
     // One-shot mode - execute immediately
-    showStatus(`🚀 ${t('statusBackupStarting')}`, 'info')
     setProgress(5)
 
     try {
@@ -1033,9 +1031,24 @@ function App() {
         ''
       )
       // Backup started in background - progress will be shown via events
-      showStatus(`⏳ ${t('statusBackupRunning')}`, 'info')
     } catch (err) {
       setProgress(0)
+      showStatus(`❌ ${err}`, 'error')
+    }
+  }
+
+  const handleStopBackup = async () => {
+    if (!StopBackup) {
+      showStatus('❌ ' + t('errNoRuntime'), 'error')
+      return
+    }
+    // Ask the backend to stop; it winds the engine down cleanly (releases the
+    // VSS snapshot, discards the partial index). The tile clears itself when the
+    // backup:complete event arrives, so we only surface a one-off "stopping" note.
+    try {
+      await StopBackup()
+      showStatus(`🛑 ${t('statusBackupStopping')}`, 'info')
+    } catch (err) {
       showStatus(`❌ ${err}`, 'error')
     }
   }
@@ -2546,14 +2559,16 @@ function App() {
             </div>
           )}
 
-          <button className="btn" onClick={handleStartBackup} disabled={progress > 0 && progress < 100}>
-            {backupMode === 'oneshot'
-              ? (progress > 0 && progress < 100 ? `⏳ ${t('backupInProgress')}` : `🚀 ${t('startBackup')}`)
-              : (editingJobId ? `✏️ ${t('updateSchedule')}` : `💾 ${t('saveSchedule')}`)
-            }
-          </button>
+          {!(backupMode === 'oneshot' && progress > 0 && progress < 100) && (
+            <button className="btn" onClick={handleStartBackup}>
+              {backupMode === 'oneshot'
+                ? `🚀 ${t('startBackup')}`
+                : (editingJobId ? `✏️ ${t('updateSchedule')}` : `💾 ${t('saveSchedule')}`)
+              }
+            </button>
+          )}
           {backupMode === 'oneshot' && (
-            <button className="btn btn-secondary" onClick={() => setProgress(0)} disabled={progress === 0}>{t('stopBackup')}</button>
+            <button className="btn btn-secondary" onClick={handleStopBackup} disabled={progress === 0}>{t('stopBackup')}</button>
           )}
           {backupMode === 'scheduled' && editingJobId && (
             <button className="btn btn-secondary" onClick={() => {

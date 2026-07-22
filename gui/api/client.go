@@ -106,6 +106,23 @@ func (c *Client) StartBackup(req *BackupRequest) (*BackupResponse, error) {
 	return &backupResp, nil
 }
 
+// CancelBackup asks the service to stop the running backup. The service cancels
+// the active backup's context; the engine unwinds before committing the index
+// and releases the VSS snapshot, so nothing is left behind.
+func (c *Client) CancelBackup() error {
+	resp, err := c.httpClient.Post(c.baseURL+"/backup/cancel", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("failed to send cancel request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to cancel backup: %s", string(respBody))
+	}
+	return nil
+}
+
 // GetBackupStatus retrieves the current status of a backup job
 func (c *Client) GetBackupStatus(jobID string) (*BackupProgress, error) {
 	resp, err := c.httpClient.Get(c.baseURL + "/backup/status/" + jobID)

@@ -22,6 +22,36 @@ type App struct {
 	lastImageKey       string             // cache key of the most recent partition scan
 	ibRestoreMu        sync.Mutex         // guards ibRestoreCancel
 	ibRestoreCancel    context.CancelFunc // set while an image restore runs; nil otherwise
+
+	backupMu     sync.Mutex         // guards backupCancel
+	backupCancel context.CancelFunc // set while a backup runs in THIS process; nil otherwise
+}
+
+// setBackupCancel stores (or clears, with nil) the cancel func of the backup
+// running in this process. Held under backupMu so a concurrent StopBackup sees
+// a consistent value.
+func (a *App) setBackupCancel(cancel context.CancelFunc) {
+	a.backupMu.Lock()
+	a.backupCancel = cancel
+	a.backupMu.Unlock()
+}
+
+// CancelActiveBackup signals the backup running in THIS process to stop, if any,
+// and reports whether one was running. Cancellation is cooperative: the engine's
+// reader loop observes the cancelled context and returns an error BEFORE the PBS
+// index is committed (so the incomplete backup is discarded server-side), and the
+// deferred VSS Release then deletes the shadow copy and its symlink. A stop
+// therefore leaves no scraps, wherever in the stream it lands.
+func (a *App) CancelActiveBackup() bool {
+	a.backupMu.Lock()
+	cancel := a.backupCancel
+	a.backupMu.Unlock()
+	if cancel != nil {
+		cancel()
+		writeDebugLog("Backup: cancel requested for in-progress backup")
+		return true
+	}
+	return false
 }
 
 // progressCallbacks stores the callback functions for a backup operation

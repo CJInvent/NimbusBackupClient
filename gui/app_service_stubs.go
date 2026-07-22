@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 )
@@ -119,6 +120,18 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 
 	// Control plane run reporting (no-op when not configured).
 	attachControlPlaneHooks(&opts)
+
+	// A cancellable context so a /backup/cancel request can stop this backup
+	// cleanly. The engine runs synchronously here (the API server wraps the call
+	// in its own goroutine); CancelActiveBackup cancels this ctx, the reader
+	// aborts before the index commits, and the VSS snapshot is released.
+	ctx, cancel := context.WithCancel(context.Background())
+	opts.Ctx = ctx
+	a.setBackupCancel(cancel)
+	defer func() {
+		a.setBackupCancel(nil)
+		cancel()
+	}()
 
 	// Execute backup using the appropriate engine for the backup type.
 	if backupType == "machine" {

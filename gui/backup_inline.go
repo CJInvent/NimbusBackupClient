@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cornelk/hashmap"
 	"pbscommon"
 	"retry"
 	"security"
@@ -43,8 +42,13 @@ type BackupOptions struct {
 	DisableSplit    bool     // When true, never auto-split regardless of size
 	SplitSizeBytes  uint64   // Auto-split threshold and per-bin target; 0 = default (SplitThreshold)
 	UploadLimitMbps float64  // Upload bandwidth cap in megabits/s (0 = unlimited)
-	OnProgress      func(percent float64, message string)
-	OnComplete      func(success bool, message string)
+	// Ctx stops the backup mid-stream. When it is cancelled the engine's reader
+	// loop aborts BEFORE the index is committed (PBS then discards the incomplete
+	// backup) and the deferred VSS Release removes the shadow copy and its
+	// symlink — a stop leaves nothing behind. Nil means no cancellation.
+	Ctx        context.Context
+	OnProgress func(percent float64, message string)
+	OnComplete func(success bool, message string)
 	// OnResult delivers the full structured result (Group 0 contract). It is
 	// additive: OnComplete keeps firing with the success bool for existing
 	// consumers. OnResult is the source the sidecar (Group 1) and rich history read.
@@ -180,7 +184,7 @@ type ChunkState struct {
 	newchunk            *atomic.Uint64
 	reusechunk          *atomic.Uint64
 	failedchunk         *atomic.Uint64 // Track failed chunk uploads
-	knownChunks         *hashmap.Map[string, bool]
+	knownChunks         *pbscommon.ChunkSet
 	onProgress          func(float64, string)
 	onStats             func(*BackupProgressStats) // Structured live stats for the GUI (nil for the catalog stream)
 	currentDir          string                     // Directory currently being archived, for the stats payload
@@ -196,7 +200,7 @@ type DidxEntry struct {
 	digest []byte
 }
 
-func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, failedchunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool], onProgress func(float64, string), totalSize *atomic.Uint64, onStats func(*BackupProgressStats), currentDir string) {
+func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, failedchunk *atomic.Uint64, knownChunks *pbscommon.ChunkSet, onProgress func(float64, string), totalSize *atomic.Uint64, onStats func(*BackupProgressStats), currentDir string) {
 	c.assignments = make([]string, 0)
 	c.assignmentsOffset = make([]uint64, 0)
 	c.pos = 0
@@ -463,6 +467,16 @@ func formatDuration(d time.Duration) string {
 	hours := int(d.Hours())
 	mins := int(d.Minutes()) % 60
 	return fmt.Sprintf("%dh %dm", hours, mins)
+}
+
+// backupCancelled returns a non-nil error once the backup's context has been
+// cancelled (user pressed Stop). A nil context — engines invoked without one —
+// never cancels, so existing non-cancellable callers are unaffected.
+func backupCancelled(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }
 
 // RunBackupInline performs a backup without external binaries
@@ -837,6 +851,14 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	if successfulDirs == 0 {
 		errMsg := fmt.Sprintf("All %d directories failed:\n%s", len(opts.BackupDirs), strings.Join(dirErrors, "\n"))
 		writeBackupLog(errMsg)
+		// A cancelled context means the user pressed Stop: the aborted writes
+		// above are the mechanism, not a fault. Report it as a stop rather than
+		// sending the operator to the log to hunt a failure that never happened.
+		// The per-directory detail stays in the log (written just above).
+		if backupCancelled(opts.Ctx) != nil {
+			errMsg = errBackupStopped
+			writeBackupLog("Backup stopped by user — partial backup discarded and any VSS snapshot released")
+		}
 		status := &BackupStatus{
 			Outcome:          OutcomeFailed,
 			BackupID:         opts.BackupID,
@@ -1016,7 +1038,7 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 	}()
 
 	client.Connect(false, "host")
-	knownChunks := hashmap.New[string, bool]()
+	knownChunks := pbscommon.NewChunkSet()
 
 	// Start background scan to calculate total size (drives the progress %). This
 	// is non-blocking — the backup streams in parallel — but bound it with the same
@@ -1096,10 +1118,19 @@ func backupReal(client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *
 	}
 
 	archive.WriteCB = func(b []byte) error {
+		// Checked on every data block written: a Stop aborts WriteDir here,
+		// which unwinds to the CreateVSSSnapshot callback so the shadow copy is
+		// released, and skips index finalization so PBS discards the partial.
+		if err := backupCancelled(opts.Ctx); err != nil {
+			return err
+		}
 		return pxarChunk.HandleData(b, client)
 	}
 
 	archive.CatalogWriteCB = func(b []byte) error {
+		if err := backupCancelled(opts.Ctx); err != nil {
+			return err
+		}
 		return pcat1Chunk.HandleData(b, client)
 	}
 

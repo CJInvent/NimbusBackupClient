@@ -788,6 +788,25 @@ func (a *App) StartBackup(backupType string, backupDirs []string, driveLetters [
 	}
 }
 
+// StopBackup cleanly stops the running backup. The engine aborts before the PBS
+// index is committed (so the partial backup is discarded) and its deferred VSS
+// Release deletes the shadow copy and symlink — no scraps, wherever the stream
+// was. In service mode the backup runs in the service, so we ask it over the
+// local API; in standalone mode we cancel the in-process backup directly.
+func (a *App) StopBackup() error {
+	switch a.mode {
+	case api.ModeService:
+		return a.apiClient.CancelBackup()
+	case api.ModeStandalone:
+		if a.CancelActiveBackup() {
+			return nil
+		}
+		return errors.New(errNoBackupRunning)
+	default:
+		return fmt.Errorf("unknown execution mode: %v", a.mode)
+	}
+}
+
 // startBackupViaService sends backup request to the service via HTTP API
 func (a *App) startBackupViaService(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
 	writeDebugLog("[Service Mode] Sending backup request to service")
@@ -1062,8 +1081,18 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		})
 	}
 
+	// A cancellable context so StopBackup can abort this backup cleanly (the
+	// engine unwinds before the index commits and releases the VSS snapshot).
+	ctx, cancel := context.WithCancel(context.Background())
+	opts.Ctx = ctx
+	a.setBackupCancel(cancel)
+
 	// Run backup in a background goroutine so the UI thread isn't blocked.
 	go func() {
+		defer func() {
+			a.setBackupCancel(nil)
+			cancel()
+		}()
 		var err error
 		if backupType == "machine" {
 			// Full-volume backup: raw disk image (FIDX) of each selected

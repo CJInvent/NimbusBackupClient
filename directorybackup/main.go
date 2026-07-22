@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cornelk/hashmap"
 	"github.com/tawesoft/golib/v2/dialog"
 )
 
@@ -40,7 +39,7 @@ type ChunkState struct {
 	C                  pbscommon.Chunker
 	newchunk           *atomic.Uint64
 	reusechunk         *atomic.Uint64
-	knownChunks        *hashmap.Map[string, bool]
+	knownChunks        *pbscommon.ChunkSet
 }
 
 type DidxEntry struct {
@@ -48,7 +47,7 @@ type DidxEntry struct {
 	digest []byte
 }
 
-func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *hashmap.Map[string, bool]) {
+func (c *ChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uint64, knownChunks *pbscommon.ChunkSet) {
 	c.assignments = make([]string, 0)
 	c.assignments_offset = make([]uint64, 0)
 	c.pos = 0
@@ -297,7 +296,7 @@ func main() {
 }
 
 func backup_stream(client *pbscommon.PBSClient, newchunk, reusechunk *atomic.Uint64, filename string, stream io.Reader) error {
-	knownChunks := hashmap.New[string, bool]()
+	knownChunks := pbscommon.NewChunkSet()
 	client.Connect(false, "host")
 	previousDidx, err := client.DownloadPreviousToBytes(filename)
 	if err != nil {
@@ -366,7 +365,7 @@ func backup_stream(client *pbscommon.PBSClient, newchunk, reusechunk *atomic.Uin
 
 func backup_real(client *pbscommon.PBSClient, newchunk, reusechunk *atomic.Uint64, pxarOut string, backupdir string) error {
 	client.Connect(false, "host")
-	knownChunks := hashmap.New[string, bool]()
+	knownChunks := pbscommon.NewChunkSet()
 
 	archive := &pbscommon.PXARArchive{}
 	archive.ArchiveName = "backup.pxar.didx"
