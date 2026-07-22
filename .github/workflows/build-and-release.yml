@@ -344,12 +344,18 @@ jobs:
           fi
 
       # S10: create a real VSS snapshot through the production code path and
-      # confirm the 0.2.150 diagnostics actually emit. Non-blocking on its
-      # first outings: VSS on a hosted runner is not yet proven stable, and a
-      # flaky gate that everyone learns to ignore is worse than an honest
-      # advisory one. Promote to blocking once it has a track record.
+      # confirm the 0.2.150 diagnostics actually emit.
+      #
+      # BLOCKING as of 0.2.152. It was advisory pending "a track record", and
+      # that turned out to be the trap: snapshot_windows_test.go referenced
+      # runtime.GOOS without importing "runtime", so the package's test binary
+      # never compiled on Windows and this step reported a compile error into
+      # the annotations on EVERY run while the job stayed green. It had no
+      # track record because it had never once executed the test it exists to
+      # run. With the import fixed the smoke compiles, runs and passes, so the
+      # gate is armed — a VSS regression now fails the build instead of
+      # scrolling past in an annotation nobody reads.
       - name: VSS snapshot smoke (S10)
-        continue-on-error: true
         shell: bash
         working-directory: snapshot
         env:
@@ -726,6 +732,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Surface WHY this step failed. Without it a failure here shows up as
+          # a bare "Process completed with exit code 1" annotation on a green
+          # job — unattributable to a step, which is how S10 stayed broken for
+          # weeks. Every throw below carries a specific message; emit it.
+          trap { Write-Host "::error::S9: $($_.Exception.Message)"; exit 1 }
           $msi = (Resolve-Path 'dist/NimbusBackup.msi').Path
           $cfgDir = "$env:ProgramData\NimbusBackup"
 
@@ -781,6 +792,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # As in S9: name the failure so an advisory step cannot fail silently.
+          trap { Write-Host "::error::S9b: $($_.Exception.Message)"; exit 1 }
           $cfgDir = "$env:ProgramData\NimbusBackup"
           $profilePath = "$env:TEMP\ci-profile.json"
 
