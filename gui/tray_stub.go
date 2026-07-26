@@ -26,3 +26,7 @@ func (a *App) UpdateTrayTooltip(message string) {
 // SetTrayLanguage is a no-op off Windows (no system tray). Kept so the
 // Wails binding surface is identical across platforms.
 func (a *App) SetTrayLanguage(lang string) {}
+
+// attemptTrayCleanupBeforeCrash is a no-op off Windows — there is no tray
+// icon to clean up. Paired with the real implementation in tray.go.
+func attemptTrayCleanupBeforeCrash() {}

@@ -82,6 +82,11 @@ func main() {
 			writeDebugLog(crashMsg)
 			writeCrashReport(crashMsg)
 			fmt.Fprint(os.Stderr, "\n!!! APPLICATION CRASHED !!!\nSee crash_report.txt for details\n")
+			// Best-effort tray cleanup: an unhandled panic used to skip the
+			// tray's own Shell_NotifyIcon(NIM_DELETE) entirely, leaking the
+			// icon on every crash (see gui/tray.go's onExit doc comment).
+			// No-op off Windows / when no tray was ever set up.
+			attemptTrayCleanupBeforeCrash()
 			os.Exit(1)
 		}
 	}()

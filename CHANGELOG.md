@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Duplicate/ghost tray icons accumulating over a session.** Root cause is
+  two-layered. getlantern/systray never sets NOTIFYICONDATA's GUID, so
+  Windows has no stable identity for the icon across restarts — the ONLY way
+  an icon leaves the notification area is this process calling
+  `Shell_NotifyIcon(NIM_DELETE)` before it exits. On top of that, our own
+  Quit handler used to `os.Exit(0)` on a blind 2-second timer racing that
+  cleanup, and a panic in `main()` skipped it entirely via an immediate
+  `os.Exit(1)`. Every one of those exits could leak an icon that Windows then
+  keeps until it's hovered or explorer.exe restarts. Fixed by waiting for
+  systray's own confirmation (its `onExit` callback, which only fires after
+  `NIM_DELETE` has run) before exiting on the Quit path, and by giving a
+  crash a short bounded chance to do the same before its exit code — the
+  crash's exit code is unaffected either way. A Task Manager kill, debugger
+  stop, or power loss remains unrecoverable in userspace; restarting
+  explorer.exe (or a reboot) clears anything already leaked.
+
 ## [0.2.152] - 2026-07-22
 
 ### Fixed
