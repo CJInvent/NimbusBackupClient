@@ -12,6 +12,11 @@ import (
 )
 
 func main() {
+	// FIRST statement: a service has no console, so stderr is discarded by
+	// the SCM. Until stdlib log is redirected, every log.Printf/log.Fatal in
+	// this process — ours and our dependencies' — lands nowhere.
+	redirectStdlibLog()
+
 	writeDebugLog("NimbusBackupSVC starting...")
 
 	// Command-line flags for service control

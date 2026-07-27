@@ -59,6 +59,11 @@ func init() {
 }
 
 func main() {
+	// Route stdlib log into the visible rotating log before anything can
+	// log. Matters less here than in the service build (the GUI may have a
+	// console) but keeps both entry points on one logging path.
+	redirectStdlibLog()
+
 	// Parse command line flags
 	minimized := flag.Bool("minimized", false, "Start minimized to system tray")
 	logcat := flag.String("logcat", "", "Enable detailed log categories (comma-separated): pbs,chunks,security,api or 'all'")
