@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 )
 
 // GetConfigWithHostname returns the configuration with hostname
@@ -114,6 +115,32 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 				writeDebugLog(fmt.Sprintf("[Backup Complete] FAILED - %s", message))
 			}
 			a.notifyCompleteCallbacks(success, message)
+
+			// Record manual runs to LOCAL history same as the GUI-standalone
+			// path (main.go startBackupDirect) already does. Without this,
+			// a manual "Back up now" run in the installed-service
+			// configuration — every managed machine — never appeared in the
+			// client's own history list, even though the control-plane
+			// reporter still told the portal about it (takeRunReporter's
+			// ad-hoc fallback in controlplane_glue.go). That split is why
+			// the two counts disagreed: the portal had every run, the local
+			// list only had scheduler-triggered ones.
+			historyEntry := JobHistory{
+				ID:         fmt.Sprintf("%d", time.Now().Unix()),
+				Name:       fmt.Sprintf("Backup manuel - %s", backupID),
+				Timestamp:  time.Now().Format(time.RFC3339),
+				Status:     "success",
+				Message:    message,
+				BackupDirs: allDirs,
+				BackupID:   backupID,
+				UseVSS:     useVSS,
+			}
+			if !success {
+				historyEntry.Status = "failed"
+			}
+			if err := a.AddJobHistory(historyEntry); err != nil {
+				writeDebugLog(fmt.Sprintf("Warning: Failed to add manual backup to history: %v", err))
+			}
 		},
 		UploadLimitMbps: a.config.UploadLimitMbps,
 	}
