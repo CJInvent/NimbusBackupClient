@@ -381,20 +381,44 @@ func takeRunReporter(backupID, backupType string) *controlplane.RunReporter {
 }
 
 // attachControlPlaneHooks decorates a fully-built BackupOptions with phase
-// and result reporting. ONE call at each construction site:
+// and result reporting, and returns a FINALIZER the caller must invoke with
+// the engine's error return:
 //
-//	attachControlPlaneHooks(&opts)
+//	finish := attachControlPlaneHooks(&opts)
+//	err := RunMachineBackup(opts)
+//	finish(err)
 //
 // It wraps (not replaces) OnResult and installs OnPhase, so every existing
 // consumer keeps firing untouched.
-func attachControlPlaneHooks(opts *BackupOptions) {
+//
+// # WHY THE FINALIZER EXISTS
+//
+// The hooks below hang off opts.OnResult, which the DIRECTORY engine
+// (backup_inline.go) emits at every exit. The MACHINE engine
+// (machine_backup_windows.go, RunMachineBackup) never calls OnResult at all
+// -- it reports through OnComplete and its error return instead. So a
+// machine backup used to post "preparing" at registration and then NOTHING,
+// ever: no success, no failure, no VSS abort. The portal showed every
+// image backup stuck in "preparing" forever, "Last successful run: Never
+// run", and a real VSS_E_UNEXPECTED failure was completely invisible
+// server-side even though the client logged it plainly. On a fleet whose
+// default_backup_mode is an image mode -- i.e. every job is type=machine --
+// that meant the control plane never learned the outcome of ANY backup.
+//
+// Rather than thread OnResult through every exit path of a large
+// Windows-only engine, the finalizer is a backstop: if the engine returned
+// without OnResult having fired, report the outcome from the error return.
+// That makes it impossible for ANY engine, present or future, to leave a
+// run dangling in a non-terminal state -- the failure mode here was silence,
+// and silence is exactly what a monitoring product must never produce.
+func attachControlPlaneHooks(opts *BackupOptions) func(error) {
 	kind := "directory"
 	if opts.BackupType == "vm" {
 		kind = "machine"
 	}
 	rep := takeRunReporter(opts.BackupID, kind)
 	if rep == nil {
-		return // control plane not configured
+		return func(error) {} // control plane not configured
 	}
 	rep.SetPBSTarget(opts.BaseURL, opts.Datastore, opts.Namespace)
 
@@ -412,9 +436,25 @@ func attachControlPlaneHooks(opts *BackupOptions) {
 		}
 	}
 
+	// Guards the finalizer: set by the OnResult path below, read after the
+	// engine returns. Both happen on the engine's goroutine (OnResult is
+	// called synchronously by the engine, the finalizer immediately after
+	// it returns), but the mutex keeps that safe if an engine ever reports
+	// its result from a worker goroutine.
+	var (
+		reportedMu sync.Mutex
+		reported   bool
+	)
+	markReported := func() {
+		reportedMu.Lock()
+		reported = true
+		reportedMu.Unlock()
+	}
+
 	prevResult := opts.OnResult
 	opts.OnResult = func(s *BackupStatus) {
 		if s != nil {
+			markReported()
 			tail := s.Message
 			switch {
 			case s.Outcome == OutcomeFailed && errorLooksVSS(s.Message):
@@ -432,6 +472,31 @@ func attachControlPlaneHooks(opts *BackupOptions) {
 		if prevResult != nil {
 			prevResult(s)
 		}
+	}
+
+	return func(err error) {
+		reportedMu.Lock()
+		already := reported
+		reportedMu.Unlock()
+		if already {
+			return // the engine reported its own outcome; nothing to add
+		}
+		if err != nil {
+			msg := err.Error()
+			if errorLooksVSS(msg) {
+				rep.VSSFailed(firstLine(msg))
+			} else {
+				rep.Failed(firstLine(msg), msg)
+			}
+			return
+		}
+		// Succeeded, but this engine gave us no BackupStatus, so the PBS
+		// snapshot coordinates and byte counts are not available here --
+		// they are reported as zero/empty rather than guessed. Recording
+		// the SUCCESS is still strictly better than leaving the run in
+		// "preparing" forever, and closing that metadata gap is exactly
+		// what end-to-end backup-job correlation is for.
+		rep.Success(opts.BackupType, opts.BackupID, time.Now().Unix(), 0, 0, "")
 	}
 }
 

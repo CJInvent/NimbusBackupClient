@@ -1054,8 +1054,9 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		},
 	}
 
-	// Control plane run reporting (no-op when not configured).
-	attachControlPlaneHooks(&opts)
+	// Control plane run reporting (no-op when not configured). The returned
+	// finalizer MUST be called with the engine's error — see the call below.
+	cpFinish := attachControlPlaneHooks(&opts)
 
 	// Structured live stats + final structured result for the GUI (standalone mode)
 	// and, in API mode, the registered per-job stats callbacks.
@@ -1111,6 +1112,10 @@ func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLet
 		} else {
 			err = RunBackupInline(opts)
 		}
+		// Report the outcome to the control plane if the engine did not.
+		// RunMachineBackup never emits OnResult, so this is the ONLY thing
+		// that finishes an image backup server-side.
+		cpFinish(err)
 		if err != nil {
 			writeDebugLog(fmt.Sprintf("Backup error: %v", err))
 		}

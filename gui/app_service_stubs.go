@@ -145,8 +145,11 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		UploadLimitMbps: a.config.UploadLimitMbps,
 	}
 
-	// Control plane run reporting (no-op when not configured).
-	attachControlPlaneHooks(&opts)
+	// Control plane run reporting (no-op when not configured). The returned
+	// finalizer MUST be called with the engine's error: RunMachineBackup
+	// never emits OnResult, so without it an image backup is never reported
+	// as finished at all.
+	cpFinish := attachControlPlaneHooks(&opts)
 
 	// A cancellable context so a /backup/cancel request can stop this backup
 	// cleanly. The engine runs synchronously here (the API server wraps the call
@@ -163,8 +166,12 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 	// Execute backup using the appropriate engine for the backup type.
 	if backupType == "machine" {
 		writeDebugLog("[Service] Executing full-volume backup via RunMachineBackup")
-		return RunMachineBackup(opts)
+		err := RunMachineBackup(opts)
+		cpFinish(err)
+		return err
 	}
 	writeDebugLog("[Service] Executing backup via RunBackupInline")
-	return RunBackupInline(opts)
+	err := RunBackupInline(opts)
+	cpFinish(err)
+	return err
 }
