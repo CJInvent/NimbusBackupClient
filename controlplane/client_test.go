@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fake NimbusControl covering enroll, checkin, runs, results, and 429 retry.
@@ -111,6 +112,55 @@ func TestRunReporterForwardOnly(t *testing.T) {
 	r.Running() // must be a no-op after terminal
 	if !r.terminal {
 		t.Fatal("terminal latch broken")
+	}
+}
+
+// TestSetRequestIDOnWire proves SetRequestID actually changes the posted
+// JSON, not just an in-memory field nothing reads. Regression guard for the
+// two-stage ack: the server can only link a run to a Backup Request if
+// request_id is genuinely present in the body it receives.
+func TestSetRequestIDOnWire(t *testing.T) {
+	bodies := make(chan map[string]interface{}, 4)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agent/v1/runs", func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		bodies <- b
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, AgentID: 7, Secret: "s3cret"}
+
+	// With a request ID set before the first post.
+	rep := c.NewRun("J", "directory")
+	rep.SetRequestID("11111111-2222-4333-8444-555555555555")
+	rep.Preparing()
+	body := recvBody(t, bodies)
+	if got, _ := body["request_id"].(string); got != "11111111-2222-4333-8444-555555555555" {
+		t.Fatalf("request_id missing from wire payload: %+v", body)
+	}
+
+	// Without one (the scheduled/unattributed path) — omitempty must drop
+	// the field entirely, matching the server's "absent means no request,
+	// not empty string" contract (RunIngest treats isset() as the signal).
+	rep2 := c.NewRun("J2", "directory")
+	rep2.Preparing()
+	body2 := recvBody(t, bodies)
+	if _, present := body2["request_id"]; present {
+		t.Fatalf("request_id must be omitted (not empty string) when unset: %+v", body2)
+	}
+}
+
+func recvBody(t *testing.T, ch <-chan map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	select {
+	case b := <-ch:
+		return b
+	case <-time.After(2 * time.Second):
+		t.Fatal("post never landed")
+		return nil
 	}
 }
 

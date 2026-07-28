@@ -492,7 +492,7 @@ func (a *App) HandleStartupRun() {
 		// Check if this job is already running (mutex protection)
 		// If scheduler already started it, the mutex will prevent duplicate execution
 		writeDebugLog(fmt.Sprintf("Executing startup job: %s", job.Name))
-		go a.executeScheduledJob(job)
+		go a.executeScheduledJob(job, "") // cron/startup-triggered: no server request
 	}
 }
 
@@ -549,13 +549,13 @@ func (a *App) checkAndRunScheduledJobs() {
 		// Check if it's time to run (within 2 minute window to avoid missing)
 		if shouldRun {
 			writeDebugLog(fmt.Sprintf("[Scheduler] Executing scheduled job: %s", job.Name))
-			go a.executeScheduledJob(job)
+			go a.executeScheduledJob(job, "") // cron-triggered: no server request
 		}
 	}
 }
 
 // executeScheduledJob executes a scheduled job
-func (a *App) executeScheduledJob(job ScheduledJob) {
+func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	// Check if job is already running
 	runningJobsMutex.Lock()
 	if runningJobs[job.ID] {
@@ -590,7 +590,7 @@ func (a *App) executeScheduledJob(job ScheduledJob) {
 	// Control plane: open a run under the job's DISPLAY name (must match the
 	// inventory name so a success clears the server's missed-backup latch).
 	// attachControlPlaneHooks picks this up at BackupOptions construction.
-	registerRunReporter(job.BackupID, job.Name, job.BackupType)
+	registerRunReporter(job.BackupID, job.Name, job.BackupType, requestID)
 
 	err := a.StartBackup(
 		job.BackupType,

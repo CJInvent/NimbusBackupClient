@@ -97,7 +97,16 @@ const (
 // change. The PBS snapshot triple on success is what lets the server detect
 // PBS-side GC/prune later — omit it and the run is never reconciled.
 type RunReport struct {
-	RunUUID       string    `json:"run_uuid"`
+	RunUUID string `json:"run_uuid"`
+	// RequestID is set ONLY for a run the server itself requested (a
+	// portal "Back up now" click resolves to a run_backup command whose
+	// payload carries request_id — see cpHandleCommand's "run_backup"
+	// case). Empty for scheduled and unattributed-manual runs, which is
+	// correct, not a gap: the server never issued a request for those.
+	// Sent on every report for the run, not just the first — the server
+	// only needs it once to ack, but sending it every time means a lost
+	// first report still lets a later one carry the link.
+	RequestID     string    `json:"request_id,omitempty"`
 	JobName       string    `json:"job_name"`
 	BackupType    string    `json:"backup_type"` // "directory" | "machine"
 	Status        RunStatus `json:"status"`

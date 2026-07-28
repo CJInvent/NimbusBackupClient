@@ -46,6 +46,15 @@ func (r *RunReporter) SetPBSTarget(server, datastore, namespace string) {
 	r.base.PBSServer, r.base.PBSDatastore, r.base.PBSNamespace = server, datastore, namespace
 }
 
+// SetRequestID links this run back to a server-issued Backup Request ID —
+// call before the first post (Preparing) for a run that originated from a
+// run_backup command carrying one. Leave unset for scheduled and
+// unattributed-manual runs; the server treats an absent request_id as a
+// legitimate origin, not missing data.
+func (r *RunReporter) SetRequestID(requestID string) {
+	r.base.RequestID = requestID
+}
+
 func (r *RunReporter) Preparing() { r.post(StatusPreparing, nil) }
 
 // Running MUST only be called after VSS confirmed the shadow copy (or, for

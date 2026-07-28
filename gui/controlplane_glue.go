@@ -253,6 +253,7 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 	switch cmd.Command {
 	case "run_backup":
 		name, _ := cmd.Payload["job"].(string)
+		requestID, _ := cmd.Payload["request_id"].(string)
 		jobs, err := a.GetScheduledJobs()
 		if err != nil {
 			return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": err.Error()}}
@@ -260,7 +261,7 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 		for _, j := range jobs {
 			if j.Name == name || j.ID == name {
 				job := j
-				go a.executeScheduledJob(job) // long work off the check-in loop
+				go a.executeScheduledJob(job, requestID) // long work off the check-in loop
 				return controlplane.CommandResult{OK: true, Result: map[string]interface{}{"note": "backup dispatched"}}
 			}
 		}
@@ -338,11 +339,14 @@ var ErrRestoreDisabled = errors.New("file restore is disabled on this machine by
 
 // registerRunReporter is called by executeScheduledJob (which knows the
 // job's display name) BEFORE StartBackup. backupID may be "".
-func registerRunReporter(backupID, jobName, backupType string) {
+func registerRunReporter(backupID, jobName, backupType, requestID string) {
 	if cpClient == nil {
 		return
 	}
 	rep := cpClient.NewRun(jobName, backupType)
+	if requestID != "" {
+		rep.SetRequestID(requestID) // before Preparing(), so even the FIRST report carries it
+	}
 	rep.Preparing()
 	cpReportersMu.Lock()
 	defer cpReportersMu.Unlock()
