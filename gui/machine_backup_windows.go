@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"crypto/sha256"
@@ -893,6 +894,7 @@ const machineBackupFailedMsg = errBackupFailedSeeLog
 // RunMachineBackup performs a full physical disk backup
 func RunMachineBackup(opts BackupOptions) error {
 	writeDebugLog("Starting machine backup")
+	startTime := time.Now()
 
 	// Validate options
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
@@ -997,6 +999,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	client.Connect(false, "vm")
 
 	// Parse and backup each physical drive
+	var totalBytes int64
 	for _, dev := range opts.BackupDirs {
 		if !strings.HasPrefix(dev, "\\\\.\\PhysicalDrive") {
 			return fmt.Errorf("invalid physical drive path: %s", dev)
@@ -1014,7 +1017,7 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		_, err = backupWindowsDisk(opts.Ctx, client, int(idx), progress)
+		diskBytes, err := backupWindowsDisk(opts.Ctx, client, int(idx), progress)
 		if err != nil {
 			// A cancelled context means the user pressed Stop; the read abort is
 			// the mechanism, not a fault.
@@ -1023,6 +1026,7 @@ func RunMachineBackup(opts BackupOptions) error {
 			}
 			return fail(fmt.Sprintf("Failed to backup PhysicalDrive%d: %v", idx, err))
 		}
+		totalBytes += diskBytes
 	}
 
 	progress(0.95, "Finalizing backup...")
@@ -1039,8 +1043,37 @@ func RunMachineBackup(opts BackupOptions) error {
 	progress(1.0, "Backup completed")
 	writeDebugLog("Machine backup completed successfully")
 
+	// Report the REAL result, not the finalizer's blind-success guess
+	// (attachControlPlaneHooks's returned func, in controlplane_glue.go).
+	// client.Manifest.BackupID/BackupTime are the actual coordinates PBS
+	// used for this session (BackupTime is set once, inside Connect(),
+	// and never changes afterward) -- exactly what the server needs to
+	// reconcile this run against PBS, and what lets the control plane
+	// stamp the Backup Job ID onto the snapshot itself
+	// (cpStampSnapshotNotes only fires from a real OnResult, never from
+	// the finalizer's fallback, precisely because THAT path has no
+	// trustworthy backup-time to target).
+	//
+	// NewChunks/ReusedChunks are left at zero rather than guessed: per-
+	// disk chunk counters exist inside uploadWorker but are not currently
+	// surfaced up through backupWindowsDisk's return value, so there is
+	// nothing genuine to report here yet. TotalBytes uses the same disk-
+	// capacity figure the engine's own log already reports ("Total disk
+	// size: ..."), not a fabricated number.
+	status := &BackupStatus{
+		Outcome:     OutcomeVerifiedSuccess,
+		BackupID:    client.Manifest.BackupID,
+		BackupTime:  client.Manifest.BackupTime,
+		DurationSec: time.Since(startTime).Seconds(),
+		TotalBytes:  uint64(totalBytes),
+		Message:     "Machine backup completed successfully",
+	}
+
 	if opts.OnComplete != nil {
-		opts.OnComplete(true, "Machine backup completed successfully")
+		opts.OnComplete(true, status.Message)
+	}
+	if opts.OnResult != nil {
+		opts.OnResult(status)
 	}
 
 	return nil
