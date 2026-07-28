@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"pbscommon"
 	"runtime"
 	"strings"
 	"sync"
@@ -468,9 +469,11 @@ func attachControlPlaneHooks(opts *BackupOptions) func(error) {
 			case len(s.SkippedReadError) > 0 || len(s.Directories) > 0 && anyDirFailed(s.Directories):
 				rep.Warning(opts.BackupType, s.BackupID, s.BackupTime,
 					int64(s.TotalBytes), 0, firstLine(s.Message), tail)
+				cpStampSnapshotNotes(opts, rep, s.BackupID, s.BackupTime)
 			default:
 				rep.Success(opts.BackupType, s.BackupID, s.BackupTime,
 					int64(s.TotalBytes), 0, tail)
+				cpStampSnapshotNotes(opts, rep, s.BackupID, s.BackupTime)
 			}
 		}
 		if prevResult != nil {
@@ -511,6 +514,47 @@ func anyDirFailed(dirs []DirResult) bool {
 		}
 	}
 	return false
+}
+
+// cpStampSnapshotNotes attaches this run's Backup Job ID to its PBS
+// snapshot (pbscommon.PBSClient.SetSnapshotNotes), so the snapshot itself
+// -- not just the server's own records -- can be traced back to the run
+// that made it. opts already carries everything needed (BaseURL/AuthID/
+// Secret/Datastore/Namespace/CertFingerprint): no new field threaded
+// through BackupStatus, no second PBS connection reused from the backup
+// itself -- this is a fresh, standalone HTTP call.
+//
+// ONLY called from the OnResult path (the directory engine, which always
+// reports a real BackupStatus with the ACTUAL s.BackupID/s.BackupTime PBS
+// recorded), never from the finalizer's blind-success fallback. That
+// fallback (attachControlPlaneHooks's returned func, used today only when
+// the machine engine reports no BackupStatus at all) has no trustworthy
+// backup-time to target -- guessing one risks silently tagging nothing,
+// or the wrong snapshot, rather than the one that was just created. This
+// is a known, documented gap (see attachControlPlaneHooks's own comment
+// on RunMachineBackup never emitting OnResult): machine-backup snapshots
+// do not get a Job ID stamped until that engine is updated to report a
+// real BackupStatus like the directory engine already does.
+//
+// Best-effort and async: called after the backup already succeeded, so a
+// slow or unreachable PBS must never delay -- or appear to affect -- the
+// run's own already-decided outcome.
+func cpStampSnapshotNotes(opts *BackupOptions, rep *controlplane.RunReporter, backupID string, backupTime int64) {
+	if opts.BaseURL == "" {
+		return // defensive only: a successful backup implies PBS was configured
+	}
+	pbs := &pbscommon.PBSClient{
+		BaseURL: opts.BaseURL, AuthID: opts.AuthID, Secret: opts.Secret,
+		Datastore: opts.Datastore, Namespace: opts.Namespace,
+		CertFingerPrint: opts.CertFingerprint, // note the casing difference from BackupOptions' own field
+	}
+	runUUID := rep.RunUUID()
+	go func() {
+		note := "nimbus-job:" + runUUID
+		if err := pbs.SetSnapshotNotes(opts.BackupType, backupID, backupTime, note); err != nil {
+			writeDebugLog(fmt.Sprintf("[controlplane] failed to stamp PBS snapshot notes for run %s: %v", runUUID, err))
+		}
+	}()
 }
 
 // errorLooksVSS classifies a failure as VSS-side: the sentinel from

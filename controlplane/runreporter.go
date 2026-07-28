@@ -46,6 +46,15 @@ func (r *RunReporter) SetPBSTarget(server, datastore, namespace string) {
 	r.base.PBSServer, r.base.PBSDatastore, r.base.PBSNamespace = server, datastore, namespace
 }
 
+// RunUUID returns this run's Backup Job ID — the same value every
+// RunReport for this run carries on the wire. Exposed so a caller can tag
+// the PBS snapshot itself with it (see pbscommon.SetSnapshotNotes),
+// completing the correlation chain down to the artifact PBS actually
+// stores, not just the server's own records of the run.
+func (r *RunReporter) RunUUID() string {
+	return r.base.RunUUID
+}
+
 // SetRequestID links this run back to a server-issued Backup Request ID —
 // call before the first post (Preparing) for a run that originated from a
 // run_backup command carrying one. Leave unset for scheduled and
