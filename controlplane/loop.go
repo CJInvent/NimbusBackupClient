@@ -1,7 +1,9 @@
 package controlplane
 
 import (
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,13 +180,40 @@ func (a *Agent) CheckinNow() {
 		a.OnPolicy(resp.Policy)
 	}
 
+	if n := len(resp.Commands); n > 0 {
+		// This log line is the one thing standing between "a command went
+		// missing" and "nobody can tell whether it was ever received" — see
+		// the incident this was added for: three run_backup commands sat at
+		// 'sent' for 15+ hours with no trace anywhere that the client had
+		// (or hadn't) seen them. Cheap and only fires when there's actually
+		// something to report — silent on every empty check-in.
+		ids := make([]string, 0, n)
+		for _, c := range resp.Commands {
+			ids = append(ids, fmt.Sprintf("%d:%s", c.ID, c.Command))
+		}
+		log.Printf("[controlplane] check-in delivered %d command(s): %s", n, strings.Join(ids, ", "))
+	}
+
 	for _, cmd := range resp.Commands {
 		res := CommandResult{OK: false, Result: map[string]interface{}{"error": "no command handler"}}
 		if a.HandleCommand != nil {
 			res = a.safeHandle(cmd)
 		}
+		// Log the DISPATCH outcome (ok/fail + why) regardless of what
+		// happens next. This is the log line that would have shown, in real
+		// time, that a run_backup command was accepted and handed off —
+		// distinct from and logged BEFORE the separate PostCommandResult
+		// call below, so a process restart between the two still leaves a
+		// trace of how far the command got.
+		if res.OK {
+			log.Printf("[controlplane] command %d (%s) dispatched OK", cmd.ID, cmd.Command)
+		} else {
+			log.Printf("[controlplane] command %d (%s) dispatch FAILED: %v", cmd.ID, cmd.Command, res.Result)
+		}
 		if err := a.Client.PostCommandResult(cmd.ID, res); err != nil {
 			log.Printf("[controlplane] command %d result post failed: %v", cmd.ID, err)
+		} else {
+			log.Printf("[controlplane] command %d result posted (ok=%v)", cmd.ID, res.OK)
 		}
 	}
 }
