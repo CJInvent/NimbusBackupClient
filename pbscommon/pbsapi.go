@@ -319,6 +319,54 @@ func (pbs *PBSClient) ListSnapshots() ([]BackupManifest, error) {
 
 }
 
+// SetSnapshotNotes stamps a snapshot's free-text notes field via PBS's
+// admin/datastore/{store}/notes endpoint -- a SEPARATE call from the backup
+// upload protocol itself (Connect/CreateFixedIndex/Finish above), issued
+// after a snapshot already exists. This is how the Backup Job ID (the
+// run_uuid every RunReport already carries — see controlplane.RunReporter)
+// gets attached to the PBS snapshot in a machine-readable, always-present
+// place: `PUT .../notes` is the one part of PBS's API surface meant for
+// exactly this kind of free-text annotation, as opposed to the backup
+// session handshake (backup-type/id/time/store/ns only, no room for an
+// arbitrary tag — confirmed by grepping Connect's query params, not
+// assumed) or the snapshot name itself, which PBS derives entirely from
+// backup-type/id/time and cannot carry extra data.
+//
+// Same auth/TLS pattern as ListSnapshots. Best-effort by design: called
+// after a backup has ALREADY succeeded, so a failure here must never turn
+// a successful backup into a failed one -- the caller logs and moves on.
+func (pbs *PBSClient) SetSnapshotNotes(backupType, backupID string, backupTime int64, notes string) error {
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: pbs.buildTLSConfig()},
+	}
+
+	params := url.Values{}
+	params.Add("backup-type", backupType)
+	params.Add("backup-id", backupID)
+	params.Add("backup-time", fmt.Sprintf("%d", backupTime))
+	params.Add("ns", pbs.Namespace)
+	params.Add("notes", notes)
+	fullURL := fmt.Sprintf("%s/api2/json/admin/datastore/%s/notes?%s", pbs.BaseURL, pbs.Datastore, params.Encode())
+
+	req, err := http.NewRequest(http.MethodPut, fullURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP error: %d - %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 func (pbs *PBSClient) CreateFixedIndex(fic FixedIndexCreateReq) (uint64, error) {
 	jd, err := json.Marshal(fic)
 	if err != nil {
