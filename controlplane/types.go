@@ -45,6 +45,15 @@ type Inventory struct {
 	// server was unreachable.
 	BreakGlassFileRestore bool `json:"break_glass_file_restore"`
 
+	// PBSReachable is this agent's own report of whether ITS configured PBS
+	// server answered a lightweight connectivity check performed around
+	// this same check-in cycle (see pbscommon.PBSClient.CheckConnectivity).
+	// Pointer, not plain bool: omitted (nil) means "no reading this cycle"
+	// -- an agent that has no PBS configured yet, or one whose check hasn't
+	// run -- which the server must NOT confuse with a confirmed false. A
+	// confirmed unreachable is Ptr(false), not omission.
+	PBSReachable *bool `json:"pbs_reachable,omitempty"`
+
 	Extra map[string]interface{} `json:"extra,omitempty"`
 }
 

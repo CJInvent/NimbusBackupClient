@@ -285,6 +285,47 @@ func FetchServerFingerprint(baseURL string) (string, error) {
 	return strings.Join(pairs, ":"), nil
 }
 
+// CheckConnectivity answers one question cheaply: does this agent's
+// configured PBS server currently answer for it. Hits /api2/json/version --
+// PBS's own standard lightweight health/version endpoint, not a real
+// operation against a datastore -- deliberately NOT ListSnapshots, which
+// this same check would otherwise call every ~120s (the check-in cadence)
+// across a whole fleet, adding real, avoidable load to PBS for a question
+// that doesn't need a full snapshot listing to answer.
+//
+// A shorter timeout than the other calls in this file (5s, not 10s):
+// this runs on every check-in cycle and must never be the reason a
+// check-in itself is perceived as slow or hung -- a genuinely reachable
+// PBS answers /version near-instantly, and an unreachable one should be
+// reported as such quickly, not after a long hang.
+//
+// Returns (reachable, error). error is non-nil only for a problem with
+// the check itself (couldn't build the request); a normal "PBS did not
+// answer" or "PBS returned an error" is NOT a Go error here, it is simply
+// reachable=false -- the caller's whole point is to report a bool, and
+// every network/HTTP-status failure IS that bool's false case, not an
+// exceptional condition to bubble up.
+func (pbs *PBSClient) CheckConnectivity() (bool, error) {
+	client := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: pbs.buildTLSConfig()},
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api2/json/version", pbs.BaseURL), nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, nil // network/TLS failure -- unreachable, not a Go error
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+}
+
 func (pbs *PBSClient) ListSnapshots() ([]BackupManifest, error) {
 	client := &http.Client{
 		Timeout:   10 * time.Second,

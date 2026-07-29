@@ -225,6 +225,7 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 	inv := controlplane.Inventory{
 		Jobs:                  []controlplane.InventoryJob{},
 		BreakGlassFileRestore: BreakGlassInEffect(),
+		PBSReachable:          cpCheckPBSReachability(a.config),
 	}
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
@@ -240,6 +241,42 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 		})
 	}
 	return inv
+}
+
+// cpCheckPBSReachability answers the server dashboard's PBS status
+// column/indicator: does this agent's own configured PBS server currently
+// answer for it. nil (not Ptr(false)) when there is nothing meaningful to
+// check yet -- a fresh install with no PBS configured at all -- so the
+// server correctly shows "unknown" rather than a false "unreachable" for a
+// machine that was never told where to back up in the first place. Uses
+// the SAME Validate() bar the backup path itself already gates on
+// (BaseURL/AuthID/Secret/... all present), not a looser one invented just
+// for this check.
+//
+// Synchronous and bounded (CheckConnectivity's own 5s timeout): check-in
+// already makes sequential blocking calls, and 5s is a small, bounded
+// addition to a cycle that happens every ~120s -- not worth the added
+// complexity of an async design for a result that check-in needs to
+// include in this SAME payload anyway.
+func cpCheckPBSReachability(cfg *Config) *bool {
+	pbsCfg := cfg.EffectivePBS()
+	if err := pbsCfg.Validate(); err != nil {
+		return nil
+	}
+	client := &pbscommon.PBSClient{
+		BaseURL: pbsCfg.BaseURL, AuthID: pbsCfg.AuthID, Secret: pbsCfg.Secret,
+		Datastore: pbsCfg.Datastore, Namespace: pbsCfg.Namespace,
+		CertFingerPrint: pbsCfg.CertFingerprint,
+	}
+	reachable, err := client.CheckConnectivity()
+	if err != nil {
+		// A problem with the check itself (couldn't build the request) --
+		// not a real connectivity answer either way. Leave it unknown
+		// rather than report a possibly-wrong true/false.
+		writeDebugLog(fmt.Sprintf("[controlplane] PBS connectivity check failed to run: %v", err))
+		return nil
+	}
+	return &reachable
 }
 
 // cpHandleCommand executes server commands. Idempotence: run_backup rides
