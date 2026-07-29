@@ -251,6 +251,10 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 	if res, handled := a.cpHandleBrowseCommand(cmd); handled {
 		return res
 	}
+	// Portal-requested run log fetch — see controlplane_runlog.go.
+	if res, handled := a.cpHandleRunLogCommand(cmd); handled {
+		return res
+	}
 	switch cmd.Command {
 	case "run_backup":
 		name, _ := cmd.Payload["job"].(string)
