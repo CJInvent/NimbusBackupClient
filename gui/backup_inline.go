@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"controlplane"
 	"pbscommon"
 	"retry"
 	"security"
@@ -63,6 +64,16 @@ type BackupOptions struct {
 	// The portal's "backing up" state is defined by this signal — do not
 	// move it earlier. Nil-safe; fires once per directory.
 	OnPhase func(phase string)
+	// OnMilestone reports granular checkpoint-timeline detail to the
+	// control plane -- a specific partition finishing, a VSS sub-step --
+	// that OnPhase's single lifecycle string cannot carry. checkpoint must
+	// be one of controlplane.CheckpointBackupStart/SnapshotVSS/
+	// DisksPartitions/Finalization; level is "info"/"warning"/"error".
+	// Nil-safe. Unlike OnResult/OnComplete this is never gated by whether
+	// the run has already reached a terminal outcome -- a milestone is
+	// additive timeline detail, not a status transition, so a late one is
+	// still meaningful rather than a regression to suppress.
+	OnMilestone func(checkpoint, level, message string)
 }
 
 // vssCreateFailedMarker tags errors that occurred BEFORE the VSS shadow
@@ -781,7 +792,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		// PBS dedupes chunks, so retrying is cheap for the already-uploaded data.
 		var err error
 		for attempt := 1; attempt <= maxDirAttempts; attempt++ {
-			err = backupDirectory(opts.Ctx, client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase)
+			err = backupDirectory(opts.Ctx, client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase, opts.OnMilestone)
 			if err == nil {
 				break
 			}
@@ -987,7 +998,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	return nil
 }
 
-func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string)) error {
+func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string), onMilestone func(checkpoint, level, message string)) error {
 	writeBackupLog(fmt.Sprintf("Starting backup of %s", backupdir))
 	originalPath := backupdir
 
@@ -997,12 +1008,20 @@ func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk,
 		// with the VSS marker so the control plane reports vss_failed; an
 		// error after the callback entered is an upload-side failure.
 		vssConfirmed := false
+		if onMilestone != nil {
+			onMilestone(controlplane.CheckpointSnapshotVSS, "info",
+				fmt.Sprintf("Requesting VSS snapshot for %s", backupdir))
+		}
 		err := snapshot.CreateVSSSnapshot([]string{backupdir}, func(snaps map[string]snapshot.SnapShot) error {
 			vssConfirmed = true
 			// The shadow copy EXISTS here — this is the one true "backing
 			// up" signal the control plane's run state machine keys on.
 			if onPhase != nil {
 				onPhase("running")
+			}
+			if onMilestone != nil {
+				onMilestone(controlplane.CheckpointSnapshotVSS, "info",
+					fmt.Sprintf("VSS snapshot confirmed for %s", backupdir))
 			}
 			for _, snap := range snaps {
 				backupdir = snap.FullPath

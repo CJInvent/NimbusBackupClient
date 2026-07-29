@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"controlplane"
 	"errors"
 	"fmt"
 	"io"
@@ -616,7 +617,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 	return nil
 }
 
-func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index int, progress func(float64, string)) (int64, error) {
+func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index int, progress func(float64, string), onMilestone func(checkpoint, level, message string)) (int64, error) {
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
@@ -671,6 +672,11 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 		}
 		writeDebugLog(fmt.Sprintf("Partition %d: offset=%s, length=%s",
 			E.PartitionNumber, BytesToString(int64(E.StartingOffset)), BytesToString(int64(E.PartitionLength))))
+		if onMilestone != nil {
+			onMilestone(controlplane.CheckpointDisksPartitions, "info", fmt.Sprintf(
+				"PhysicalDrive%d, partition %d: offset=%s, length=%s",
+				index, E.PartitionNumber, BytesToString(int64(E.StartingOffset)), BytesToString(int64(E.PartitionLength))))
+		}
 
 		var letter string = ""
 		for _, V := range vols {
@@ -704,7 +710,21 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 
 	writeDebugLog(fmt.Sprintf("Total disk size: %s", BytesToString(total)))
 
+	if onMilestone != nil && len(snapshotPaths) > 0 {
+		onMilestone(controlplane.CheckpointSnapshotVSS, "info", fmt.Sprintf(
+			"Requesting VSS snapshot for %d partition(s) on PhysicalDrive%d", len(snapshotPaths), index))
+	}
+
 	return total, snapshot.CreateVSSSnapshot(snapshotPaths, func(snapshots map[string]snapshot.SnapShot) error {
+		if onMilestone != nil && len(snapshotPaths) > 0 {
+			// This callback only runs once VSS has actually succeeded --
+			// same product definition OnPhase's own "running" signal
+			// already relies on ("for VSS jobs this fires when the shadow
+			// copy EXISTS") -- so this is a genuine confirmation, not a
+			// guess.
+			onMilestone(controlplane.CheckpointSnapshotVSS, "info", fmt.Sprintf(
+				"VSS snapshot confirmed for PhysicalDrive%d", index))
+		}
 		// Fill gaps between partitions
 		newparts := make([]Partition, 0)
 		var curpos uint64 = 0
@@ -1017,7 +1037,7 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		diskBytes, err := backupWindowsDisk(opts.Ctx, client, int(idx), progress)
+		diskBytes, err := backupWindowsDisk(opts.Ctx, client, int(idx), progress, opts.OnMilestone)
 		if err != nil {
 			// A cancelled context means the user pressed Stop; the read abort is
 			// the mechanism, not a fault.

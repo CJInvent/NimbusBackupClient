@@ -441,6 +441,14 @@ func attachControlPlaneHooks(opts *BackupOptions) func(error) {
 		}
 	}
 
+	prevMilestone := opts.OnMilestone
+	opts.OnMilestone = func(checkpoint, level, message string) {
+		rep.Event(checkpoint, level, message)
+		if prevMilestone != nil {
+			prevMilestone(checkpoint, level, message)
+		}
+	}
+
 	// Guards the finalizer: set by the OnResult path below, read after the
 	// engine returns. Both happen on the engine's goroutine (OnResult is
 	// called synchronously by the engine, the finalizer immediately after
