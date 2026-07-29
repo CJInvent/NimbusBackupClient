@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-29
+
+Backup job correlation, end to end: every run is now traceable from the
+portal's "Back up now" click through to its PBS snapshot, with a live
+timeline and pull-on-demand log detail — plus a standing PBS connectivity
+indicator per machine.
+
+### Added
+- **Backup Job ID + two-stage request/ack.** A portal-triggered "Back up
+  now" now carries a request ID from click through to the run report, so
+  the portal can positively confirm the agent received it instead of
+  inferring receipt from a check-in cycle.
+- **Checkpoint audit trail.** Coarse phase-to-checkpoint mapping plus
+  granular live milestone streaming (VSS requested/confirmed, per-partition
+  detail) from both the directory and machine backup engines.
+- **PBS finalization verification.** A run is only reported done once its
+  PBS snapshot is confirmed to exist and its size matches — closes a gap
+  where a run could be marked successful before PBS had actually finished
+  committing it.
+- **PBS snapshot notes.** The Backup Job ID is now stamped onto the PBS
+  snapshot itself as a `nimbus-job:<uuid>` tag, so a snapshot found in PBS
+  can be traced back to the run that created it. Directory backups only —
+  machine (image) backups don't yet report the real backup-time needed to
+  target the tag safely.
+- **Pull-on-demand full log fetch.** The portal's run report page can now
+  request the agent's own local log, filtered to that run's exact time
+  window (with cross-timezone handling verified against a real
+  America/Chicago fixture), via the existing artifact-upload path.
+- **Detailed run report page.** Stat tiles, origin, a four-checkpoint
+  flowchart, and a "Fetch full log" button.
+- **PBS connectivity status.** Every check-in (~120s), the agent pings its
+  configured PBS server (`/api2/json/version` — a deliberately lightweight
+  check, not a full snapshot listing, to avoid fleet-wide PBS load) and
+  reports reachability. Surfaced on the dashboard, org detail, and a
+  live-refreshing indicator on each machine's page.
+
+### Fixed
+- **Image (machine) backups never reported an outcome to the control
+  plane.** The machine engine only ever posted "preparing" and then
+  nothing — no success, no failure — so a fleet defaulting to any image
+  backup mode never had its backup outcomes tracked server-side at all.
+  Runs now always resolve to a terminal state, and a successful machine
+  backup reports real PBS coordinates (not a guess), which is also what
+  makes PBS snapshot-note tagging possible for that path going forward.
+
+## [0.2.154] - 2026-07-28
+
+### Fixed
+- **Manual backups invisible in local history under the installed Windows
+  service.** "Back up now" through the service build never recorded the
+  run to local `JobHistory` (the GUI-standalone build always had), so a
+  machine's own history list under-reported runs the portal saw fine.
+
+## [0.2.153] - 2026-07-27
+
 ### Fixed
 - **Duplicate/ghost tray icons accumulating over a session.** Root cause is
   two-layered. getlantern/systray never sets NOTIFYICONDATA's GUID, so
@@ -23,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crash's exit code is unaffected either way. A Task Manager kill, debugger
   stop, or power loss remains unrecoverable in userspace; restarting
   explorer.exe (or a reboot) clears anything already leaked.
+- **stdlib `log` output went nowhere under the Windows service.** Nothing
+  in the client ever called `log.SetOutput`, so Go's default (stderr) was
+  silently discarded by the Windows SCM — a service that failed to start,
+  or hit a check-in/command-result/panic error, logged exactly nothing.
+  Fixed with a catch-all redirect as the first statement of both entry
+  points, capturing stdlib output from every package including third-party
+  deps.
 
 ## [0.2.152] - 2026-07-22
 
