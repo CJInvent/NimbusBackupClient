@@ -18,7 +18,7 @@ func TestFilterLogByTimeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	lines := []string{
 		"[SERVICE] [2026-07-28 09:00:00] Before the window entirely",
@@ -102,11 +102,13 @@ func TestFilterLogByTimeWindowCrossTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	if _, err := f.WriteString(localLine + "\n"); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	// A UTC window that legitimately contains trueMoment.
 	winStart := trueMoment.Add(-1 * time.Minute)
