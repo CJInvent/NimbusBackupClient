@@ -83,6 +83,23 @@ type CheckinResponse struct {
 	Commands       []Command `json:"commands"`
 	CheckinSeconds int       `json:"checkin_seconds"`
 	Policy         Policy    `json:"policy"`
+
+	// CheckinOffsetSeconds is this agent's assigned slot within the
+	// check-in interval's epoch-aligned grid (see NextAligned in
+	// schedule.go). Server-computed (Nimbus\Agents\PollSchedule),
+	// deterministic per agent ID -- reconnecting or restarting never
+	// reassigns it. Zero is a valid offset, not "unset".
+	CheckinOffsetSeconds int `json:"checkin_offset_seconds"`
+
+	// PBSPollIntervalSeconds/PBSPollOffsetSeconds are the server-assigned
+	// schedule for the INDEPENDENT PBS-connectivity poll (see
+	// gui/controlplane_pbspoll.go) -- decoupled from the check-in cadence
+	// above specifically so a live PBS network round-trip does not run on
+	// every ~120s check-in across a whole fleet. Same NextAligned grid
+	// mechanism, same PollSchedule server-side offset assignment, just a
+	// separate (longer) interval.
+	PBSPollIntervalSeconds int `json:"pbs_poll_interval_seconds"`
+	PBSPollOffsetSeconds   int `json:"pbs_poll_offset_seconds"`
 }
 
 // RunStatus values — the server's state machine is forward-only

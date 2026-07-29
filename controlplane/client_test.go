@@ -34,9 +34,12 @@ func fakeServer(t *testing.T) (*httptest.Server, *atomic.Int64) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(CheckinResponse{
-			Commands:       []Command{{ID: 1, Command: "run_backup", Payload: map[string]interface{}{"job": "J1"}}},
-			CheckinSeconds: 300,
-			Policy:         Policy{FileRestore: true},
+			Commands:               []Command{{ID: 1, Command: "run_backup", Payload: map[string]interface{}{"job": "J1"}}},
+			CheckinSeconds:         300,
+			Policy:                 Policy{FileRestore: true},
+			CheckinOffsetSeconds:   77,
+			PBSPollIntervalSeconds: 1800,
+			PBSPollOffsetSeconds:   900,
 		})
 	})
 
@@ -90,6 +93,39 @@ func TestEnrollCheckinAndPolicy(t *testing.T) {
 	}
 	if a.interval.Load() != 300 {
 		t.Fatalf("interval not adopted: %d", a.interval.Load())
+	}
+}
+
+func TestCheckinAppliesSchedule(t *testing.T) {
+	srv, _ := fakeServer(t)
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL}
+	resp, err := c.Enroll(EnrollRequest{Token: "good-token", Hostname: "h"})
+	if err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	c.AgentID, c.Secret = resp.AgentID, resp.Secret
+
+	var gotInterval, gotOffset int
+	var scheduleCalls atomic.Int64
+	a := &Agent{
+		Client: c,
+		OnPBSPollSchedule: func(intervalSeconds, offsetSeconds int) {
+			gotInterval, gotOffset = intervalSeconds, offsetSeconds
+			scheduleCalls.Add(1)
+		},
+	}
+	a.CheckinNow()
+
+	if a.checkinOffset.Load() != 77 {
+		t.Fatalf("checkin offset not adopted: got %d, want 77", a.checkinOffset.Load())
+	}
+	if scheduleCalls.Load() != 1 {
+		t.Fatalf("OnPBSPollSchedule not called exactly once: got %d calls", scheduleCalls.Load())
+	}
+	if gotInterval != 1800 || gotOffset != 900 {
+		t.Fatalf("PBS poll schedule not applied correctly: got interval=%d offset=%d, want 1800/900", gotInterval, gotOffset)
 	}
 }
 

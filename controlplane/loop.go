@@ -30,6 +30,7 @@ type Status struct {
 //	    BuildInventory: buildInventoryFromJobs,  // called each check-in
 //	    HandleCommand:  dispatchCommand,         // idempotent!
 //	    OnPolicy:       applyPolicy,             // optional push notification
+//	    OnPBSPollSchedule: applyPBSPollSchedule, // optional push notification
 //	}
 //	go agent.Run(stopCh)
 type Agent struct {
@@ -47,6 +48,15 @@ type Agent struct {
 	// OnPolicy is invoked whenever a check-in delivers the policy set
 	// (i.e. every cycle). Optional; CurrentPolicy() is always available.
 	OnPolicy func(Policy)
+
+	// OnPBSPollSchedule is invoked whenever a check-in delivers a PBS-poll
+	// interval/offset (i.e. every cycle) — the GUI's independent PBS
+	// poller (gui/controlplane_pbspoll.go) wires this up to stay aligned
+	// with the server-assigned schedule without the check-in loop itself
+	// knowing anything about PBS. Same "push notification" shape as
+	// OnPolicy, same reason: whoever owns the reacting behavior should own
+	// the callback, not this loop.
+	OnPBSPollSchedule func(intervalSeconds, offsetSeconds int)
 
 	AgentVersion string
 
@@ -68,7 +78,12 @@ type Agent struct {
 	policy   atomic.Value // Policy
 	policyAt atomic.Value // time.Time — when policy was last confirmed
 	interval atomic.Int64 // seconds, server-driven
-	mu       sync.Mutex   // serializes forced check-ins with the loop
+	// checkinOffset is this agent's assigned slot in the check-in grid
+	// (see NextAligned). Defaults to 0 (aligned to the epoch itself) until
+	// the first check-in response assigns a real value — an agent that has
+	// never talked to the server has nothing to stagger against yet.
+	checkinOffset atomic.Int64
+	mu            sync.Mutex // serializes forced check-ins with the loop
 
 	statusMu sync.Mutex
 	status   Status
@@ -137,15 +152,26 @@ func (a *Agent) PolicyIsStale() bool {
 // Run blocks, checking in on the server-provided cadence until stop closes.
 // Failures never kill the loop: the agent keeps working offline and the
 // next successful check-in resynchronizes everything (policy, commands).
+//
+// The FIRST check-in fires immediately (unchanged from before this schedule
+// existed) — a freshly (re)started agent should announce itself and pick up
+// pending commands right away, not sit idle for up to a full interval.
+// EVERY check-in after that waits on NextAligned rather than a flat
+// interval-after-last-run sleep, so the loop self-corrects onto the
+// server-assigned grid within one cycle even after an arbitrary-length
+// restart delay — see schedule.go's doc comment for why this matters for a
+// fleet that reboots together (e.g. after Windows Update).
 func (a *Agent) Run(stop <-chan struct{}) {
 	a.interval.Store(120) // contract default until the server says otherwise
+	a.CheckinNow()
 	for {
-		a.CheckinNow()
+		wait := NextAligned(time.Now(), int(a.interval.Load()), int(a.checkinOffset.Load()))
 		select {
 		case <-stop:
 			return
-		case <-time.After(time.Duration(a.interval.Load()) * time.Second):
+		case <-time.After(wait):
 		}
+		a.CheckinNow()
 	}
 }
 
@@ -171,6 +197,10 @@ func (a *Agent) CheckinNow() {
 	if resp.CheckinSeconds >= 30 { // refuse absurd values; floor at 30 s
 		a.interval.Store(int64(resp.CheckinSeconds))
 	}
+	// Offset has no meaningful floor/ceiling of its own — NextAligned already
+	// normalizes any value mod the current interval, so an offset larger
+	// than (or equal to) the interval is harmless, not a value to reject.
+	a.checkinOffset.Store(int64(resp.CheckinOffsetSeconds))
 
 	// Policy is applied BEFORE commands run, so a command executes under
 	// the policy that shipped alongside it.
@@ -178,6 +208,9 @@ func (a *Agent) CheckinNow() {
 	a.policyAt.Store(time.Now())
 	if a.OnPolicy != nil {
 		a.OnPolicy(resp.Policy)
+	}
+	if a.OnPBSPollSchedule != nil {
+		a.OnPBSPollSchedule(resp.PBSPollIntervalSeconds, resp.PBSPollOffsetSeconds)
 	}
 
 	if n := len(resp.Commands); n > 0 {

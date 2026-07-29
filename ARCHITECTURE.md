@@ -460,6 +460,36 @@ Where a rule has a war story, it is cited — these are not hypotheticals.
     README / ARCHITECTURE / CONTROL-PLANE / the NimbusControl AGENT-API
     updates the doc in the same commit. This file's "current version" line
     and Phase 0 are part of that contract.
+19. **Recurring/scheduled behavior goes through one shared primitive, never
+    a bespoke timer.** `controlplane.NextAligned` is the single place "wait
+    for my next turn on a server-assigned interval+offset" is computed;
+    every recurring background task — the check-in loop, the
+    PBS-connectivity poller — calls it rather than rolling a raw
+    `time.After(interval)` loop. A naive per-task ticker resynchronizes an
+    entire fleet after a shared restart event (a mass Windows Update reboot
+    puts every agent back on an identical clock); epoch-aligned scheduling
+    makes that free, once, for every future scheduled task, instead of a
+    problem each new one has to solve again. Before adding a new recurring
+    task, check whether existing code already performs the underlying work
+    and only needs a schedule change: the PBS-connectivity check itself was
+    not new work when its polling was decoupled from the check-in cadence
+    (v0.3.1) — `pbscommon.PBSClient.CheckConnectivity` (via
+    `cpCheckPBSReachability`) had existed since the original PBS-status
+    feature; only its caller and cadence moved, into one dedicated file
+    (`gui/controlplane_pbspoll.go`), not scattered across whatever pages or
+    handlers happen to care about PBS status.
+    19a. **Keep three layers separate: UI action, client scheduling, server
+    directive.** A button click (`App.TestPBSConnection`) is a one-shot user
+    action and must never be conflated with a recurring background poll
+    just because both happen to use the same underlying client type. A
+    client-side scheduler (`controlplane_pbspoll.go`) owns *when* a
+    recurring task runs; it does not decide *whether* or *how often* — that
+    is a directive the server hands down at check-in
+    (`CheckinResponse.PBSPollIntervalSeconds/OffsetSeconds`) and the client
+    applies without local override logic. Collapsing these into one
+    function or one file is how a manual test action and a fleet-wide
+    background poll end up accidentally sharing failure handling, timeouts,
+    or logging that only makes sense for one of them.
 
 ---
 

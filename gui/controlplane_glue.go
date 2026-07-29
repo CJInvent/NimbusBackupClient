@@ -96,9 +96,14 @@ func (a *App) StartControlPlane() {
 		OnPolicy: func(p controlplane.Policy) {
 			writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
 		},
+		OnPBSPollSchedule: func(intervalSeconds, offsetSeconds int) {
+			updatePBSPollSchedule(intervalSeconds, offsetSeconds)
+			writeDebugLog(fmt.Sprintf("[controlplane] PBS poll schedule: interval=%ds offset=%ds", intervalSeconds, offsetSeconds))
+		},
 	}
 	cpStop = make(chan struct{})
 	go cpAgent.Run(cpStop)
+	a.startPBSPoller()
 }
 
 // StopControlPlane halts the check-in loop (config change / shutdown).
@@ -110,6 +115,7 @@ func (a *App) StopControlPlane() {
 		cpStop = nil
 	}
 	cpAgent, cpClient = nil, nil
+	a.stopPBSPoller()
 }
 
 // RestartControlPlane applies a changed control-server config live.
@@ -172,6 +178,12 @@ func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 			out["last_attempt"] = st.LastAttempt.UTC().Format(time.RFC3339)
 		}
 	}
+	if checkedAt := cachedPBSCheckedAt(); !checkedAt.IsZero() {
+		out["pbs_last_checked_at"] = checkedAt.UTC().Format(time.RFC3339)
+	}
+	if reachable := cachedPBSReachable(); reachable != nil {
+		out["pbs_reachable"] = *reachable
+	}
 	return out
 }
 
@@ -225,7 +237,10 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 	inv := controlplane.Inventory{
 		Jobs:                  []controlplane.InventoryJob{},
 		BreakGlassFileRestore: BreakGlassInEffect(),
-		PBSReachable:          cpCheckPBSReachability(a.config),
+		// Cached result from the independent PBS poller (controlplane_pbspoll.go),
+		// NOT a live call — see that file's top comment for why check-in
+		// stopped triggering a fresh PBS network round-trip every ~120s.
+		PBSReachable: cachedPBSReachable(),
 	}
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
