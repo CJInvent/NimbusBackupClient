@@ -111,6 +111,39 @@ func (r *RunReporter) Failed(errSummary, logTail string) {
 	})
 }
 
+// Checkpoint(s) a milestone event can be filed under — must match the
+// server's exact vocabulary (AgentApi::runEvent's whitelist) or the post
+// is rejected outright. Compile-time constants so a typo here is a build
+// error, not a silently-swallowed 400 discovered later.
+const (
+	CheckpointBackupStart     = "backup_start"
+	CheckpointSnapshotVSS     = "snapshot_vss"
+	CheckpointDisksPartitions = "disks_partitions"
+	CheckpointFinalization    = "finalization"
+)
+
+// Event posts one granular milestone line to this run's checkpoint
+// timeline — a specific partition finishing, a VSS sub-step. Unlike
+// Preparing/Running/Success/etc., this is NOT gated by r.terminal: a
+// milestone is additional timeline detail, not a status transition, and a
+// late-arriving one (e.g. a partition-completion message that lands after
+// the terminal report already went out) is still meaningful, not a
+// regression to guard against.
+//
+// Fire-and-forget on its own goroutine, matching every other report in
+// this file — a lost milestone is harmless (the coarse checkpoint mapping
+// already covers the run's overall outcome regardless), so this never
+// blocks the caller on network I/O.
+func (r *RunReporter) Event(checkpoint, level, message string) {
+	go func() {
+		if err := r.c.PostRunEvent(r.base.RunUUID, RunEvent{
+			Checkpoint: checkpoint, Level: level, Message: clip(message, 2000),
+		}); err != nil {
+			log.Printf("[controlplane] run %s milestone event (%s) failed: %v", r.base.RunUUID, checkpoint, err)
+		}
+	}()
+}
+
 func (r *RunReporter) post(status RunStatus, mutate func(*RunReport)) {
 	if r.terminal {
 		return // never report past a terminal state (mirrors server rule)

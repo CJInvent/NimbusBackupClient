@@ -119,6 +119,56 @@ func TestRunReporterForwardOnly(t *testing.T) {
 // JSON, not just an in-memory field nothing reads. Regression guard for the
 // two-stage ack: the server can only link a run to a Backup Request if
 // request_id is genuinely present in the body it receives.
+// TestRunReporterEvent proves Event() posts to the exact URL the server
+// expects (/api/agent/v1/runs/{uuid}/events, uuid from the path not the
+// body), with the checkpoint/level/message fields intact, and that it is
+// NOT gated by r.terminal — a milestone can still land after a terminal
+// report, since it's timeline detail, not a status transition.
+func TestRunReporterEvent(t *testing.T) {
+	var gotPath string
+	var gotBody RunEvent
+	bodies := make(chan struct{}, 4)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agent/v1/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	})
+	mux.HandleFunc("/api/agent/v1/runs/", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		bodies <- struct{}{}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, AgentID: 7, Secret: "s3cret"}
+	rep := c.NewRun("J", "machine")
+	rep.Preparing()
+	rep.Success("vm", "DESKTOP-01", 1700000123, 0, 0, "")
+
+	rep.Event(CheckpointDisksPartitions, "info", "Partition 2: 100MB, backed up successfully")
+	select {
+	case <-bodies:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event post never landed")
+	}
+
+	wantPath := "/api/agent/v1/runs/" + rep.RunUUID() + "/events"
+	if gotPath != wantPath {
+		t.Errorf("path = %q, want %q", gotPath, wantPath)
+	}
+	if gotBody.Checkpoint != CheckpointDisksPartitions {
+		t.Errorf("checkpoint = %q", gotBody.Checkpoint)
+	}
+	if gotBody.Level != "info" {
+		t.Errorf("level = %q", gotBody.Level)
+	}
+	if gotBody.Message != "Partition 2: 100MB, backed up successfully" {
+		t.Errorf("message = %q", gotBody.Message)
+	}
+}
+
 func TestSetRequestIDOnWire(t *testing.T) {
 	bodies := make(chan map[string]interface{}, 4)
 	mux := http.NewServeMux()

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,7 +38,14 @@ type Client struct {
 	// UserAgent is sent on every request; defaults to "NimbusBackupClient".
 	UserAgent string
 
-	httpc *http.Client
+	// httpOnce guards httpc's lazy construction below -- see http()'s own
+	// comment for why this exists: RunReporter fires every phase/milestone
+	// report on its own goroutine (client.go's post()/RunReporter.Event()),
+	// so two calls to http() from a freshly-constructed Client with no
+	// httpc yet WILL race on the plain "if nil, construct" check this used
+	// to be, without this.
+	httpOnce sync.Once
+	httpc    *http.Client
 }
 
 // MaxBodyBytes mirrors the server's request cap; responses are read with
@@ -48,41 +56,47 @@ const MaxBodyBytes = 256 << 10
 // than the pinned one. It is a PERMANENT condition — callers must not retry it.
 var ErrCertPinMismatch = errors.New("controlplane: certificate fingerprint mismatch")
 
+// http lazily builds the shared *http.Client, exactly once, safe for
+// concurrent callers. FOUND BY THE RACE DETECTOR, not by inspection: every
+// RunReporter call (Preparing/Running/Success/Event/...) fires its report
+// on its own goroutine, so two of them landing close together on a
+// freshly-constructed Client -- completely normal, e.g. Preparing()
+// immediately followed by the first Event() -- used to race on a plain
+// "if c.httpc != nil { return }" check with no synchronization at all.
 func (c *Client) http() *http.Client {
-	if c.httpc != nil {
-		return c.httpc
-	}
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if c.CertFingerprint != "" {
-		want := strings.ToLower(strings.ReplaceAll(c.CertFingerprint, ":", ""))
-		// verifyPin enforces the SHA-256 leaf match. It is wired through
-		// VerifyConnection (NOT VerifyPeerCertificate) because the latter is
-		// skipped on resumed TLS sessions — VerifyConnection runs on every
-		// handshake including resumptions, so a mismatched or substituted
-		// certificate is always rejected even though the system trust store
-		// is bypassed (the pin is the trust anchor). This also satisfies
-		// gosec G123.
-		verifyPin := func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return ErrCertPinMismatch
+	c.httpOnce.Do(func() {
+		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		if c.CertFingerprint != "" {
+			want := strings.ToLower(strings.ReplaceAll(c.CertFingerprint, ":", ""))
+			// verifyPin enforces the SHA-256 leaf match. It is wired through
+			// VerifyConnection (NOT VerifyPeerCertificate) because the latter is
+			// skipped on resumed TLS sessions — VerifyConnection runs on every
+			// handshake including resumptions, so a mismatched or substituted
+			// certificate is always rejected even though the system trust store
+			// is bypassed (the pin is the trust anchor). This also satisfies
+			// gosec G123.
+			verifyPin := func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return ErrCertPinMismatch
+				}
+				got := sha256.Sum256(cs.PeerCertificates[0].Raw)
+				if hex.EncodeToString(got[:]) != want {
+					return ErrCertPinMismatch
+				}
+				return nil
 			}
-			got := sha256.Sum256(cs.PeerCertificates[0].Raw)
-			if hex.EncodeToString(got[:]) != want {
-				return ErrCertPinMismatch
+			tlsCfg = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				// #nosec G402 -- deliberate certificate pinning; verification is done by VerifyConnection, not the system trust store
+				InsecureSkipVerify: true,
+				VerifyConnection:   verifyPin,
 			}
-			return nil
 		}
-		tlsCfg = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			// #nosec G402 -- deliberate certificate pinning; verification is done by VerifyConnection, not the system trust store
-			InsecureSkipVerify: true,
-			VerifyConnection:   verifyPin,
+		c.httpc = &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: tlsCfg, ForceAttemptHTTP2: true},
 		}
-	}
-	c.httpc = &http.Client{
-		Timeout:   60 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg, ForceAttemptHTTP2: true},
-	}
+	})
 	return c.httpc
 }
 
@@ -114,6 +128,15 @@ func (c *Client) Checkin(req CheckinRequest) (*CheckinResponse, error) {
 // RunUUID and its state machine is forward-only.
 func (c *Client) ReportRun(r RunReport) error {
 	return c.post("/api/agent/v1/runs", r, nil, true)
+}
+
+// PostRunEvent appends one granular milestone line to a run's checkpoint
+// timeline (POST /api/agent/v1/runs/{uuid}/events) -- detail ReportRun's
+// coarse phase transitions cannot carry (a specific partition finishing,
+// a VSS sub-step). Additive alongside the server's own coarse mapping,
+// never a replacement for it.
+func (c *Client) PostRunEvent(runUUID string, ev RunEvent) error {
+	return c.post("/api/agent/v1/runs/"+runUUID+"/events", ev, nil, true)
 }
 
 // PostCommandResult completes a command (idempotence contract: only 'sent'

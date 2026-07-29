@@ -124,6 +124,20 @@ type RunReport struct {
 	LogTail       string    `json:"log_tail,omitempty"` // <=16 KB
 }
 
+// RunEvent — POST /api/agent/v1/runs/{uuid}/events. One granular milestone
+// line for a run's checkpoint timeline: a specific partition finishing, a
+// VSS sub-step. Checkpoint must be one of the four the server recognizes
+// (backup_start, snapshot_vss, disks_partitions, finalization) or the
+// server rejects it outright — this drives which section of the portal's
+// timeline the line appears under, so getting it wrong is a real error,
+// unlike Level, which the server silently normalizes to "info" if invalid
+// rather than rejecting the whole milestone over a cosmetic field.
+type RunEvent struct {
+	Checkpoint string `json:"checkpoint"`
+	Level      string `json:"level,omitempty"` // "info" | "warning" | "error"; server defaults to info
+	Message    string `json:"message"`
+}
+
 type CommandResult struct {
 	OK     bool                   `json:"ok"`
 	Result map[string]interface{} `json:"result,omitempty"`
