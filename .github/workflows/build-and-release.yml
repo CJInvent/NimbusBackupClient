@@ -1000,11 +1000,21 @@ jobs:
           set -euo pipefail
           V="${{ steps.id.outputs.version }}"
           mkdir -p release
-          for os in Windows Linux; do
+          # runner.os values, verbatim: build-cli's matrix is
+          # [ubuntu-latest, windows-latest, macos-latest] and the artifact is
+          # named cli-${{ runner.os }}. macOS was missing from the first
+          # version of this list, so dev releases silently shipped two of the
+          # three platforms the gate jobs had already built and tested.
+          MISSING=0
+          for os in Windows Linux macOS; do
             if [ -d "artifacts/cli-${os}" ]; then
               (cd "artifacts/cli-${os}" && zip -q "../../release/nimbus-backup-cli-${V}-$(echo "${os}" | tr 'A-Z' 'a-z').zip" *)
+            else
+              echo "::error::artifacts/cli-${os} is missing — build-cli's matrix and this list have drifted"
+              MISSING=1
             fi
           done
+          [ "${MISSING}" = "0" ] || exit 1
           if [ -d artifacts/NimbusBackup-Windows ]; then
             cp artifacts/NimbusBackup-Windows/NimbusBackup.exe "release/NimbusBackup-${V}.exe"
             cp artifacts/NimbusBackup-Windows/NimbusBackup.msi "release/NimbusBackup-${V}.msi"
