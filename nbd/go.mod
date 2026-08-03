@@ -1,6 +1,6 @@
 module pbsnbd
 
-go 1.25
+go 1.26
 
 require pbscommon v0.0.0
 

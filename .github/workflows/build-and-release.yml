@@ -5,17 +5,74 @@ on:
     # master is the default branch: without it here the entire suite only ever
     # ran on tag pushes, i.e. at release time, which is how a Linux build break
     # reached the v0.2.150 tag. Every gate below must run on ordinary pushes.
-    branches: [ main, master, develop, github-release ]
+    #
+    # v4_dev is the v4 integration branch and dev releases are cut from it, so
+    # it carries the identical gate set -- a branch that publishes artifacts
+    # without the trunk's checks is an unaudited release channel.
+    #
+    # 'develop' and 'github-release' are removed: neither exists on the remote.
+    # A trigger naming a branch that isn't there is the same wired-to-nothing
+    # dead weight the v4 audit is meant to clear, and it makes this list read
+    # as though more is covered than actually is.
+    branches: [ main, master, v4_dev ]
     tags:
       - 'v*'
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, v4_dev ]
 
 env:
-  GO_VERSION: '1.25'
+  # Pinned to an exact patch, not '1.26': setup-go resolves a bare minor to
+  # whatever it feels like, which is precisely the silent-fallback the v4 spec
+  # forbids. The toolchain job below asserts what actually got installed.
+  GO_VERSION: '1.26.5'
   NODE_VERSION: '20'
 
 jobs:
+  # --- Toolchain gate: the pinned Go version must be the one actually used ---
+  # setup-go will happily satisfy a loose pin with a different release, and
+  # go.mod's `go` directive will happily be satisfied by a NEWER toolchain
+  # without complaint. Neither failure is visible in a build log you aren't
+  # already suspicious of, so it is asserted here instead of assumed.
+  toolchain:
+    name: Toolchain Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Assert the active Go toolchain
+        run: |
+          set -euo pipefail
+          ACTUAL="$(go env GOVERSION)"
+          EXPECTED="go${GO_VERSION}"
+          echo "expected=${EXPECTED} actual=${ACTUAL}"
+          [ "${ACTUAL}" = "${EXPECTED}" ] || {
+            echo "::error::Go toolchain is ${ACTUAL}, expected ${EXPECTED}."
+            echo "::error::A silent fallback to another release is exactly what the pin exists to prevent."
+            exit 1
+          }
+
+      - name: Assert every module declares the same Go language version
+        run: |
+          set -euo pipefail
+          WANT="1.26"
+          FAIL=0
+          for f in go.work $(git ls-files '*/go.mod' 'go.mod'); do
+            GOT="$(awk '/^go /{print $2; exit}' "$f")"
+            # go.work carries a full x.y.z; go.mod carries x.y.
+            case "$f" in go.work) GOT="${GOT%.*}";; esac
+            if [ "${GOT}" != "${WANT}" ]; then
+              echo "::error file=${f}::declares go ${GOT}, expected ${WANT}"
+              FAIL=1
+            else
+              echo "ok  ${f} -> go ${GOT}"
+            fi
+          done
+          [ "${FAIL}" = "0" ] || exit 1
+
   # Check for outdated dependencies (informational only)
   check-deps:
     name: Check Dependency Updates
@@ -903,6 +960,86 @@ jobs:
           path: |
             dist/NimbusBackup.exe
             dist/NimbusBackup.msi
+
+  # --- Development release: every push to v4_dev ----------------------------
+  # Spec section 14: dev builds must be traceable to the exact revision that
+  # produced them, and must never be mistakable for a stable release.
+  #
+  # This reuses the artifacts the gate jobs already produced rather than
+  # rebuilding them, so what gets published is byte-identical to what was
+  # tested. Version comes from the run number, so no source file is edited
+  # per build. Always a PRERELEASE.
+  dev-release:
+    name: Dev Release (v4_dev)
+    if: github.ref == 'refs/heads/v4_dev' && github.event_name == 'push'
+    needs: [toolchain, build-cli, build-gui, windows-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve build identity
+        id: id
+        run: |
+          set -euo pipefail
+          {
+            echo "version=v4.0.0-dev.${GITHUB_RUN_NUMBER}"
+            echo "short=$(git rev-parse --short "${GITHUB_SHA}")"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          V="${{ steps.id.outputs.version }}"
+          mkdir -p release
+          for os in Windows Linux; do
+            if [ -d "artifacts/cli-${os}" ]; then
+              (cd "artifacts/cli-${os}" && zip -q "../../release/nimbus-backup-cli-${V}-$(echo "${os}" | tr 'A-Z' 'a-z').zip" *)
+            fi
+          done
+          if [ -d artifacts/NimbusBackup-Windows ]; then
+            cp artifacts/NimbusBackup-Windows/NimbusBackup.exe "release/NimbusBackup-${V}.exe"
+            cp artifacts/NimbusBackup-Windows/NimbusBackup.msi "release/NimbusBackup-${V}.msi"
+          fi
+          cat > release/build-info.json <<EOF
+          {"version":"${V}","build_type":"dev","branch":"${GITHUB_REF_NAME}","commit":"${GITHUB_SHA}","build_number":"${GITHUB_RUN_NUMBER}","build_date":"${{ steps.id.outputs.date }}","repository":"${GITHUB_REPOSITORY}"}
+          EOF
+          (cd release && sha256sum * > SHA256SUMS)
+          ls -lh release/
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.id.outputs.version }}
+          name: NimbusBackupClient ${{ steps.id.outputs.version }}
+          prerelease: true
+          body: |
+            **Development build — not a release. Do not install on customer machines.**
+
+            | | |
+            |---|---|
+            | Version | `${{ steps.id.outputs.version }}` |
+            | Build type | `dev` |
+            | Branch | `${{ github.ref_name }}` |
+            | Commit | `${{ github.sha }}` |
+            | Build number | `${{ github.run_number }}` |
+            | Built (UTC) | `${{ steps.id.outputs.date }}` |
+
+            Binaries report `4.0.0-dev-${{ steps.id.outputs.short }}` via
+            `main.appVersion`; the MSI ProductVersion is `4.0.0` because WiX
+            requires a strict numeric tuple. `build-info.json` and
+            `SHA256SUMS` are attached for provenance.
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Create release on tag
   release:
