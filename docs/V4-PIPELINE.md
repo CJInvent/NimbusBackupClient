@@ -24,14 +24,37 @@ backup pipeline:
 | `App.StartBackup` | `gui/main.go:767` | `gui/app_service_stubs.go:39` |
 | executes via | `startBackupDirect` (`main.go:911`) | inline, same function |
 | engines called | `RunMachineBackup` / `RunBackupInline` | `RunMachineBackup` / `RunBackupInline` |
-| sets `opts.OnResult` | **yes** (`main.go:~1080`) | **no** |
+| sets `opts.OnResult` | **yes** (Wails event only) | **no** |
 | writes local job history | yes | yes, separately |
 
 Two implementations of one operation, each ~150 lines of option assembly,
-already diverging. `OnResult` is the divergence with teeth: it is the hook
-that produces the per-snapshot status sidecar (`BackupStatusFilename`,
-`nimbus-status.json.blob`) and the structured `BackupStatus`. The build that
-sets it is the GUI. The build that runs on every managed machine does not.
+already diverging.
+
+**Correction to an earlier draft of this document.** It claimed `OnResult` was
+the divergence with teeth, on the grounds that it writes the per-snapshot
+status sidecar (`nimbus-status.json.blob`). That is wrong: the sidecar is
+uploaded by `RunBackupInline` itself (`backup_inline.go:1225`), and `OnResult`
+in the GUI build only emits a `backup:result` Wails event. The claim was made
+from the call site's name without following it to the writer, and it went into
+a commit message before it was checked.
+
+The real divergences, found when the two copies were merged in §3.1, are worse
+and less interesting-sounding. The SERVICE build — the one on every managed
+machine — was missing all of these, which the GUI copy had:
+
+- `security.ValidateBackupID` on the id that becomes a PBS snapshot path
+- `security.ValidatePath` on every directory handed to the engine
+- `pbsCfg.Validate()`, so a half-configured target fails with a reason
+- the empty-target checks (`errDirRequired` / `errDiskRequired`)
+- the `isAdmin()` check before raw `\\.\PhysicalDriveN` access
+
+And one the GUI copy was missing: it read `DisableSplit` and `SplitSizeBytes`
+from `a.config` rather than from the resolved `pbsCfg`, so a multi-PBS-only
+configuration — precisely the one audit M-01/M-04 was raised about — ignored
+the per-server split settings.
+
+None of that was a decision. It is what two copies of one function look like
+after a year of fixes landing in whichever copy the bug was reported against.
 
 That is the shape of the whole problem: the *older* path — direct in-process
 execution, inherited from the upstream `proxmoxbackupclient_go` standalone
@@ -288,8 +311,15 @@ steps 1-2 are additive and independently shippable.
    where its shape is decided. Nothing about the reported bug depends on it —
    a running backup is now visible whether or not the table changes. Start button
    still works as it does; it just no longer has a private view.
-3. **Move option assembly into one service-side function**; the GUI build's
-   `StartBackup` becomes an HTTP POST and nothing else.
+3. ~~**Move option assembly into one service-side function.**~~ **Done.**
+   `gui/backup_pipeline.go` is the single pipeline; both builds call
+   `runBackupPipeline`. The only genuinely build-specific thing left is
+   whether the process has a Wails window to emit into, isolated behind
+   `emitBackupEvent` (real in the GUI build, a no-op in the service).
+   `pollBackupProgress` is deleted — a per-job poller relaying the same
+   numbers through events was a second observation path, and the front end
+   now polls `/runs/active` for every run. The GUI build's `StartBackup`
+   becoming an HTTP POST and nothing else lands with step 4.
 4. **Drop the engine from the GUI build** (Q1 decides how).
 5. **Read-only mode**, which by then is the ordinary panel minus the
    mutating endpoints, and is enforced by handlers already written.

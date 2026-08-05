@@ -883,290 +883,48 @@ func (a *App) startBackupViaService(backupType string, backupDirs []string, driv
 
 	writeDebugLog(fmt.Sprintf("[Service Mode] Backup started: %s (JobID: %s)", resp.Message, resp.JobID))
 
-	// Start polling for progress updates
-	go a.pollBackupProgress(resp.JobID)
+	// No poller is started here. The front end polls /runs/active every
+	// three seconds for EVERY run, whatever started it, so a second
+	// per-job poller relaying the same numbers through Wails events would
+	// be a parallel observation path to keep in step — the exact shape of
+	// the problem docs/V4-PIPELINE.md exists to remove.
 
 	return nil
 }
 
-// pollBackupProgress polls the service for backup progress and emits events to GUI
-func (a *App) pollBackupProgress(jobID string) {
-	writeDebugLog(fmt.Sprintf("[Service Mode] Starting progress polling for job: %s", jobID))
-	ticker := time.NewTicker(3 * time.Second) // Poll every 3 seconds
-	defer ticker.Stop()
-
-	// Without a bound, a permanently-404ing job (evicted/collided entry, or a
-	// service restart that dropped the progress map) would poll forever. Give up
-	// after a run of consecutive failures so the goroutine can't leak.
-	consecutiveErrors := 0
-	const maxConsecutiveErrors = 20 // ~60s at 3s interval
-
-	for range ticker.C {
-		progress, err := a.apiClient.GetBackupStatus(jobID)
-		if err != nil {
-			consecutiveErrors++
-			writeDebugLog(fmt.Sprintf("[Service Mode] Failed to get progress (%d/%d): %v", consecutiveErrors, maxConsecutiveErrors, err))
-			if consecutiveErrors >= maxConsecutiveErrors {
-				writeDebugLog("[Service Mode] Giving up polling after repeated failures")
-				if a.ctx != nil {
-					runtime.EventsEmit(a.ctx, "backup:complete", map[string]interface{}{
-						"success": false,
-						"message": "Lost contact with backup service (status unavailable)",
-					})
-				}
-				return
-			}
-			continue
-		}
-		consecutiveErrors = 0
-
-		// Emit progress event to GUI
-		if a.ctx != nil && progress.Running {
-			runtime.EventsEmit(a.ctx, "backup:progress", map[string]interface{}{
-				"percent": progress.Progress,
-				"message": progress.Message,
-			})
-			if progress.BytesTotal > 0 {
-				runtime.EventsEmit(a.ctx, "backup:stats", map[string]interface{}{
-					"percent":      progress.Progress,
-					"bytesDone":    progress.BytesDone,
-					"bytesTotal":   progress.BytesTotal,
-					"newChunks":    progress.NewChunks,
-					"reusedChunks": progress.ReusedChunks,
-				})
-			}
-		}
-
-		// If backup completed, emit final event and stop polling
-		if progress.Complete {
-			writeDebugLog(fmt.Sprintf("[Service Mode] Backup completed: success=%v", progress.Success))
-			if a.ctx != nil {
-				runtime.EventsEmit(a.ctx, "backup:complete", map[string]interface{}{
-					"success": progress.Success,
-					"message": progress.Message,
-				})
-			}
-			return
-		}
-	}
-}
-
-// startBackupDirect performs backup directly (standalone mode)
+// startBackupDirect executes a backup in THIS process.
+//
+// Standalone only, and on its way out: docs/V4-PIPELINE.md §3.1 has the GUI
+// build linking no backup engine at all, with the escape hatch moving to a
+// service-side toggle (CJ, 2026-08-05). Until that lands this delegates to the
+// one pipeline rather than carrying a second copy of it.
+//
+// Asynchronous, unlike the service path: the caller is a Wails binding on the
+// UI goroutine and must not block for the length of a backup. Progress reaches
+// the window through the pipeline's events, and — since the run registry — the
+// same three-second poll every other observer uses.
 func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
-	// Use hostname as fallback if backupID is empty
-	if backupID == "" {
-		backupID = a.GetHostname()
-		writeDebugLog(fmt.Sprintf("[Backup ID] Empty backup-id, using hostname: %s", backupID))
+	req := backupRequest{
+		BackupType:   backupType,
+		BackupDirs:   backupDirs,
+		DriveLetters: driveLetters,
+		ExcludeList:  excludeList,
+		BackupID:     backupID,
+		UseVSS:       useVSS,
+		Compression:  compression,
 	}
 
-	// Sanitize backup ID for logging
-	sanitizedID := security.SanitizeForLog(backupID)
-	writeDebugLog(fmt.Sprintf("[Standalone Mode] StartBackup: type=%s, id=%s, vss=%v, compression=%s, dir_count=%d",
-		backupType, sanitizedID, useVSS, compression, len(backupDirs)))
-
-	// Validate BackupID (now guaranteed to be non-empty)
-	if err := security.ValidateBackupID(backupID); err != nil {
-		return fmt.Errorf("backup ID invalide: %w", err)
-	}
-
-	// Validate backup directories
-	for _, dir := range backupDirs {
-		if err := security.ValidatePath(dir); err != nil {
-			return fmt.Errorf("chemin invalide '%s': %w", dir, err)
-		}
-	}
-
-	// Note: Admin check for VSS is done in StartBackup() routing layer
-	// If we're here via service, we're already running as LocalSystem
-
-	// Resolve PBS fields from multi-PBS default when legacy fields are empty
-	pbsCfg := a.config.EffectivePBS()
-
-	// Validate PBS config
-	if err := pbsCfg.Validate(); err != nil {
+	// Validate synchronously so a bad request is refused at the button, not
+	// swallowed into a goroutine the caller cannot see.
+	if err := a.validateBackupRequest(req); err != nil {
 		return err
 	}
 
-	// Validate backup parameters and build target list
-	var targetDirs []string
-	if backupType == "directory" {
-		if len(backupDirs) == 0 {
-			return errors.New(errDirRequired)
-		}
-		targetDirs = backupDirs
-	}
-	if backupType == "machine" {
-		if len(driveLetters) == 0 {
-			return errors.New(errDiskRequired)
-		}
-		// Raw access to \\.\PhysicalDriveN (and the VSS snapshot of its mounted
-		// partitions) always requires elevation. In standalone mode we have no
-		// LocalSystem service to defer to, so fail early with a clear message
-		// instead of an opaque CreateFile "access denied" mid-backup.
-		if !isAdmin() {
-			return errors.New(errAdminRequired)
-		}
-		// Physical drive paths are used directly (e.g., \\.\PhysicalDrive0)
-		targetDirs = driveLetters
-	}
-
-	// PBS archive/backup type: directory backups are stored as host snapshots,
-	// full-volume (machine) backups as vm snapshots holding drive-*.img.fidx,
-	// matching the upstream machinebackup layout the nbd restore tool expects.
-	pbsBackupType := "host"
-	if backupType == "machine" {
-		pbsBackupType = "vm"
-	}
-
-	// Prepare backup options
-	opts := BackupOptions{
-		BaseURL:         pbsCfg.BaseURL,
-		AuthID:          pbsCfg.AuthID,
-		Secret:          pbsCfg.Secret,
-		Datastore:       pbsCfg.Datastore,
-		Namespace:       pbsCfg.Namespace,
-		CertFingerprint: pbsCfg.CertFingerprint,
-		BackupDirs:      targetDirs,
-		BackupID:        backupID,
-		BackupType:      pbsBackupType, // "host" for directory, "vm" for machine
-		UseVSS:          useVSS,
-		Compression:     compression,
-		ExcludeList:     excludeList,
-		DisableSplit:    a.config.DisableSplit,
-		SplitSizeBytes:  a.config.SplitSizeBytes(),
-		OnProgress: func(percent float64, message string) {
-			writeDebugLog(fmt.Sprintf("Progress: %.1f%% - %s", percent*100, message))
-
-			// API mode: feed registered per-job callbacks (percent 0-100)
-			hasCallbacks := a.notifyProgressCallbacks(percent*100, message)
-
-			// If no custom callbacks and we have Wails context, emit events (GUI standalone mode)
-			// NEVER emit events if we're the service process (no Wails runtime)
-			if !hasCallbacks && !a.isServiceProcess && a.ctx != nil {
-				runtime.EventsEmit(a.ctx, "backup:progress", map[string]interface{}{
-					"percent": percent * 100,
-					"message": message,
-				})
-			}
-		},
-		OnComplete: func(success bool, message string) {
-			writeDebugLog(fmt.Sprintf("Backup complete: success=%v, %s", success, message))
-			if !success {
-			} else {
-				a.maybeRunExchangePostBackup()
-			}
-
-			// API mode: notify + clean registered per-job callbacks
-			hasCallbacks := a.notifyCompleteCallbacks(success, message)
-
-			// If no custom callbacks and we have Wails context, emit events (GUI standalone mode)
-			// NEVER emit events if we're the service process (no Wails runtime)
-			if !hasCallbacks && !a.isServiceProcess && a.ctx != nil {
-				runtime.EventsEmit(a.ctx, "backup:complete", map[string]interface{}{
-					"success": success,
-					"message": message,
-				})
-			}
-
-			// Add manual backup to history
-			historyEntry := JobHistory{
-				ID:         fmt.Sprintf("%d", time.Now().Unix()),
-				Name:       fmt.Sprintf("Backup manuel - %s", backupID),
-				Timestamp:  time.Now().Format(time.RFC3339),
-				Status:     "success",
-				Message:    message,
-				BackupDirs: targetDirs,
-				BackupID:   backupID,
-				UseVSS:     useVSS,
-			}
-			if !success {
-				historyEntry.Status = "failed"
-			}
-			if err := a.AddJobHistory(historyEntry); err != nil {
-				writeDebugLog(fmt.Sprintf("Warning: Failed to add manual backup to history: %v", err))
-			}
-
-			// Save last used backup directories on success
-			if success && backupType == "directory" {
-				a.config.LastBackupDirs = backupDirs
-				if err := a.config.Save(); err != nil {
-					writeDebugLog(fmt.Sprintf("Failed to save last backup dirs: %v", err))
-				} else {
-					writeDebugLog(fmt.Sprintf("Saved %d backup directories to config", len(backupDirs)))
-				}
-			}
-		},
-	}
-
-	// Control plane run reporting (no-op when not configured). The returned
-	// finalizer MUST be called with the engine's error — see the call below.
-	cpFinish := attachControlPlaneHooks(&opts)
-	runFinish := attachRunRegistry(&opts)
-
-	// Structured live stats + final structured result for the GUI (standalone mode)
-	// and, in API mode, the registered per-job stats callbacks.
-	opts.UploadLimitMbps = a.config.UploadLimitMbps
-	opts.OnStats = func(stats *BackupProgressStats) {
-		a.notifyStatsCallbacks(stats.BytesDone, stats.BytesTotal, stats.NewChunks, stats.ReusedChunks)
-		if a.isServiceProcess || a.ctx == nil {
-			return
-		}
-		runtime.EventsEmit(a.ctx, "backup:stats", map[string]interface{}{
-			"percent":      stats.Percent * 100,
-			"bytesDone":    stats.BytesDone,
-			"bytesTotal":   stats.BytesTotal,
-			"newChunks":    stats.NewChunks,
-			"reusedChunks": stats.ReusedChunks,
-			"failedChunks": stats.FailedChunks,
-			"currentDir":   stats.CurrentDir,
-			"message":      stats.Message,
-		})
-	}
-	opts.OnResult = func(status *BackupStatus) {
-		if a.isServiceProcess || a.ctx == nil {
-			return
-		}
-		runtime.EventsEmit(a.ctx, "backup:result", map[string]interface{}{
-			"outcome":      string(status.Outcome),
-			"newChunks":    status.NewChunks,
-			"reusedChunks": status.ReusedChunks,
-			"failedChunks": status.FailedChunks,
-			"totalBytes":   status.TotalBytes,
-			"durationSec":  status.DurationSec,
-			"skippedCount": len(status.SkippedReadError),
-		})
-	}
-
-	// A cancellable context so StopBackup can abort this backup cleanly (the
-	// engine unwinds before the index commits and releases the VSS snapshot).
-	ctx, cancel := context.WithCancel(context.Background())
-	opts.Ctx = ctx
-	a.setBackupCancel(cancel)
-
-	// Run backup in a background goroutine so the UI thread isn't blocked.
 	go func() {
-		defer func() {
-			a.setBackupCancel(nil)
-			cancel()
-		}()
-		var err error
-		if backupType == "machine" {
-			// Full-volume backup: raw disk image (FIDX) of each selected
-			// PhysicalDrive, VSS-snapshotting any mounted partitions.
-			err = RunMachineBackup(opts)
-		} else {
-			err = RunBackupInline(opts)
-		}
-		// Report the outcome to the control plane if the engine did not.
-		// RunMachineBackup never emits OnResult, so this is the ONLY thing
-		// that finishes an image backup server-side.
-		cpFinish(err)
-		runFinish(err)
-		if err != nil {
+		if err := a.runBackupPipeline(req); err != nil {
 			writeDebugLog(fmt.Sprintf("Backup error: %v", err))
 		}
 	}()
-
 	return nil
 }
 
