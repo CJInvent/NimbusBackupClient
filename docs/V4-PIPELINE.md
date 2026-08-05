@@ -120,23 +120,46 @@ reachable from the GUI binary. That is stronger than a policy check, and it
 makes the standalone-mode question (V4-CLIENT-CONFIG.md §5.2) moot in the
 default build — there is no code path to fall back *to*.
 
-**Open decision (Q1) — the standalone escape hatch.** CJ's round-2 answer was
-that direct execution becomes a registry toggle rather than an automatic
-fallback. A toggle implies the engine is still linked into the GUI. The
-alternatives:
+**Decision (CJ, 2026-08-05): the escape hatch is a SERVICE-side toggle, and
+the GUI gets no engine.** This is the version that makes the rest of the
+design cheap rather than the version that keeps an engine in the GUI behind
+a flag.
 
-- **(a) Build tag.** Two GUI artifacts: the shipped one has no engine, a
-  `standalone` build does. Strongest, and honest — but it means an MSP that
-  needs the hatch must deploy a different MSI.
-- **(b) Registry toggle, engine linked.** One artifact. The hatch is a flag,
-  and the GUI still contains a backup engine that a modified binary could
-  reach with the flag check patched out.
-- **(c) No hatch at all.** The service is the product; if it is not running,
-  the answer is to fix the service.
+What it means concretely:
 
-Recommendation: **(a)**, with **(c)** as the default deployment. The whole
-point of the lockdown work is that a modified GUI must not be able to do
-anything, and (b) leaves the capability sitting in the binary.
+- The GUI build does not link `RunMachineBackup`, `RunBackupInline` or any
+  option assembly. Not gated — **absent**. A modified GUI has nothing to call.
+- The toggle lives where the brains already are: the service, running as
+  LocalSystem, always on. It governs whether the service may execute
+  **unmanaged** work — local jobs authored on the machine rather than by
+  NimbusControl.
+- `HKLM\SOFTWARE\NimbusBackup`, `REG_DWORD`, following
+  `gui/breakglass_windows.go` exactly: HKLM so setting it needs
+  Administrator, because an override any logged-on user can flip is not an
+  override. Read by the service, never by the GUI.
+
+**The property that makes it safe is the one break-glass already has: locally
+set is necessary but not sufficient.** The service is the thing the control
+plane talks to, so an org policy key can render the toggle inert while the
+server is reachable. A registry flag in the GUI could never have had that —
+the GUI is not on the wire. Precedence:
+
+| Control plane | Registry toggle | Result |
+|---|---|---|
+| reachable, org forbids unmanaged | either | refused, and reported |
+| reachable, org permits unmanaged | on | unmanaged jobs run |
+| reachable, org permits | off | managed jobs only |
+| none configured (unmanaged install) | on | the standalone product works |
+| unreachable, last policy forbade it | on | refused — cached policy holds |
+
+The last row is the fail-closed one, and it matches the existing decision
+that org file-restore policy stays authoritative during an outage
+(`docs/CONTROL-PLANE.md`): during a ransomware event the needed operation is
+a full-machine restore, which is not behind that gate at all.
+
+The bottom two rows are why this cannot simply be "no hatch". The project is
+public GPL-3 and works without NimbusControl; an install with no control
+plane configured is a supported product, not a bypass.
 
 ### 3.2 `ModeStandalone` is split
 
@@ -145,7 +168,8 @@ this design the meanings separate cleanly and the enum stops being a hazard:
 
 - `ModeService` — the GUI, talking to the service. The only shipped GUI mode.
 - `ModeInProcess` — *I am the service*, execute here. Never true in the GUI.
-- `ModeDetached` — the escape hatch of §3.1, if it survives Q1.
+- `ModeDetached` — deleted. With the engine gone from the GUI there is no
+  third mode: the service either runs the work or nothing does.
 
 ### 3.3 The run registry
 
@@ -229,6 +253,9 @@ just additions:
    explain standalone mode to the user, and both are French-only string
    literals in a codebase with an i18n catalog
 5. `handleBackupStatus`'s job-ID lookup, after the deprecation release
+6. The standalone CLI engines from the customer release (§7 item 2), and
+   `directorybackup`'s private `ChunkState`/didx implementation with them
+   once the CLI is a service client
 
 Whatever is left after that is the pipeline.
 
@@ -255,16 +282,55 @@ steps 1-2 are additive and independently shippable.
 
 ---
 
+## 7. The CLI binaries
+
+CJ's requirement: the CLI must not be able to bypass MSP or org policy.
+
+**Today it bypasses everything, because it was never inside anything.**
+`directorybackup/`, `machinebackup/` and `nbd/` are the upstream
+`proxmoxbackupclient_go` tools, shipped in every release (`make cli`, S12
+smoke, `cli-${{ runner.os }}` artifacts). Grepping all three for
+`controlplane`, `Policy` or `file_restore` returns nothing. `directorybackup`
+builds its own `PBSClient` from flags and its own `ChunkState` — a third
+independent copy of the chunking pipeline, alongside the GUI's and the
+service's.
+
+**The honest ceiling first.** Anyone holding PBS credentials and a shell can
+run Proxmox's own `proxmox-backup-client`. No amount of work on our CLI
+changes that, and a design that claims otherwise is lying about its threat
+model. What policy enforcement actually rests on is elsewhere and already
+partly built: per-org PBS namespaces with per-org tokens, quota enforcement
+that revokes PBS write access, and secrets sealed with a DPAPI/TPM-backed DEK
+so the stored credentials are not readable as text.
+
+Given that ceiling, three things are worth doing, in order:
+
+1. **The CLI becomes a client of the service, not an engine.** It talks to
+   the same local API the GUI does — token-authed, same handlers, same
+   policy gates — and inherits every refusal for free. It stops being a
+   fourth pipeline and becomes an automation surface, which is the version
+   of "CLI" an MSP actually wants: scriptable, and no more privileged than
+   the console.
+2. **Stop shipping the standalone engines in the customer release.** They are
+   recovery and development tools. If they remain in the release, they are a
+   supported way to run a backup with no policy in the path, and the MSI's
+   Authenticode signature vouches for them.
+3. **Credentials stay with the service.** The enforcement that survives a
+   local administrator is not a check in our code; it is that the PBS token
+   which can write to the org's namespace is held sealed by the service and
+   not handed to a process that asks nicely.
+
+Item 1 is the one that satisfies the requirement as stated. Items 2 and 3
+are what make it true rather than nominal.
+
+---
+
 ## Open decisions
 
-1. **The standalone escape hatch** — (a) separate build tag, (b) registry
-   toggle with the engine linked, or (c) none. Recommendation (a) shipped as
-   (c). This changes what §3.1 and §5 are allowed to delete, so it is
-   blocking.
-2. **Seven days, or seven days *and* a count?** A machine backing up hourly
+1. **Seven days, or seven days *and* a count?** A machine backing up hourly
    has ~168 runs in a week. Recommendation: the panel shows a per-day rollup
    with the worst outcome of each day, and the last ten runs in full.
-3. **Does read-only hide the log viewer?** It is read-only by nature and is
+2. **Does read-only hide the log viewer?** It is read-only by nature and is
    the first thing a technician wants, but it can contain paths and PBS
    hostnames. Recommendation: keep it, since a locked GUI that cannot show
    why a backup failed sends every question to the MSP helpdesk.
