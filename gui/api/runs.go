@@ -212,6 +212,21 @@ func (r *RunRegistry) Stats(runID string, bytesDone, bytesTotal, newChunks, reus
 	run.ReusedChunks = reusedChunks
 }
 
+// SetBackupID fills in the backup id once the engine has resolved it — the
+// API server can open a run before that is known, because StartBackup
+// substitutes the hostname for an empty id. A run whose id stayed empty would
+// be unidentifiable in the seven-day panel.
+func (r *RunRegistry) SetBackupID(runID, backupID string) {
+	if backupID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run, ok := r.runs[runID]; ok && run.State != RunDone {
+		run.BackupID = backupID
+	}
+}
+
 // SetCurrentDir records which directory or volume is being read.
 func (r *RunRegistry) SetCurrentDir(runID, dir string) {
 	r.mu.Lock()
@@ -368,4 +383,31 @@ func sortNewestFirst(runs []Run) {
 	sort.SliceStable(runs, func(i, j int) bool {
 		return runs[i].StartedAt.After(runs[j].StartedAt)
 	})
+}
+
+// AdoptPreparing hands back the id of the newest run for backupID that is
+// still in RunPreparing, marking nothing — the caller becomes its reporter.
+//
+// WHY ADOPTION RATHER THAN A SECOND Begin: a run is created the moment
+// something DECIDES to back up (the scheduler waking, the API accepting a
+// POST), because the gap before the first chunk uploads is minutes on a large
+// volume and a status panel blank through it is the bug this all started
+// from. But the engine's hooks are only attached later, at BackupOptions
+// construction. If that second site called Begin, every backup would appear
+// twice: once preparing forever, once with the real progress.
+//
+// Matching on the newest preparing run for a backup id mirrors the accepted
+// trade-off already documented in registerRunReporter's cpReporters map, and
+// rests on the same fact: this agent serializes backups, so two runs sharing a
+// backup id AND both sitting in preparing is not a state the product reaches.
+func (r *RunRegistry) AdoptPreparing(backupID string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := len(r.order) - 1; i >= 0; i-- {
+		run, ok := r.runs[r.order[i]]
+		if ok && run.State == RunPreparing && run.BackupID == backupID {
+			return run.RunID, true
+		}
+	}
+	return "", false
 }

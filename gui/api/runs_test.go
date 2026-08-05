@@ -542,3 +542,72 @@ func TestRunsEndpointsRefuseWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestAdoptPreparingPreventsDoubleRegistration(t *testing.T) {
+	// The scheduler (or the API server) opens a run at the moment it decides
+	// to back up; the engine's hooks attach later, at BackupOptions
+	// construction. If that second site opened its own run, every backup
+	// would appear twice — one preparing forever, one with real progress.
+	r, _ := newTestRegistry()
+
+	announced := r.Begin(TriggerSchedule, "job-7", "Nightly-C", "WS-01", "machine")
+	got, ok := r.AdoptPreparing("WS-01")
+	if !ok || got != announced {
+		t.Fatalf("AdoptPreparing = (%q, %v), want (%q, true)", got, ok, announced)
+	}
+
+	// Adoption is by preparing state, so a run already under way is not
+	// stolen by the next backup that happens to share a backup id.
+	r.Progress(announced, 10, "running")
+	if _, ok := r.AdoptPreparing("WS-01"); ok {
+		t.Error("AdoptPreparing took over a run that is already running")
+	}
+
+	// Nor is a finished one.
+	r.Complete(announced, true, "done")
+	if _, ok := r.AdoptPreparing("WS-01"); ok {
+		t.Error("AdoptPreparing resurrected a finished run")
+	}
+}
+
+func TestAdoptPreparingEmptyIDThenBackfill(t *testing.T) {
+	// StartBackup substitutes the hostname when handed an empty backup id,
+	// so a run opened from a POST that carried none must still be findable,
+	// and must get the resolved id written back or it is unidentifiable in
+	// the seven-day panel.
+	r, _ := newTestRegistry()
+	id := r.Begin(TriggerManual, "", "", "", "directory")
+
+	if _, ok := r.AdoptPreparing("WS-01"); ok {
+		t.Fatal("a run with no backup id was adopted by the wrong id")
+	}
+	got, ok := r.AdoptPreparing("")
+	if !ok || got != id {
+		t.Fatalf("AdoptPreparing(\"\") = (%q, %v), want (%q, true)", got, ok, id)
+	}
+
+	r.SetBackupID(got, "WS-01")
+	run, _ := r.Get(got)
+	if run.BackupID != "WS-01" {
+		t.Errorf("BackupID = %q, want the resolved hostname", run.BackupID)
+	}
+
+	// Backfilling with nothing must not blank an id that is already right.
+	r.SetBackupID(got, "")
+	run, _ = r.Get(got)
+	if run.BackupID != "WS-01" {
+		t.Errorf("BackupID = %q after an empty backfill, want it left alone", run.BackupID)
+	}
+}
+
+func TestAdoptPreparingPicksTheNewest(t *testing.T) {
+	r, clk := newTestRegistry()
+	r.Begin(TriggerSchedule, "job-1", "Old", "WS-01", "directory")
+	clk.advance(time.Minute)
+	newer := r.Begin(TriggerSchedule, "job-2", "New", "WS-01", "machine")
+
+	got, ok := r.AdoptPreparing("WS-01")
+	if !ok || got != newer {
+		t.Errorf("AdoptPreparing = %q, want the newest preparing run %q", got, newer)
+	}
+}

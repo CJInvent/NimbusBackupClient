@@ -1,5 +1,16 @@
 # v4 Status — NimbusBackupClient
 
+### Known gap, found 2026-08-05 while building the client locally
+
+`gui/go.mod` does not require `github.com/getlantern/systray` or
+`github.com/kardianos/service`, both of which `gui/` imports directly, and
+`gui/` has no `go.sum` at all. The build only works because every CI job runs
+`go mod tidy` first and resolves the graph from the network at build time.
+That means the dependency set of a shipped, code-signed MSI is not pinned by
+anything in the repository, and `go.sum` does not gate what goes into it.
+Not fixed here — it wants its own commit, and `go mod tidy` output should be
+reviewed rather than taken.
+
 **Last updated:** 2026-08-05. Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in

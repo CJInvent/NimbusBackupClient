@@ -266,10 +266,18 @@ Whatever is left after that is the pipeline.
 The bug is worth fixing before the rewire lands, and it can be, because
 steps 1-2 are additive and independently shippable.
 
-1. **Run registry + `/runs/active` + `/runs/recent` in the service**, and
-   register scheduler-triggered runs in it. Fixes the reported bug on its
-   own: a scheduled backup becomes observable.
-2. **GUI polls the registry** instead of its own history file. Start button
+1. ~~**Run registry + `/runs/active` + `/runs/recent` in the service**, and
+   register scheduler-triggered runs in it.~~ **Done.** `api.RunRegistry` is
+   the single store; `gui/runs_glue.go` opens a record beside
+   `registerRunReporter` when the scheduler decides to run, and
+   `attachRunRegistry` adopts it at `BackupOptions` construction rather than
+   opening a second one. A scheduled backup is now observable at
+   `/runs/active` from the moment it is scheduled, minutes before the first
+   chunk uploads. `/status` reports a real `ActiveJobs` and a stamped
+   version instead of `0` and the literal `"0.1.92"`.
+2. **GUI polls the registry** instead of its own history file — the layer of
+   the bug that is still open. `App.jsx:523` still polls `GetJobHistory()`,
+   a file of finished runs, so the data now exists and nothing renders it. Start button
    still works as it does; it just no longer has a private view.
 3. **Move option assembly into one service-side function**; the GUI build's
    `StartBackup` becomes an HTTP POST and nothing else.

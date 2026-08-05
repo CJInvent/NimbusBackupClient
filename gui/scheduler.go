@@ -591,6 +591,11 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	// inventory name so a success clears the server's missed-backup latch).
 	// attachControlPlaneHooks picks this up at BackupOptions construction.
 	registerRunReporter(job.BackupID, job.Name, job.BackupType, requestID)
+	// ...and the LOCAL record, opened at the same instant. Without this the
+	// GUI cannot see a scheduled backup at all: the run would exist only in
+	// the control plane, and a technician standing at the machine would be
+	// told nothing is running (docs/V4-PIPELINE.md §2.3).
+	registerScheduledRun(job.ID, job.Name, job.BackupID, job.BackupType)
 
 	err := a.StartBackup(
 		job.BackupType,

@@ -150,6 +150,7 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 	// never emits OnResult, so without it an image backup is never reported
 	// as finished at all.
 	cpFinish := attachControlPlaneHooks(&opts)
+	runFinish := attachRunRegistry(&opts)
 
 	// A cancellable context so a /backup/cancel request can stop this backup
 	// cleanly. The engine runs synchronously here (the API server wraps the call
@@ -168,10 +169,12 @@ func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeLi
 		writeDebugLog("[Service] Executing full-volume backup via RunMachineBackup")
 		err := RunMachineBackup(opts)
 		cpFinish(err)
+		runFinish(err)
 		return err
 	}
 	writeDebugLog("[Service] Executing backup via RunBackupInline")
 	err := RunBackupInline(opts)
 	cpFinish(err)
+	runFinish(err)
 	return err
 }

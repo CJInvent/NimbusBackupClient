@@ -92,6 +92,11 @@ func (s *NimbusService) run() {
 		writeDebugLog(fmt.Sprintf("API token init failed (API will reject all requests): %v", tokErr))
 	}
 	s.apiServer = api.NewServer("127.0.0.1:18765", s.app, apiToken)
+	s.apiServer.SetVersion(appVersion)
+	// One store for every trigger. Until this line the scheduler and the
+	// API server each knew only about their own runs, which is why a
+	// scheduled backup was invisible to the GUI.
+	SetRunRegistry(s.apiServer.Runs())
 	writeDebugLog("Starting HTTP API server on 127.0.0.1:18765")
 
 	go func() {
