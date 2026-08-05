@@ -275,9 +275,18 @@ steps 1-2 are additive and independently shippable.
    `/runs/active` from the moment it is scheduled, minutes before the first
    chunk uploads. `/status` reports a real `ActiveJobs` and a stamped
    version instead of `0` and the literal `"0.1.92"`.
-2. **GUI polls the registry** instead of its own history file — the layer of
-   the bug that is still open. `App.jsx:523` still polls `GetJobHistory()`,
-   a file of finished runs, so the data now exists and nothing renders it. Start button
+2. **GUI polls the registry.** Done for live runs: `GetActiveRuns` /
+   `GetRecentRuns` are bound to the front end, and a three-second poll drives
+   the SAME progress state the Wails events drive, so the card renders
+   identically however the run began. Elapsed time is measured against the
+   SERVICE's clock and the run's real start rather than against first sight,
+   which is what makes a GUI opened mid-backup show a correct rate and ETA
+   instead of ones anchored to when the window happened to open.
+
+   Still on `GetJobHistory()`: the history TABLE. Swapping it to
+   `/runs/recent` is part of the read-only panel in step 5, since that is
+   where its shape is decided. Nothing about the reported bug depends on it —
+   a running backup is now visible whether or not the table changes. Start button
    still works as it does; it just no longer has a private view.
 3. **Move option assembly into one service-side function**; the GUI build's
    `StartBackup` becomes an HTTP POST and nothing else.

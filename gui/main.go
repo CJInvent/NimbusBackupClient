@@ -340,6 +340,50 @@ func (a *App) GetVersion() string {
 	return appVersion
 }
 
+// GetActiveRuns reports every backup in flight on this machine, whatever
+// started it — the scheduler, a portal command, or this GUI.
+//
+// This is the binding that lets the GUI show a SCHEDULED backup. Live progress
+// otherwise reaches the front end only through Wails events, which are emitted
+// in the GUI's own process and so exist only for a run the GUI itself started
+// (docs/V4-PIPELINE.md §2.4). Polling the service is the observation path that
+// works for every trigger, which is the point: the Start button stops being
+// special.
+//
+// An unreachable service returns an empty list rather than an error. The
+// caller is a poller on a timer; surfacing a connection error every three
+// seconds while the service restarts would fill the log and the UI with noise
+// about a condition the status panel already shows.
+// The whole response is returned, not just the list: it carries the SERVICE's
+// clock, and elapsed time for a live run has to be measured against that
+// rather than against the workstation's. A machine with bad NTP is common
+// enough, and the difference shows up directly as a wrong rate and ETA.
+func (a *App) GetActiveRuns() (*api.RunsResponse, error) {
+	if a.apiClient == nil {
+		return &api.RunsResponse{Runs: []api.Run{}, ServerTime: time.Now()}, nil
+	}
+	resp, err := a.apiClient.GetActiveRuns()
+	if err != nil {
+		return &api.RunsResponse{Runs: []api.Run{}, ServerTime: time.Now()}, nil
+	}
+	return resp, nil
+}
+
+// GetRecentRuns backs the seven-day panel. Live runs are included, so a
+// backup in flight appears at the top of the history rather than only once it
+// finishes — which is how the old job-history file behaved, and why a running
+// scheduled backup showed up nowhere at all.
+func (a *App) GetRecentRuns(days int) (*api.RunsResponse, error) {
+	if a.apiClient == nil {
+		return &api.RunsResponse{Runs: []api.Run{}, ServerTime: time.Now()}, nil
+	}
+	resp, err := a.apiClient.GetRecentRuns(days)
+	if err != nil {
+		return &api.RunsResponse{Runs: []api.Run{}, ServerTime: time.Now()}, nil
+	}
+	return resp, nil
+}
+
 // ListPhysicalDisks returns a list of available physical disks for full-volume
 // (machine) backups. Bound to the frontend via Wails so the Backup tab can
 // populate its disk picker. Returns an error on non-Windows builds.

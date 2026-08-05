@@ -7,6 +7,8 @@ import PathPicker from './components/PathPicker'
 // Wails runtime imports (will be available when built with Wails)
 let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, StopBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory, CancelImageRestore
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
+// Run registry: the service's record of what is running, whatever started it
+let GetActiveRuns, GetRecentRuns
 // Multi-PBS functions
 let ListPBSServers, GetPBSServer, AddPBSServer, UpdatePBSServer, DeletePBSServer, SetDefaultPBSServer, GetDefaultPBSID, TestPBSConnection
 let GetServerFingerprint, PinPBSServerFingerprint
@@ -50,6 +52,8 @@ if (window.go) {
   GetScheduledJobs = window.go.main.App.GetScheduledJobs
   DeleteScheduledJob = window.go.main.App.DeleteScheduledJob
   GetJobHistory = window.go.main.App.GetJobHistory
+  GetActiveRuns = window.go.main.App.GetActiveRuns
+  GetRecentRuns = window.go.main.App.GetRecentRuns
   GetSystemInfo = window.go.main.App.GetSystemInfo
   GetLastBackupDirs = window.go.main.App.GetLastBackupDirs
   // Multi-PBS
@@ -299,6 +303,85 @@ function App() {
       setDisksLoading(false)
     })
   }, [backupType])
+
+  // Poll the service for runs in flight — the observation path that works for
+  // every trigger.
+  //
+  // Wails events only ever describe a backup THIS process started, because
+  // they are emitted in the GUI's own process (docs/V4-PIPELINE.md §2.4). A
+  // scheduled backup, or any backup already under way when the window is
+  // opened, produces no events here at all. Polling /runs/active is what makes
+  // those visible, and it drives the SAME state the events do, so the card
+  // renders identically however the run began — which is the requirement.
+  //
+  // Three seconds: fast enough that the Start button still feels immediate
+  // once events are gone, slow enough to be nothing on a machine that is busy
+  // reading a disk.
+  useEffect(() => {
+    if (!GetActiveRuns) return
+    let cancelled = false
+
+    const poll = async () => {
+      try {
+        const resp = await GetActiveRuns()
+        if (cancelled) return
+
+        const runs = resp && resp.runs
+        const run = (runs && runs.length) ? runs[0] : null
+        if (!run) return
+
+        // A run in "preparing" reports 0%, and 0 is also how the card decides
+        // it has nothing to show. Floor it at 1 so a backup that has been
+        // decided but has not yet read a byte still appears — on a large
+        // volume that gap is minutes, and showing nothing through it is the
+        // bug this poll exists to fix.
+        setProgress(Math.max(1, Math.round(run.percent || 0)))
+        if (run.message) setBackupPhase(run.message)
+
+        // Elapsed comes from the SERVER's clock and the run's real start, not
+        // from when this window happened to open. Anchoring to first-sight
+        // (what the event path does) makes the rate and ETA of a run already
+        // in flight badly wrong, and opening the GUI mid-backup is exactly
+        // the case being fixed here.
+        const serverMs = Date.parse(resp.server_time)
+        const serverNow = Number.isNaN(serverMs) ? Date.now() : serverMs
+        const startedMs = Date.parse(run.started_at)
+        const startTime = Number.isNaN(startedMs) ? Date.now() : startedMs
+        const elapsed = Math.max(0, (serverNow - startTime) / 1000)
+        const done = run.bytes_done || 0
+        const total = run.bytes_total || 0
+        const byteRate = elapsed > 3 && done > 0 ? done / elapsed : 0
+        // Padded x1.15 and rendered as ">=", same as the event path: the whole
+        // disk must be READ however much of it is reused, so an estimate that
+        // errs should err high.
+        const eta = byteRate > 0 && total > done
+          ? Math.round(((total - done) / byteRate) * 1.15)
+          : null
+
+        setBackupStats(prev => ({
+          ...prev,
+          startTime,
+          lastUpdate: Date.now(),
+          lastPercent: Math.round(run.percent || 0),
+          bytesDone: done,
+          bytesTotal: total,
+          newChunks: run.new_chunks || 0,
+          reusedChunks: run.reused_chunks || 0,
+          failedChunks: run.failed_chunks || 0,
+          currentDir: run.current_dir || '',
+          byteRate,
+          eta,
+        }))
+      } catch (err) {
+        // Deliberately quiet. The service restarting would otherwise log
+        // every three seconds about a condition the panel already shows.
+      }
+    }
+
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
 
   // Listen to backup events
   useEffect(() => {

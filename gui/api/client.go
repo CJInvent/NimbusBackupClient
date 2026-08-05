@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -374,4 +375,42 @@ func (c *Client) SaveControlPlane(m map[string]interface{}) error {
 		return fmt.Errorf("failed to save control plane config: %s", string(respBody))
 	}
 	return nil
+}
+
+// GetActiveRuns returns every backup currently in flight on this machine,
+// whatever started it.
+//
+// This is the call the GUI needs and did not have. The old GetBackupStatus
+// answers "how is THIS job id doing", which a front end can only ask about a
+// run it started itself — so a scheduled backup was invisible
+// (docs/V4-PIPELINE.md §2.1).
+func (c *Client) GetActiveRuns() (*RunsResponse, error) {
+	return c.getRuns("/runs/active")
+}
+
+// GetRecentRuns returns runs started within the last `days`, live ones
+// included, for the seven-day status panel.
+func (c *Client) GetRecentRuns(days int) (*RunsResponse, error) {
+	if days < 1 {
+		days = runsWindowDefaultDays
+	}
+	return c.getRuns("/runs/recent?days=" + strconv.Itoa(days))
+}
+
+func (c *Client) getRuns(path string) (*RunsResponse, error) {
+	resp, err := c.httpClient.Get(c.baseURL + path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get runs: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("service returned error: %d", resp.StatusCode)
+	}
+
+	var out RunsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
 }
