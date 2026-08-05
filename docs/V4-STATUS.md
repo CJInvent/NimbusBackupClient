@@ -1,6 +1,6 @@
 # v4 Status — NimbusBackupClient
 
-**Last updated:** 2026-08-04. Branch: `v4_dev`.
+**Last updated:** 2026-08-05. Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in
 **NimbusControl**, because most of it describes a server/client contract that
@@ -13,6 +13,14 @@ only makes sense read as one thing:
 | `NimbusControl/docs/V4-CLIENT-CONFIG.md` | Design for the next block of client work: managed jobs, PVE scheduling, GUI lockdown |
 | `NimbusControl/docs/V4-AUDIT.md` | Phase B audit findings, including the two client subsystems deleted |
 | `NimbusControl/docs/AGENT-API.md` | The wire contract. It is authoritative: server-side compliance parses it and fails the build if the implementation disagrees |
+
+One design record lives **here** rather than in NimbusControl, because it
+describes this repository's internal architecture and nothing crosses the
+wire:
+
+| Document | What it is |
+|---|---|
+| `docs/V4-PIPELINE.md` | One backup pipeline, in the service. Root-causes the "GUI cannot see a scheduled backup" report, and lists what gets deleted |
 
 ---
 
