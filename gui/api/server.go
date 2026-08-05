@@ -6,24 +6,24 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 )
-
-// jobIDSeq guarantees unique job IDs even when two backups start in the same
-// second — time.Now().Unix() alone collides (especially on Windows' coarse
-// clock), which would make two jobs share one progress entry.
-var jobIDSeq atomic.Uint64
 
 // Server handles HTTP API requests from the GUI
 type Server struct {
-	addr           string
-	app            BackupHandler
-	token          string // shared local-auth token required on every route (H-01)
-	mux            *http.ServeMux
-	backupProgress map[string]*BackupProgress
-	progressMutex  sync.RWMutex
+	addr  string
+	app   BackupHandler
+	token string // shared local-auth token required on every route (H-01)
+	mux   *http.ServeMux
+
+	// runs is the SINGLE store of backup runs — see runs.go. It replaced a
+	// map whose only writer was handleBackup, which is why a scheduled
+	// backup was invisible to the GUI (docs/V4-PIPELINE.md §2).
+	runs *RunRegistry
+
+	// version is stamped in at service start. It used to be the string
+	// literal "0.1.92" with a TODO beside it, which reported a version two
+	// minors stale to anyone who asked.
+	version string
 }
 
 // BackupHandler interface that the service must implement
@@ -52,21 +52,32 @@ type BackupHandler interface {
 // every request must present in the X-Nimbus-Token header (H-01).
 func NewServer(addr string, handler BackupHandler, token string) *Server {
 	s := &Server{
-		addr:           addr,
-		app:            handler,
-		token:          token,
-		mux:            http.NewServeMux(),
-		backupProgress: make(map[string]*BackupProgress),
+		addr:  addr,
+		app:   handler,
+		token: token,
+		mux:   http.NewServeMux(),
+		runs:  NewRunRegistry(),
 	}
 
 	s.setupRoutes()
 	return s
 }
 
+// Runs exposes the registry so the service can register runs it starts
+// WITHOUT going through HTTP — the scheduler and portal-command paths. That is
+// the whole point: one store, every trigger.
+func (s *Server) Runs() *RunRegistry { return s.runs }
+
+// SetVersion stamps the build version reported by /status.
+func (s *Server) SetVersion(v string) { s.version = v }
+
 func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/backup", s.handleBackup)
 	s.mux.HandleFunc("/backup/status/", s.handleBackupStatus)
+	s.mux.HandleFunc("/runs/active", s.handleRunsActive)
+	s.mux.HandleFunc("/runs/recent", s.handleRunsRecent)
+	s.mux.HandleFunc("/runs/", s.handleRunByID)
 	s.mux.HandleFunc("/backup/cancel", s.handleBackupCancel)
 	s.mux.HandleFunc("/jobs", s.handleJobs)
 	s.mux.HandleFunc("/jobs/create", s.handleJobCreate)
@@ -95,10 +106,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	config := s.app.GetConfigWithHostname()
 
+	version := s.version
+	if version == "" {
+		// Never invent one. A wrong version sends a support engineer
+		// looking at the wrong changelog, which is worse than "unknown".
+		version = "unknown"
+	}
+
 	status := StatusResponse{
 		Running:       true,
-		Version:       "0.1.92", // TODO: get from build
-		ActiveJobs:    0,        // TODO: track active jobs
+		Version:       version,
+		ActiveJobs:    s.runs.ActiveCount(),
 		Configuration: config,
 	}
 
@@ -130,20 +148,14 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[API] Config reloaded before backup")
 	}
 
-	// Start backup asynchronously (don't block HTTP request)
-	jobID := fmt.Sprintf("backup-%d-%d", time.Now().Unix(), jobIDSeq.Add(1))
-
-	// Initialize progress tracking
-	s.progressMutex.Lock()
-	s.backupProgress[jobID] = &BackupProgress{
-		JobID:     jobID,
-		Running:   true,
-		Progress:  0,
-		Message:   "Starting backup...",
-		StartTime: time.Now().Format(time.RFC3339),
-	}
-	log.Printf("[API] Progress entry created for %s (total entries: %d)", jobID, len(s.backupProgress))
-	s.progressMutex.Unlock()
+	// Start backup asynchronously (don't block HTTP request).
+	//
+	// This is currently the only caller of Begin. Step 3 of the rewire moves
+	// it into the service's single StartBackup so scheduler- and
+	// portal-triggered runs register too; the registry API is the same
+	// either way, so that is a change of call site rather than of contract.
+	jobID := s.runs.Begin(TriggerManual, "", "", req.BackupID, req.BackupType)
+	log.Printf("[API] Run registered: %s (active: %d)", jobID, s.runs.ActiveCount())
 
 	go func() {
 		log.Printf("[API] Starting async backup: %s", jobID)
@@ -157,41 +169,14 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 			handler.SetProgressCallbacks(
 				jobID,
 				func(jid string, percent float64, message string) {
-					s.progressMutex.Lock()
-					if progress, exists := s.backupProgress[jid]; exists {
-						progress.Progress = percent
-						progress.Message = message
-						log.Printf("[API] Progress update %s: %.1f%% - %s", jid, percent, message)
-					} else {
-						log.Printf("[API] WARNING: Progress update for unknown job %s", jid)
-					}
-					s.progressMutex.Unlock()
+					s.runs.Progress(jid, percent, message)
 				},
 				func(jid string, bytesDone, bytesTotal, newChunks, reusedChunks uint64) {
-					s.progressMutex.Lock()
-					if progress, exists := s.backupProgress[jid]; exists {
-						progress.BytesDone = bytesDone
-						progress.BytesTotal = bytesTotal
-						progress.NewChunks = newChunks
-						progress.ReusedChunks = reusedChunks
-					}
-					s.progressMutex.Unlock()
+					s.runs.Stats(jid, bytesDone, bytesTotal, newChunks, reusedChunks)
 				},
 				func(jid string, success bool, message string) {
-					s.progressMutex.Lock()
-					if progress, exists := s.backupProgress[jid]; exists {
-						progress.Running = false
-						progress.Complete = true
-						progress.Success = success
-						progress.Message = message
-						if !success {
-							progress.Error = message
-						}
-						log.Printf("[API] Backup %s complete: success=%v, %s", jid, success, message)
-					} else {
-						log.Printf("[API] WARNING: Completion update for unknown job %s", jid)
-					}
-					s.progressMutex.Unlock()
+					s.runs.Complete(jid, success, message)
+					log.Printf("[API] Run %s complete: success=%v, %s", jid, success, message)
 				},
 			)
 		} else {
@@ -215,24 +200,17 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 			compression,
 		)
 
-		// Update final status if callbacks didn't fire
-		s.progressMutex.Lock()
-		if progress, exists := s.backupProgress[jobID]; exists && !progress.Complete {
-			progress.Running = false
-			progress.Complete = true
-			if err != nil {
-				progress.Success = false
-				progress.Error = err.Error()
-				progress.Message = fmt.Sprintf("Backup failed: %v", err)
-				log.Printf("[API] Backup %s failed: %v", jobID, err)
-			} else {
-				progress.Success = true
-				progress.Progress = 100
-				progress.Message = "Backup completed successfully"
-				log.Printf("[API] Backup %s completed successfully", jobID)
-			}
+		// Complete() is idempotent, so this is a safety net rather than a
+		// second writer: if the engine's OnComplete callback fired, this is
+		// ignored. If it did NOT fire — RunMachineBackup historically never
+		// emitted one — the run would otherwise stay "running" forever and
+		// the status panel would show a backup that finished hours ago.
+		if err != nil {
+			s.runs.Complete(jobID, false, fmt.Sprintf("Backup failed: %v", err))
+			log.Printf("[API] Backup %s failed: %v", jobID, err)
+		} else {
+			s.runs.Complete(jobID, true, "Backup completed successfully")
 		}
-		s.progressMutex.Unlock()
 	}()
 
 	// Return immediately with job ID
@@ -245,6 +223,16 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp, http.StatusOK)
 }
 
+// handleBackupStatus is the DEPRECATED per-job progress route. Superseded by
+// /runs/active and /runs/{run_id}; kept for one release so a GUI built before
+// the run registry keeps working.
+//
+// An unknown id still 404s. Answering with "the run actually in flight" was
+// tried and reverted: this route's contract is "how is THIS job doing", and
+// the smoke suite already pins that an unknown id must not report a phantom
+// job. Making a deprecated route guess is how a GUI ends up displaying a
+// scheduled run as if it were the one the user started. The fix for a caller
+// that does not know the id is /runs/active, which is the point of it.
 func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -257,30 +245,15 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, "Job ID required", http.StatusBadRequest)
 		return
 	}
-	jobID := pathParts[0]
 
-	s.progressMutex.RLock()
-	progress, exists := s.backupProgress[jobID]
-	totalJobs := len(s.backupProgress)
-	s.progressMutex.RUnlock()
-
-	log.Printf("[API] Progress query for %s: exists=%v, total_jobs=%d", jobID, exists, totalJobs)
-
-	if !exists {
-		log.Printf("[API] Available job IDs: %v", func() []string {
-			s.progressMutex.RLock()
-			defer s.progressMutex.RUnlock()
-			ids := make([]string, 0, len(s.backupProgress))
-			for id := range s.backupProgress {
-				ids = append(ids, id)
-			}
-			return ids
-		}())
+	run, ok := s.runs.Get(pathParts[0])
+	if !ok {
 		s.writeError(w, "Job not found", http.StatusNotFound)
 		return
 	}
 
-	s.writeJSON(w, progress, http.StatusOK)
+	progress := toBackupProgress(run)
+	s.writeJSON(w, &progress, http.StatusOK)
 }
 
 // handleBackupCancel stops the running backup. Backups are serialized (one at a
@@ -300,17 +273,13 @@ func (s *Server) handleBackupCancel(w http.ResponseWriter, r *http.Request) {
 		cancelled = canceller.CancelActiveBackup()
 	}
 
-	s.progressMutex.Lock()
-	for _, progress := range s.backupProgress {
-		if progress.Running && !progress.Complete {
-			progress.Running = false
-			progress.Complete = true
-			progress.Success = false
-			progress.Message = "Backup cancelled"
-			progress.Error = "cancelled by user"
-		}
+	// Mark every in-flight run terminal up front. Complete() is idempotent
+	// and first-writer-wins, so the "cancelled" outcome sticks even though
+	// the engine also returns an error as it unwinds and the async runner
+	// will call Complete again with that error.
+	for _, run := range s.runs.Active() {
+		s.runs.Complete(run.RunID, false, "Backup cancelled")
 	}
-	s.progressMutex.Unlock()
 
 	log.Printf("[API] Backup cancel requested (active backup running: %v)", cancelled)
 	s.writeJSON(w, map[string]interface{}{"success": true, "cancelled": cancelled}, http.StatusOK)
