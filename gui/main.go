@@ -25,7 +25,6 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"pbscommon"
 	"security"
-	"snapshot"
 
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
@@ -240,39 +239,25 @@ func (a *App) startup(ctx context.Context) {
 	a.mode = detector.DetectMode()
 	writeDebugLog(fmt.Sprintf("Execution mode: %s", a.mode.String()))
 
-	// If running in standalone mode, start local scheduler
-	// If in service mode, scheduler runs in the service
-	if a.mode == api.ModeStandalone {
-		// Cleanup any abandoned "running" jobs from previous session
-		a.CleanupAbandonedJobs()
-
-		// Clear any orphaned VSS shadow copies and reset the VSS service
-		// state from a previously crashed Nimbus process. Without this, the
-		// next backup can fail with "shadow copy creation is already in
-		// progress". No-op on non-Windows platforms.
-		if err := snapshot.VSSCleanup(); err != nil {
-			writeDebugLog(fmt.Sprintf("VSS cleanup at startup reported error: %v", err))
-		}
-
-		// Recalculate stale nextRun values (e.g. after restart or missed window)
-		a.RecalculateNextRuns()
-
-		// Start background job scheduler
-		a.StartScheduler()
-		writeDebugLog("Background scheduler started (standalone mode)")
-
-		// Control plane (NimbusControl): in standalone mode this process is
-		// the brain, so the check-in loop runs here. In service mode the
-		// service owns it (see NimbusService.run) and the GUI only displays
-		// status via the local API.
-		a.StartControlPlane()
-	} else {
-		writeDebugLog("Service mode detected - scheduler runs in service")
+	// The GUI never schedules, never checks in, and never cleans up after a
+	// backup engine, because it no longer HAS one (docs/V4-PIPELINE.md
+	// §3.1). All of that belongs to the service, which runs as LocalSystem
+	// and is always on; a front end that only sometimes exists is the wrong
+	// owner for work that must happen at 02:00 whether or not anyone is
+	// logged in.
+	//
+	// This used to be conditional on standalone mode, and the condition was
+	// "the service did not answer a probe" — so a service that was merely
+	// slow to start produced a GUI running its own scheduler, its own
+	// control-plane check-in loop, and its own VSS cleanup, in parallel with
+	// the service doing the same.
+	if a.mode != api.ModeService {
+		writeDebugLog("Service unreachable at startup - the GUI will show status only until it comes back")
 	}
 
-	// Execute startup jobs (jobs with runAtStartup=true)
-	// Note: In service mode, these will be sent via API
-	go a.HandleStartupRun()
+	// Startup jobs are NOT run here. They belong to the service, which
+	// starts at boot; running them from the GUI meant they fired at login,
+	// or never at all on a server nobody logs into. See service.go.
 
 	// Trim stale restore listing caches in the background (best-effort).
 	go func() {
@@ -807,58 +792,42 @@ func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {
 	})
 }
 
-// StartBackup starts a backup operation (routes to service or direct based on mode)
+// StartBackup asks the SERVICE to run a backup. It is the only thing this
+// binding does.
+//
+// There is no longer a direct path to fall back to: the GUI build links no
+// backup engine (docs/V4-PIPELINE.md §3.1, CJ's decision of 2026-08-05). The
+// escape hatch for a machine with no control plane is a service-side toggle,
+// not a GUI capability, precisely so that a modified front end cannot reach
+// one.
 func (a *App) StartBackup(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
-	writeDebugLog(fmt.Sprintf("StartBackup() called - mode: %s, VSS: %v, compression: %s, isServiceProcess: %v", a.mode.String(), useVSS, compression, a.isServiceProcess))
+	writeDebugLog(fmt.Sprintf("StartBackup() called - VSS: %v, compression: %s", useVSS, compression))
 
-	// Default to "fastest" if compression is empty
-	if compression == "" {
-		compression = "fastest"
-		writeDebugLog("[Compression] Using default: fastest")
+	// The service may have started after the GUI did. Re-probing here rather
+	// than trusting startup detection is the difference between "press the
+	// button again in a minute" and "restart the application".
+	if a.mode != api.ModeService && a.apiClient.IsServiceAvailable() {
+		writeDebugLog("[Mode] Service now reachable")
+		a.mode = api.ModeService
+	}
+	if a.mode != api.ModeService {
+		return errors.New(errServiceUnavailable)
 	}
 
-	// Re-detect mode if currently Standalone (service may have started after GUI)
-	// IMPORTANT: Never re-detect if we ARE the service process (prevents infinite loop)
-	if !a.isServiceProcess && a.mode == api.ModeStandalone {
-		if a.apiClient.IsServiceAvailable() {
-			writeDebugLog("[Mode Detection] Service now available, switching to Service mode")
-			a.mode = api.ModeService
-		}
-	}
-
-	// Route based on execution mode
-	switch a.mode {
-	case api.ModeService:
-		// Use HTTP API to communicate with service (service has admin rights as LocalSystem)
-		return a.startBackupViaService(backupType, backupDirs, driveLetters, excludeList, backupID, useVSS, compression)
-	case api.ModeStandalone:
-		// Direct execution - check admin if VSS requested
-		if useVSS && !isAdmin() {
-			return errors.New(errVSSAdminRequired)
-		}
-		return a.startBackupDirect(backupType, backupDirs, driveLetters, excludeList, backupID, useVSS, compression)
-	default:
-		return fmt.Errorf("unknown execution mode: %v", a.mode)
-	}
+	return a.startBackupViaService(backupType, backupDirs, driveLetters, excludeList, backupID, useVSS, compression)
 }
 
-// StopBackup cleanly stops the running backup. The engine aborts before the PBS
-// index is committed (so the partial backup is discarded) and its deferred VSS
-// Release deletes the shadow copy and symlink — no scraps, wherever the stream
-// was. In service mode the backup runs in the service, so we ask it over the
-// local API; in standalone mode we cancel the in-process backup directly.
+// StopBackup asks the service to cancel the running backup. The engine aborts
+// before the PBS index is committed (so the partial backup is discarded) and
+// its deferred VSS Release deletes the shadow copy and symlink — no scraps,
+// wherever the stream was.
+//
+// Always over the local API: the backup is always in the service.
 func (a *App) StopBackup() error {
-	switch a.mode {
-	case api.ModeService:
-		return a.apiClient.CancelBackup()
-	case api.ModeStandalone:
-		if a.CancelActiveBackup() {
-			return nil
-		}
-		return errors.New(errNoBackupRunning)
-	default:
-		return fmt.Errorf("unknown execution mode: %v", a.mode)
+	if a.mode != api.ModeService {
+		return errors.New(errServiceUnavailable)
 	}
+	return a.apiClient.CancelBackup()
 }
 
 // startBackupViaService sends backup request to the service via HTTP API
@@ -889,42 +858,6 @@ func (a *App) startBackupViaService(backupType string, backupDirs []string, driv
 	// be a parallel observation path to keep in step — the exact shape of
 	// the problem docs/V4-PIPELINE.md exists to remove.
 
-	return nil
-}
-
-// startBackupDirect executes a backup in THIS process.
-//
-// Standalone only, and on its way out: docs/V4-PIPELINE.md §3.1 has the GUI
-// build linking no backup engine at all, with the escape hatch moving to a
-// service-side toggle (CJ, 2026-08-05). Until that lands this delegates to the
-// one pipeline rather than carrying a second copy of it.
-//
-// Asynchronous, unlike the service path: the caller is a Wails binding on the
-// UI goroutine and must not block for the length of a backup. Progress reaches
-// the window through the pipeline's events, and — since the run registry — the
-// same three-second poll every other observer uses.
-func (a *App) startBackupDirect(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
-	req := backupRequest{
-		BackupType:   backupType,
-		BackupDirs:   backupDirs,
-		DriveLetters: driveLetters,
-		ExcludeList:  excludeList,
-		BackupID:     backupID,
-		UseVSS:       useVSS,
-		Compression:  compression,
-	}
-
-	// Validate synchronously so a bad request is refused at the button, not
-	// swallowed into a goroutine the caller cannot see.
-	if err := a.validateBackupRequest(req); err != nil {
-		return err
-	}
-
-	go func() {
-		if err := a.runBackupPipeline(req); err != nil {
-			writeDebugLog(fmt.Sprintf("Backup error: %v", err))
-		}
-	}()
 	return nil
 }
 

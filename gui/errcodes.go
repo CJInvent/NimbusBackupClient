@@ -28,6 +28,9 @@ const (
 	errDirRequired        = "[NB-2008] at least one backup directory required"
 	errBackupStopped      = "[NB-2009] Backup stopped - the partial backup was discarded and the snapshot released"
 	errNoBackupRunning    = "[NB-2010] no backup is running"
+	// The GUI no longer executes backups at all, so an unreachable service
+	// is a hard stop rather than a reason to fall back to running one here.
+	errServiceUnavailable = "[NB-2011] the Nimbus service is not reachable - backups run in the service; check that it is started"
 	errServerIDExists     = "[NB-1007] a PBS server with this ID already exists"
 
 	errSnapshotList       = "[NB-3001] listing snapshots failed"

@@ -189,7 +189,12 @@ plane configured is a supported product, not a bypass.
 It currently means two unrelated things (V4-CLIENT-CONFIG.md §5.2.1). Under
 this design the meanings separate cleanly and the enum stops being a hazard:
 
-- `ModeService` — the GUI, talking to the service. The only shipped GUI mode.
+- `ModeService` — the GUI, talking to the service. The only mode in which
+  anything can be started.
+- `ModeServiceUnavailable` — the service did not answer. Was called
+  `ModeStandalone`, and the name was load-bearing in the wrong direction: it
+  read as a capability when the condition it describes is a failure. Nothing
+  branches on it now except to refuse.
 - `ModeInProcess` — *I am the service*, execute here. Never true in the GUI.
 - `ModeDetached` — deleted. With the engine gone from the GUI there is no
   third mode: the service either runs the work or nothing does.
@@ -269,12 +274,14 @@ GUI that draws a Start button gets an HTTP error when it presses it.
 "No dead-end code" is the requirement, so this is a list of removals, not
 just additions:
 
-1. `startBackupDirect` and its option assembly (`gui/main.go:911-1120`)
-2. The GUI-build `StartBackup` routing switch (`main.go:767-799`)
-3. The GUI's own scheduler start (`main.go:244-262`) — the service schedules
-4. `ShouldWarnVSS` / `GetModeDescription` (`gui/api/mode.go`) — both exist to
-   explain standalone mode to the user, and both are French-only string
-   literals in a codebase with an i18n catalog
+1. ~~`startBackupDirect` and its option assembly~~ — gone
+2. ~~The GUI-build `StartBackup` routing switch~~ — gone; there is one path
+3. ~~The GUI's own scheduler start~~ — gone, along with the GUI's
+   control-plane check-in loop and its VSS cleanup. All three were guarded by
+   "the service did not answer a probe", so a service merely slow to start
+   produced a GUI running a scheduler, a check-in loop and a VSS cleanup in
+   parallel with the service doing the same
+4. ~~`ShouldWarnVSS` / `GetModeDescription`~~ — gone
 5. `handleBackupStatus`'s job-ID lookup, after the deprecation release
 6. The standalone CLI engines from the customer release (§7 item 2), and
    `directorybackup`'s private `ChunkState`/didx implementation with them
@@ -320,7 +327,14 @@ steps 1-2 are additive and independently shippable.
    numbers through events was a second observation path, and the front end
    now polls `/runs/active` for every run. The GUI build's `StartBackup`
    becoming an HTTP POST and nothing else lands with step 4.
-4. **Drop the engine from the GUI build** (Q1 decides how).
+4. ~~**Drop the engine from the GUI build.**~~ **Done.** One build tag on
+   `backup_pipeline.go`, which is the only caller of `RunBackupInline` and
+   `RunMachineBackup`, leaves both unreferenced in the GUI build and the
+   linker drops them. Verified against the shipped binary, not the source:
+   `go tool nm` finds zero engine symbols in `NimbusBackup.exe` and 15 in
+   `NimbusBackupSVC.exe`, and CI now asserts that on every build — a build
+   tag is exactly the kind of thing a later refactor removes without
+   noticing.
 5. **Read-only mode**, which by then is the ordinary panel minus the
    mutating endpoints, and is enforced by handlers already written.
 6. **Managed jobs and schedules** (NimbusControl `V4-CLIENT-CONFIG.md`) land

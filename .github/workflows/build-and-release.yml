@@ -655,6 +655,33 @@ jobs:
           GOWORK: off
         run: wails build -clean -platform windows/amd64 -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
 
+      # The GUI must contain NO backup engine.
+      #
+      # CJ's decision (2026-08-05, docs/V4-PIPELINE.md §3.1): the front end
+      # links no engine at all — absent, not gated — so a modified GUI has
+      # nothing to call and the escape hatch lives in the service instead.
+      # That property is enforced by ONE build tag on backup_pipeline.go, and
+      # a build tag is exactly the kind of thing a later refactor removes
+      # without noticing. Assert it against the shipped binary rather than
+      # trusting the source: this fails the build if the engine ever links
+      # back into the GUI.
+      - name: Assert GUI links no backup engine
+        working-directory: gui
+        shell: pwsh
+        env:
+          GOWORK: off
+        run: |
+          $exe = "build/bin/NimbusBackup.exe"
+          if (-not (Test-Path $exe)) { throw "GUI binary not found at $exe" }
+          $syms = & go tool nm $exe
+          $engine = $syms | Select-String -Pattern 'RunBackupInline|RunMachineBackup|runBackupPipeline'
+          if ($engine) {
+            Write-Host "GUI binary contains backup engine symbols:"
+            $engine | ForEach-Object { Write-Host "  $_" }
+            throw "The GUI must not link a backup engine (docs/V4-PIPELINE.md 3.1)"
+          }
+          Write-Host "OK: no backup engine symbols in the GUI binary"
+
       # The service is a plain `go build` from gui/ and would otherwise ship
       # with no Windows version info — a strong heuristic/ML false-positive
       # signal (Codex review). Generate a .syso with proper CompanyName /

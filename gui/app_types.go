@@ -78,7 +78,7 @@ func NewAppForService(ctx context.Context) *App {
 		config:           LoadConfig(),
 		stopScheduler:    make(chan struct{}),
 		apiClient:        api.NewClient(getAPITokenPath()),
-		mode:             api.ModeStandalone, // Service executes directly
+		mode:             api.ModeInProcess, // this process IS the service
 		callbacksMap:     make(map[string]*progressCallbacks),
 		isServiceProcess: true, // Prevent mode re-detection
 	}

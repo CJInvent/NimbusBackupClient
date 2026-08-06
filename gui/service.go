@@ -42,7 +42,7 @@ func (s *NimbusService) run() {
 		config:           LoadConfig(),
 		stopScheduler:    make(chan struct{}),
 		apiClient:        api.NewClient(getAPITokenPath()),
-		mode:             api.ModeStandalone, // Service executes directly, doesn't use API
+		mode:             api.ModeInProcess, // this process IS the service
 		callbacksMap:     make(map[string]*progressCallbacks),
 		isServiceProcess: true, // Prevent mode re-detection (would cause infinite loop)
 	}
@@ -97,6 +97,18 @@ func (s *NimbusService) run() {
 	// API server each knew only about their own runs, which is why a
 	// scheduled backup was invisible to the GUI.
 	SetRunRegistry(s.apiServer.Runs())
+
+	// Startup jobs run HERE now, not in the GUI.
+	//
+	// BEHAVIOUR CHANGE, deliberate: runAtStartup used to fire when a user
+	// LOGGED IN and opened the front end, because that is where the call
+	// lived. On a server nobody logs into, it therefore never fired at all.
+	// The service starts at boot, so this is what the setting has always
+	// meant to whoever ticked the box. It runs after the registry is
+	// installed so the run is visible to /runs/active from its first
+	// moment, and in a goroutine so a long startup backup does not hold up
+	// the API server coming online.
+	go s.app.HandleStartupRun()
 	writeDebugLog("Starting HTTP API server on 127.0.0.1:18765")
 
 	go func() {

@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 import (
@@ -10,7 +13,14 @@ import (
 	"security"
 )
 
-// THE backup pipeline. One copy, both builds.
+// THE backup pipeline. One copy, and it is not in the GUI binary.
+//
+// The build tag is the lockdown. CJ's decision (2026-08-05) is that the GUI
+// links no backup engine at all — absent rather than gated — so that a
+// modified front end has nothing to call, and the escape hatch for a machine
+// with no control plane is a SERVICE-side toggle instead. This file is the
+// only caller of RunBackupInline and RunMachineBackup, so excluding it leaves
+// both unreferenced in the GUI build and the linker drops them.
 //
 // Step 3 of docs/V4-PIPELINE.md. Until this file there were two: the GUI
 // build's startBackupDirect (main.go) and the service build's StartBackup
