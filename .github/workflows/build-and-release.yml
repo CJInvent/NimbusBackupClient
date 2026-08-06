@@ -19,6 +19,15 @@ on:
       - 'v*'
   pull_request:
     branches: [ main, master, v4_dev ]
+  # Re-run the full gate set against a commit that is already pushed.
+  #
+  # Without this, the only way to retry is a new commit. That is not academic:
+  # run 31119003109 failed at "Set up job" on three jobs -- runner
+  # provisioning, before any step of ours ran -- and a force-push of the fix
+  # produced no run at all, leaving a green-looking branch whose head had
+  # never been built. A manual trigger is the difference between re-running a
+  # transient failure and inventing a commit to carry one.
+  workflow_dispatch:
 
 env:
   # Pinned to an exact patch, not '1.26': setup-go resolves a bare minor to
