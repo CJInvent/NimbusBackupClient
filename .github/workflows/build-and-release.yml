@@ -29,6 +29,18 @@ on:
   # transient failure and inventing a commit to carry one.
   workflow_dispatch:
 
+# One run per branch. A superseded run is cancelled rather than left to
+# compete for runners with the run that replaced it: three concurrent runs on
+# v4_dev on 2026-08-06 starved each other for over half an hour, and two of
+# them were building commits nobody was waiting on any more.
+#
+# TAGS ARE NEVER CANCELLED. A tag push is a release, it is not superseded by
+# anything, and cancelling one halfway through would leave a published tag
+# with no artifacts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   # Pinned to an exact patch, not '1.26': setup-go resolves a bare minor to
   # whatever it feels like, which is precisely the silent-fallback the v4 spec
@@ -45,6 +57,7 @@ jobs:
   toolchain:
     name: Toolchain Verification
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -86,6 +99,7 @@ jobs:
   check-deps:
     name: Check Dependency Updates
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +125,7 @@ jobs:
   frontend-gate:
     name: Frontend Gate (S11)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -143,6 +158,7 @@ jobs:
   compile-views:
     name: Compile Views (S2)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -211,6 +227,7 @@ jobs:
   security:
     name: Security Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -289,6 +306,7 @@ jobs:
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -346,6 +364,7 @@ jobs:
   workspace-tests:
     name: Workspace Tests (S1)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -391,6 +410,7 @@ jobs:
   windows-smoke:
     name: Windows Smoke (S7/S8/S10)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -466,6 +486,7 @@ jobs:
   deps-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -548,6 +569,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -618,6 +640,7 @@ jobs:
       # its own — no workflow edit needed at the moment it starts mattering.
       SIGNING_ENABLED: ${{ secrets.SIGNING_CLIENT_ID != '' }}
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -1047,6 +1070,7 @@ jobs:
     if: github.ref == 'refs/heads/v4_dev' && github.event_name == 'push'
     needs: [toolchain, build-cli, build-gui, windows-smoke]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
 
@@ -1130,6 +1154,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-cli, build-gui, windows-smoke]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       id-token: write      # mint the Sigstore OIDC token for attestation
