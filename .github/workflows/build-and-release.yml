@@ -689,30 +689,44 @@ jobs:
 
       # The GUI must contain NO backup engine.
       #
-      # CJ's decision (2026-08-05, docs/V4-PIPELINE.md §3.1): the front end
-      # links no engine at all — absent, not gated — so a modified GUI has
+      # CJ's decision (2026-08-05, docs/V4-PIPELINE.md 3.1): the front end
+      # links no engine at all -- absent, not gated -- so a modified GUI has
       # nothing to call and the escape hatch lives in the service instead.
       # That property is enforced by ONE build tag on backup_pipeline.go, and
       # a build tag is exactly the kind of thing a later refactor removes
-      # without noticing. Assert it against the shipped binary rather than
-      # trusting the source: this fails the build if the engine ever links
-      # back into the GUI.
+      # without noticing.
+      #
+      # It is asserted against a PROBE binary rather than the shipped one.
+      # `wails build` strips symbols, so `go tool nm` on build/bin exits 1
+      # with "no symbols" -- and worse, an empty symbol list would have made
+      # a grep-based check PASS. The probe is built from the same sources
+      # with the same tags and is not stripped, so the symbol table is real.
+      # The main.main guard below is what stops an empty table being read as
+      # a clean result.
       - name: Assert GUI links no backup engine
         working-directory: gui
         shell: pwsh
         env:
           GOWORK: off
         run: |
-          $exe = "build/bin/NimbusBackup.exe"
-          if (-not (Test-Path $exe)) { throw "GUI binary not found at $exe" }
-          $syms = & go tool nm $exe
-          $engine = $syms | Select-String -Pattern 'RunBackupInline|RunMachineBackup|runBackupPipeline'
-          if ($engine) {
-            Write-Host "GUI binary contains backup engine symbols:"
-            $engine | ForEach-Object { Write-Host "  $_" }
-            throw "The GUI must not link a backup engine (docs/V4-PIPELINE.md 3.1)"
+          go build -o nm-probe.exe .
+          if ($LASTEXITCODE -ne 0) { throw "probe build failed" }
+          try {
+            $syms = & go tool nm nm-probe.exe
+            if ($LASTEXITCODE -ne 0) { throw "go tool nm failed on the probe binary" }
+            if (-not ($syms | Select-String -Pattern 'main\.main')) {
+              throw "probe has no symbol table; an absence of engine symbols would prove nothing"
+            }
+            $engine = $syms | Select-String -Pattern 'RunBackupInline|RunMachineBackup|runBackupPipeline'
+            if ($engine) {
+              Write-Host "GUI build contains backup engine symbols:"
+              $engine | ForEach-Object { Write-Host "  $_" }
+              throw "The GUI must not link a backup engine (docs/V4-PIPELINE.md 3.1)"
+            }
+            Write-Host "OK: no backup engine symbols in the GUI build"
+          } finally {
+            Remove-Item -Force -ErrorAction SilentlyContinue nm-probe.exe
           }
-          Write-Host "OK: no backup engine symbols in the GUI binary"
 
       # The service is a plain `go build` from gui/ and would otherwise ship
       # with no Windows version info — a strong heuristic/ML false-positive
