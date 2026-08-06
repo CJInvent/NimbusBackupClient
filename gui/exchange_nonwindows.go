@@ -7,5 +7,3 @@ package main
 func detectExchange() (bool, string) { return false, "" }
 
 func getExchangeCircularLogging() (bool, bool, string) { return false, false, "" }
-
-func runExchangePostBackup(version string, healthCheck, truncate bool) {}

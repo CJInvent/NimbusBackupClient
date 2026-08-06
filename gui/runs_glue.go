@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 import (
@@ -49,20 +52,6 @@ func currentRunRegistry() *api.RunRegistry {
 	return runRegistry
 }
 
-// registerScheduledRun records a run at the moment the SCHEDULER decides to
-// start it, which is the whole point: from here the run is visible to
-// /runs/active, minutes before the first chunk uploads.
-//
-// Called beside registerRunReporter so the two records of the same run are
-// opened together and cannot drift apart.
-func registerScheduledRun(jobID, jobName, backupID, backupType string) {
-	reg := currentRunRegistry()
-	if reg == nil {
-		return
-	}
-	reg.Begin(api.TriggerSchedule, jobID, jobName, backupID, normalizeRunKind(backupType))
-}
-
 // normalizeRunKind maps the engine's backup-type vocabulary to the two words
 // the status panel shows. "vm" is the engine's name for a whole-machine image;
 // showing that word to a technician looking at a workstation would be wrong.
@@ -71,97 +60,4 @@ func normalizeRunKind(backupType string) string {
 		return "machine"
 	}
 	return "directory"
-}
-
-// attachRunRegistry wires the engine's hooks into the registry and returns a
-// finalizer to call once the engine returns.
-//
-// It ADOPTS an existing preparing run — one opened by the scheduler above, or
-// by the API server when the GUI posted /backup — rather than opening a second
-// one. Only a run nobody announced (a portal command, or a code path added
-// later that forgets) gets a fresh entry, and it is labelled TriggerService
-// rather than silently called manual.
-func attachRunRegistry(opts *BackupOptions) func(error) {
-	reg := currentRunRegistry()
-	if reg == nil {
-		return func(error) {} // GUI build, or service not yet wired
-	}
-
-	// Two-tier lookup, mirroring takeRunReporter's cpReporters-then-pending
-	// fallback, and needed for the same reason. StartBackup substitutes the
-	// hostname when it is handed an empty backup id, so a run the API server
-	// opened from a POST with no id carries "" while opts carries the
-	// resolved hostname. Matching only on the resolved id would open a
-	// SECOND run for every such backup: one stuck in preparing forever, one
-	// with the real progress.
-	runID, adopted := reg.AdoptPreparing(opts.BackupID)
-	if !adopted {
-		runID, adopted = reg.AdoptPreparing("")
-	}
-	if adopted {
-		reg.SetBackupID(runID, opts.BackupID)
-	} else {
-		runID = reg.Begin(api.TriggerService, "", "", opts.BackupID, normalizeRunKind(opts.BackupType))
-	}
-
-	prevPhase := opts.OnPhase
-	opts.OnPhase = func(phase string) {
-		switch phase {
-		case "running":
-			reg.SetState(runID, api.RunRunning)
-		case "finalizing":
-			reg.SetState(runID, api.RunFinalizing)
-		}
-		if prevPhase != nil {
-			prevPhase(phase)
-		}
-	}
-
-	prevProgress := opts.OnProgress
-	opts.OnProgress = func(percent float64, message string) {
-		// The engine reports 0-1 here; the registry and every wire format
-		// downstream use 0-100. Getting this backwards would peg every
-		// backup at 1% until the very end.
-		reg.Progress(runID, percent*100, message)
-		if prevProgress != nil {
-			prevProgress(percent, message)
-		}
-	}
-
-	prevStats := opts.OnStats
-	opts.OnStats = func(stats *BackupProgressStats) {
-		if stats != nil {
-			reg.Stats(runID, stats.BytesDone, stats.BytesTotal, stats.NewChunks, stats.ReusedChunks)
-			if stats.CurrentDir != "" {
-				reg.SetCurrentDir(runID, stats.CurrentDir)
-			}
-		}
-		if prevStats != nil {
-			prevStats(stats)
-		}
-	}
-
-	prevResult := opts.OnResult
-	opts.OnResult = func(s *BackupStatus) {
-		if s != nil {
-			reg.Complete(runID, s.Outcome != OutcomeFailed, s.Message)
-		}
-		if prevResult != nil {
-			prevResult(s)
-		}
-	}
-
-	// Complete is idempotent and first-writer-wins, so this finalizer is a
-	// safety net rather than a second writer. It has to exist:
-	// RunMachineBackup never emits OnResult, so for whole-machine backups
-	// this is the ONLY thing that ever moves the run out of "running" — and
-	// a status panel showing a backup still going hours after it finished is
-	// the same class of wrong as not showing it at all.
-	return func(err error) {
-		if err != nil {
-			reg.Complete(runID, false, err.Error())
-			return
-		}
-		reg.Complete(runID, true, "Backup completed successfully")
-	}
 }

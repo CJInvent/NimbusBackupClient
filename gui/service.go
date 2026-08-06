@@ -1,5 +1,5 @@
-//go:build windows
-// +build windows
+//go:build windows && service
+// +build windows,service
 
 package main
 
@@ -43,8 +43,7 @@ func (s *NimbusService) run() {
 		stopScheduler:    make(chan struct{}),
 		apiClient:        api.NewClient(getAPITokenPath()),
 		mode:             api.ModeInProcess, // this process IS the service
-		callbacksMap:     make(map[string]*progressCallbacks),
-		isServiceProcess: true, // Prevent mode re-detection (would cause infinite loop)
+		isServiceProcess: true,              // Prevent mode re-detection (would cause infinite loop)
 	}
 
 	// Load configuration (service will read config from file when needed)

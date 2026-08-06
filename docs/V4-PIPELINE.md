@@ -313,6 +313,57 @@ Whatever is left after that is the pipeline.
 
 ---
 
+## 5a. What the build tags now separate
+
+Collapsing the pipeline into the service left the GUI build carrying a lot of
+machinery it could no longer reach. `golangci-lint`'s `unused` check found it
+immediately — fifteen findings, every one a piece of backup-execution support —
+and the fix was to move each to the side that actually uses it, not to silence
+the linter.
+
+| Now service-only | Why |
+|---|---|
+| `backup_pipeline.go` | the engine (§3.1) |
+| `scheduler_run.go` | the loop drivers: `StartScheduler`, `checkAndRunScheduledJobs`, `HandleStartupRun`, `CleanupAbandonedJobs`, `RecalculateNextRuns`. The GUI edits jobs; the service runs them |
+| `controlplane_runreport.go` | `attachControlPlaneHooks` and its helpers — a front end that cannot run a backup has nothing to report |
+| `runs_attach.go` | hooking the engine into the run registry |
+| `api_callbacks.go` | the engine → local-API progress relay, plus the callbacks map that used to sit on `App` |
+| `pipeline_support.go` | backup cancellation, and the post-backup Exchange trigger |
+| `exchange_post_windows.go` | the tasks that run `diskshadow.exe` and PowerShell against live Exchange databases. `windows && service`: both tags load-bearing |
+| `service.go`, `service_main.go` | the Windows service host. `service.go` was `windows` only, so the GUI binary contained the whole service |
+
+`scheduler.go` keeps job CRUD **and `executeScheduledJob`**, because a
+control-plane `run_backup` command can be delivered to whichever process hosts
+the agent, and in the GUI that path reaches `StartBackup` — an HTTP POST to the
+service. What it must NOT do there is announce the run locally: that is behind
+`announceLocalRun`, real in the service and a no-op in the GUI, because the
+service announces the run on its own side and a second record would sit in
+"preparing" forever.
+
+### The Wails event seam is gone
+
+§3.5 said events would remain as a latency optimization inside the GUI process.
+That stopped being possible at step 4. The only emitter was the pipeline, and
+the pipeline is service-only, where `emitBackupEvent` was the no-op stub — so
+the events were emitted nowhere at all, and the front end's handlers for them
+were unreachable. Both sides are deleted. **Polling is the only observation
+path**, which is what §3.5 wanted anyway; the poller now also resolves the
+terminal outcome, since nothing pushes it any more.
+
+### Both build configurations are linted
+
+`golangci-lint` ran on linux+default only, so the service build — the one on
+every managed machine, and now the one holding most of the code — was never
+linted. A second pass runs it with `--build-tags=service`.
+
+`unused` is disabled in that pass, and only there. It reports symbols with no
+visible caller, a question that only has a meaningful answer where every caller
+IS visible; the service build excludes GUI-only files, so it would flag every
+helper the front end owns. The default pass keeps `unused` and covers the
+shared code.
+
+---
+
 ## 6. Sequencing
 
 The bug is worth fixing before the rewire lands, and it can be, because

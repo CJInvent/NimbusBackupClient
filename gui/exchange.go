@@ -1,7 +1,5 @@
 package main
 
-import "fmt"
-
 // Application-aware Exchange support.
 //
 // Detection is decoupled from action so the state is a clean signal the future
@@ -71,22 +69,4 @@ func (a *App) QueryExchangeLogMode() ExchangeLogMode {
 	}
 	queried, accumulate, detail := getExchangeCircularLogging()
 	return ExchangeLogMode{Queried: queried, LogsAccumulate: accumulate, Detail: detail}
-}
-
-// maybeRunExchangePostBackup runs the app-aware Exchange tasks after a
-// successful backup, but only when Exchange is present AND the operator enabled
-// awareness. Best-effort and fully logged: an Exchange task failure is recorded
-// but never retroactively fails an already-successful backup.
-func (a *App) maybeRunExchangePostBackup() {
-	if a.config == nil || (!a.config.ExchangeAware && !a.config.ExchangeLogTruncation) {
-		return
-	}
-	installed, version := detectExchange()
-	if !installed {
-		writeDebugLog("[Exchange] app-aware tasks enabled but no Exchange installation detected - skipping")
-		return
-	}
-	writeDebugLog(fmt.Sprintf("[Exchange] Running post-backup tasks for Exchange %s (health=%v, truncateLogs=%v)",
-		version, a.config.ExchangeAware, a.config.ExchangeLogTruncation))
-	runExchangePostBackup(version, a.config.ExchangeAware, a.config.ExchangeLogTruncation)
 }

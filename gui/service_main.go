@@ -1,5 +1,5 @@
-//go:build service
-// +build service
+//go:build windows && service
+// +build windows,service
 
 package main
 

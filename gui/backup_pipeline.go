@@ -46,11 +46,14 @@ import (
 // against. That is the argument for this file existing, and the reason "no
 // dead-end code" was worth stating as a requirement.
 //
-// WHAT IS GENUINELY BUILD-SPECIFIC is one thing only: whether this process has
-// a Wails window to emit events into. That is behind emitBackupEvent, which is
-// real in the GUI build and a no-op in the service build. Everything else —
-// validation, option assembly, hooks, dispatch, finalizers — is identical by
-// construction now, not by two authors remembering to keep it so.
+// THERE ARE NO WAILS EVENTS HERE. An earlier version of this file emitted
+// backup:progress / backup:stats / backup:complete / backup:result through a
+// build-tagged seam that was real in the GUI build and a no-op in the service
+// build. Once this file itself became service-only, that seam was a no-op on
+// every path it could take, and the events were emitted nowhere at all — dead
+// code with a convincing shape. Progress reaches the front end the way it
+// reaches every other observer: it polls /runs/active (docs/V4-PIPELINE.md
+// §3.5). One observation path, which is the property the whole rewire is for.
 //
 // OWNS: turning a backup request into a completed run.
 // DOES NOT OWN: deciding a backup should happen (scheduler, API, portal),
@@ -80,10 +83,9 @@ type resolvedBackup struct {
 
 // resolveBackupRequest normalizes and validates one request.
 //
-// Separate from execution so a caller can refuse a bad request AT THE POINT
-// IT ARRIVES rather than inside a goroutine it cannot observe — which is what
-// the GUI binding needs, since it must not block the UI thread for the length
-// of a backup.
+// Separate from execution so the request is fully resolved before any hook is
+// attached or any engine is entered: a bad request fails with a reason and
+// leaves no run record, no reporter and no PBS connection behind it.
 func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 	if a.config == nil {
 		return nil, errors.New("configuration not loaded")
@@ -158,13 +160,6 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 	return out, nil
 }
 
-// validateBackupRequest reports whether a request would be accepted, without
-// starting anything.
-func (a *App) validateBackupRequest(req backupRequest) error {
-	_, err := a.resolveBackupRequest(req)
-	return err
-}
-
 // runBackupPipeline validates, assembles, executes and finalizes one backup.
 // It blocks until the engine returns; callers that need it asynchronous wrap
 // it themselves, as the API server already does.
@@ -211,13 +206,7 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 				lastRelayedMsg = message
 				writeDebugLog(fmt.Sprintf("Pipeline relay: %q delivered at %.1f%%", message, pct))
 			}
-			hasCallbacks := a.notifyProgressCallbacks(pct, message)
-			if !hasCallbacks {
-				a.emitBackupEvent("backup:progress", map[string]interface{}{
-					"percent": pct,
-					"message": message,
-				})
-			}
+			a.notifyProgressCallbacks(pct, message)
 		},
 
 		OnStats: func(stats *BackupProgressStats) {
@@ -225,30 +214,6 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 				return
 			}
 			a.notifyStatsCallbacks(stats.BytesDone, stats.BytesTotal, stats.NewChunks, stats.ReusedChunks)
-			a.emitBackupEvent("backup:stats", map[string]interface{}{
-				"percent":      stats.Percent * 100,
-				"bytesDone":    stats.BytesDone,
-				"bytesTotal":   stats.BytesTotal,
-				"newChunks":    stats.NewChunks,
-				"reusedChunks": stats.ReusedChunks,
-				"failedChunks": stats.FailedChunks,
-				"currentDir":   stats.CurrentDir,
-				"message":      stats.Message,
-			})
-		},
-
-		OnResult: func(status *BackupStatus) {
-			if status == nil {
-				return
-			}
-			a.emitBackupEvent("backup:result", map[string]interface{}{
-				"outcome":      string(status.Outcome),
-				"newChunks":    status.NewChunks,
-				"reusedChunks": status.ReusedChunks,
-				"failedChunks": status.FailedChunks,
-				"totalBytes":   status.TotalBytes,
-				"durationSec":  status.DurationSec,
-			})
 		},
 
 		OnComplete: func(success bool, message string) {
@@ -257,13 +222,7 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 				a.maybeRunExchangePostBackup()
 			}
 
-			hasCallbacks := a.notifyCompleteCallbacks(success, message)
-			if !hasCallbacks {
-				a.emitBackupEvent("backup:complete", map[string]interface{}{
-					"success": success,
-					"message": message,
-				})
-			}
+			a.notifyCompleteCallbacks(success, message)
 
 			// Local history. The service build grew this separately because
 			// a manual "Back up now" on a managed machine appeared in the

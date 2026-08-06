@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from './i18n/i18nContext'
 
 import HeaderControls from './components/HeaderControls'
@@ -317,6 +317,7 @@ function App() {
   // Three seconds: fast enough that the Start button still feels immediate
   // once events are gone, slow enough to be nothing on a machine that is busy
   // reading a disk.
+  const watchedRun = useRef(null)
   useEffect(() => {
     if (!GetActiveRuns) return
     let cancelled = false
@@ -328,7 +329,40 @@ function App() {
 
         const runs = resp && resp.runs
         const run = (runs && runs.length) ? runs[0] : null
-        if (!run) return
+
+        if (!run) {
+          // A run we were watching has finished. Nothing pushes that fact to
+          // us any more -- the service emits no Wails events, because the
+          // process that runs backups has no window to emit into -- so the
+          // outcome is resolved the same way the progress was: by asking.
+          if (watchedRun.current) {
+            const finishedId = watchedRun.current
+            watchedRun.current = null
+            try {
+              const recent = await GetRecentRuns(1)
+              const done = (recent && recent.runs || []).find(r => r.run_id === finishedId)
+              if (done && !cancelled) {
+                setBackupPhase('')
+                setProgress(done.success ? 100 : 0)
+                setBackupStats({ startTime: null, lastUpdate: null, lastPercent: 0, speed: 0, eta: null, bytesDone: 0, bytesTotal: 0, newChunks: 0, reusedChunks: 0, failedChunks: 0, currentDir: '' })
+                showStatus(done.success ? '✅ ' + (done.message || 'Backup complete') : '❌ ' + (done.error || done.message || 'Backup failed'), done.success ? 'success' : 'error')
+                // Job history is NOT appended here. The service writes it
+                // when the run completes, and the history poll picks it up --
+                // appending locally as well double-counted every backup the
+                // GUI happened to be open for.
+                // Refresh the history immediately rather than waiting for
+                // its own slower poll, so a finished backup appears in the
+                // list at the moment the card clears.
+                try {
+                  const h = await GetJobHistory()
+                  if (h && !cancelled) setJobHistory(h)
+                } catch (err) { /* history poll will catch up */ }
+              }
+            } catch (err) { /* the panel already shows the connection state */ }
+          }
+          return
+        }
+        watchedRun.current = run.run_id
 
         // A run in "preparing" reports 0%, and 0 is also how the card decides
         // it has nothing to show. Floor it at 1 so a backup that has been
@@ -381,89 +415,6 @@ function App() {
     poll()
     const id = setInterval(poll, 3000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [])
-
-  // Listen to backup events
-  useEffect(() => {
-    if (!EventsOn) return
-
-    const unsubProgress = EventsOn('backup:progress', (data) => {
-      const now = Date.now()
-      const percent = Math.round(data.percent)
-      setProgress(percent)
-      // Phase changes update the card's status line; NO toast per tick —
-      // the auto-hiding toast duplicated the card and blinked with every
-      // event (the same defect the restore path had).
-      if (data.message) setBackupPhase(data.message)
-
-      // Speed & ETA — measured on BYTES over the WHOLE run, not on percent
-      // between two ticks. Percent-per-second lied grotesquely: a burst of
-      // reused chunks makes percent fly while the disk still has 900 GB to
-      // read, so the old ETA said "4m" on a fresh 1 TB backup. Byte rate over
-      // total elapsed self-corrects, and the displayed value is padded x1.15
-      // and labelled ">=": the whole disk must be READ no matter how much is
-      // reused, so if the estimate errs, it errs high.
-      setBackupStats(prev => ({
-        ...prev, // structured stats (bytes/chunks) arrive via backup:stats
-        startTime: prev.startTime || now,
-        lastUpdate: now,
-        lastPercent: percent,
-      }))
-    })
-
-    // Structured live statistics (bytes + chunk counts) emitted alongside progress.
-    const unsubStats = EventsOn('backup:stats', (data) => {
-      setBackupStats(prev => {
-        const startTime = prev.startTime || Date.now()
-        const elapsed = (Date.now() - startTime) / 1000
-        const done = data.bytesDone || 0
-        const total = data.bytesTotal || 0
-        // Byte rate over the whole run (self-correcting); ETA padded x1.15
-        // and rendered as ">=" — see the comment in the progress handler.
-        const byteRate = elapsed > 3 && done > 0 ? done / elapsed : 0
-        const eta = byteRate > 0 && total > done
-          ? Math.round(((total - done) / byteRate) * 1.15)
-          : null
-        return {
-          ...prev,
-          startTime,
-          bytesDone: done,
-          bytesTotal: total,
-          newChunks: data.newChunks || 0,
-          reusedChunks: data.reusedChunks || 0,
-          failedChunks: data.failedChunks || 0,
-          currentDir: data.currentDir || '',
-          byteRate,
-          eta,
-        }
-      })
-    })
-
-    const unsubComplete = EventsOn('backup:complete', (data) => {
-      setBackupPhase('')
-      setProgress(data.success ? 100 : 0)
-      setBackupStats({ startTime: null, lastUpdate: null, lastPercent: 0, speed: 0, eta: null, bytesDone: 0, bytesTotal: 0, newChunks: 0, reusedChunks: 0, failedChunks: 0, currentDir: '' })
-      showStatus(data.success ? '✅ ' + data.message : '❌ ' + data.message, data.success ? 'success' : 'error')
-
-      // Add to job history
-      const historyEntry = {
-        id: Date.now().toString(),
-        name: `Backup ${config['backup-id'] || hostname}`,
-        timestamp: new Date().toISOString(),
-        status: data.success ? 'success' : 'failed',
-        message: data.message,
-        backupDirs: backupDirs.split('\n').map(d => d.trim()).filter(d => d),
-        backupId: config['backup-id'] || hostname,
-        useVSS: config.usevss
-      }
-      setJobHistory(prev => [historyEntry, ...prev].slice(0, 20)) // Keep last 20 entries
-    })
-
-    return () => {
-      if (unsubProgress) unsubProgress()
-      if (unsubStats) unsubStats()
-      if (unsubComplete) unsubComplete()
-    }
   }, [])
 
   // Listen to restore events

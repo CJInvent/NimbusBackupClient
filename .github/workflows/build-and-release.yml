@@ -188,11 +188,14 @@ jobs:
           # the Windows build 20 minutes later behind other gates.
           run_view windows ""
           run_view windows service
-          # linux+service is deliberately NOT a view: the service is a Windows
-          # service (service.go is //+build windows, and main.go is !service),
-          # so that combination has neither NimbusService nor a main() and
-          # could never be built or shipped. Checking it would assert a
-          # configuration the product does not have.
+          # linux+service is not a SHIPPABLE view — the service is a Windows
+          # service, so service.go and service_main.go are both
+          # `windows && service` and that combination has no service host and
+          # no main(). It is still worth compiling, because it is the view the
+          # service-build lint pass in the `security` job uses, and until
+          # those two files carried the `windows` constraint it did not even
+          # typecheck.
+          run_view linux service
           exit $fail
 
   # Security and quality checks
@@ -250,6 +253,26 @@ jobs:
           version: v2.12.2
           working-directory: gui
           args: --timeout=5m
+        env:
+          GOWORK: off
+
+      # The default pass above lints the GUI build. Nothing was linting the
+      # SERVICE build, which is the one that runs on every managed machine —
+      # and it is where most of the code now lives (docs/V4-PIPELINE.md §3.1).
+      # A dead build-tagged seam survived several commits because of exactly
+      # this gap.
+      #
+      # `unused` is disabled here, and only here. It reports symbols with no
+      # visible caller, which is a question that only has a meaningful answer
+      # in a build configuration where every caller IS visible. The service
+      # build excludes GUI-only files, so `unused` would flag every helper the
+      # front end owns. The default pass keeps `unused` and covers that.
+      - name: Run golangci-lint (service build)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          working-directory: gui
+          args: --timeout=5m --build-tags=service --disable=unused
         env:
           GOWORK: off
 
