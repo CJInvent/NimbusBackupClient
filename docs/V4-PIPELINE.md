@@ -364,6 +364,43 @@ shared code.
 
 ---
 
+## 5b. The GUI does not evaluate org policy
+
+Found while auditing what step 4 left behind, and it predates the rewire.
+
+`ControlPolicy().FileRestore` gates every browse and restore call in
+`imagebrowse_core.go` and `controlplane_browse.go`. Those are Wails bindings,
+so on a managed machine **they run in the GUI process** — and the shared
+implementation read `cpAgent`, which is nil there, and treated a nil agent as
+"standalone install, nothing to enforce":
+
+```go
+if cpAgent == nil {
+    return controlplane.Policy{FileRestore: true}
+}
+```
+
+The GUI only ever populated `cpAgent` in the old standalone mode, so on any
+machine where the service was running — the normal case — org file-restore
+policy did not apply to the front end at all. Step 4 made it universal by
+removing the last path that populated it.
+
+The fix is not to give the GUI an agent. It is for the GUI to **ask the
+process that has one**: `ControlPolicy` is now split by build tag, and the GUI
+implementation reads the effective policy from `/controlplane/status`, cached
+for ten seconds because a directory walk consults it hundreds of times. The
+service has already folded break-glass into the value it reports, so the GUI
+takes it and does not second-guess it.
+
+**It fails closed**, which is the opposite of the choice made for unmanaged
+backups (§3.1) and for the same underlying reason: the costs run in opposite
+directions. Refusing a restore during an outage is an inconvenience with a
+documented override; permitting one is the data leaving the building. An
+install with no control server configured stays permissive — ungoverned by
+design, not by accident.
+
+---
+
 ## 6. Sequencing
 
 The bug is worth fixing before the rewire lands, and it can be, because
