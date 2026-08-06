@@ -387,6 +387,56 @@ func BreakGlassInEffect() bool {
 	return cpAgent.BreakGlassEligible(emergencyFileRestoreRequested(), 0)
 }
 
+// UnmanagedBackupsPermitted is THE gate for a backup this machine authored
+// itself — a local scheduler job, or one started at the console. Work sent by
+// the control plane is managed by definition and never passes through here.
+//
+// An install with no control server is ungoverned by design: the project ships
+// and is supported without NimbusControl, so an unmanaged install is a
+// product, not a bypass.
+func UnmanagedBackupsPermitted() bool {
+	if cpAgent == nil {
+		return true
+	}
+	allowed, viaOverride := cpAgent.UnmanagedBackupsEligible(unmanagedBackupsOverrideRequested(), 0)
+	if viaOverride {
+		noteUnmanagedOverrideUse()
+	}
+	return allowed
+}
+
+var unmanagedLogMu sync.Mutex
+var unmanagedLoggedAt time.Time
+
+// noteUnmanagedOverrideUse records that the local override took effect.
+// Throttled, but never silent: overriding an administrator's policy has to
+// leave a trail someone can find afterwards.
+func noteUnmanagedOverrideUse() {
+	unmanagedLogMu.Lock()
+	defer unmanagedLogMu.Unlock()
+	if time.Since(unmanagedLoggedAt) < 5*time.Minute {
+		return
+	}
+	unmanagedLoggedAt = time.Now()
+	last := cpAgent.Status().LastSuccess
+	when := "never"
+	if !last.IsZero() {
+		when = last.Format(time.RFC3339)
+	}
+	msg := fmt.Sprintf("[controlplane] OVERRIDE: local AllowUnmanagedBackups flag is permitting a "+
+		"locally-scheduled backup because the control server is unreachable (last successful "+
+		"check-in: %s). Org policy restricts this machine to managed jobs; clear the flag once "+
+		"the server is reachable again.", when)
+	writeDebugLog(msg)
+	writeBackupLog(msg)
+}
+
+// ErrUnmanagedBackupsDisabled is surfaced verbatim in the GUI and returned by
+// the local API.
+var ErrUnmanagedBackupsDisabled = errors.New(
+	"backups started on this machine are disabled by your administrator; " +
+		"scheduled work sent by the management server still runs")
+
 // ErrRestoreDisabled is surfaced verbatim in the GUI.
 var ErrRestoreDisabled = errors.New("file restore is disabled on this machine by your administrator")
 

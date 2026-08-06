@@ -156,10 +156,18 @@ What it means concretely:
   LocalSystem, always on. It governs whether the service may execute
   **unmanaged** work — local jobs authored on the machine rather than by
   NimbusControl.
-- `HKLM\SOFTWARE\NimbusBackup`, `REG_DWORD`, following
-  `gui/breakglass_windows.go` exactly: HKLM so setting it needs
+- `HKLM\SOFTWARE\NimbusBackup`, `REG_DWORD` `AllowUnmanagedBackups`,
+  following `gui/breakglass_windows.go` exactly: HKLM so setting it needs
   Administrator, because an override any logged-on user can flip is not an
-  override. Read by the service, never by the GUI.
+  override. Read by the service, never by the GUI. **Built** —
+  `controlplane/unmanaged.go` holds the decision (pure and time-injected,
+  like `breakglass.go`), the org key is `restrict_unmanaged_backups`, and
+  the gate sits at the two entry points that are unmanaged by definition:
+  `executeScheduledJob` when its `requestID` is empty (nobody asked for it)
+  and the service's `StartBackup` (the console and the local API). A
+  control-plane `run_backup` command carries a request id and is never
+  gated — an org restricting a machine to managed jobs must not stop the
+  org from running one.
 
 **The property that makes it safe is the one break-glass already has: locally
 set is necessary but not sufficient.** The service is the thing the control
@@ -173,9 +181,23 @@ the GUI is not on the wire. Precedence:
 | reachable, org permits unmanaged | on | unmanaged jobs run |
 | reachable, org permits | off | managed jobs only |
 | none configured (unmanaged install) | on | the standalone product works |
-| unreachable, last policy forbade it | on | refused — cached policy holds |
+| unreachable > 5 min, last policy forbade it | on | allowed, logged as an override |
+| unreachable, last policy forbade it | off | refused — cached policy holds |
 
-The last row is the fail-closed one, and it matches the existing decision
+The floor is 5 minutes, shorter than break-glass's 15, and that difference is
+pinned by a test so nobody merges them into one constant: break-glass guards
+reading data OUT of backups, where waiting is an inconvenience; this guards
+TAKING a backup, where waiting is the window in which the data can be lost.
+
+One thing came out the opposite way round from the rest of the policy system.
+Every other capability is named for the permission, so a `Policy` zero value
+denies and an agent that has never checked in fails closed. This key is named
+for the RESTRICTION, so the zero value permits. Failing closed here would mean
+a machine that cannot reach the server stops backing up — the outcome the
+product exists to prevent — and would kill every existing unmanaged install on
+upgrade. Pinned by `TestPolicyZeroValuePermitsUnmanagedBackups`.
+
+The refusal row matches the existing decision
 that org file-restore policy stays authoritative during an outage
 (`docs/CONTROL-PLANE.md`): during a ransomware event the needed operation is
 a full-machine restore, which is not behind that gate at all.

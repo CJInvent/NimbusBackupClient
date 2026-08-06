@@ -39,6 +39,13 @@ func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {}
 // (backup_pipeline.go), shared with the GUI build so the two cannot drift
 // again.
 func (a *App) StartBackup(backupType string, backupDirs, driveLetters, excludeList []string, backupID string, useVSS bool, compression string) error {
+	// Everything reaching this method was started AT THE MACHINE — the GUI's
+	// button, or the local API. Control-plane commands run scheduled jobs
+	// through executeScheduledJob and do not come this way, so gating here
+	// cannot block the org's own work.
+	if !UnmanagedBackupsPermitted() {
+		return ErrUnmanagedBackupsDisabled
+	}
 	return a.runBackupPipeline(backupRequest{
 		BackupType:   backupType,
 		BackupDirs:   backupDirs,

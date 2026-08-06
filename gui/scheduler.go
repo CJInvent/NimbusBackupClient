@@ -556,6 +556,16 @@ func (a *App) checkAndRunScheduledJobs() {
 
 // executeScheduledJob executes a scheduled job
 func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
+	// An empty requestID means the LOCAL scheduler decided to run this —
+	// nobody asked for it. A non-empty one came with a control-plane
+	// run_backup command, which is managed work by definition and is never
+	// gated: the org restricting a machine to managed jobs must not stop the
+	// org from running one.
+	if requestID == "" && !UnmanagedBackupsPermitted() {
+		writeDebugLog(fmt.Sprintf("Job %s not started: %v", job.Name, ErrUnmanagedBackupsDisabled))
+		return
+	}
+
 	// Check if job is already running
 	runningJobsMutex.Lock()
 	if runningJobs[job.ID] {

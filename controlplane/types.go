@@ -77,6 +77,20 @@ type Policy struct {
 	// FileRestore=false: the GUI must hide/disable its restore browser and
 	// the local API must refuse restore operations on this machine.
 	FileRestore bool `json:"file_restore"`
+
+	// RestrictUnmanagedBackups=true: the agent must refuse backups it
+	// authored ITSELF — its local scheduler's jobs and anything started at
+	// the console — and run only work this control plane sent it. It does
+	// not gate restore, and it does not stop a run already under way.
+	//
+	// Note the polarity. Every other capability here is named for the
+	// PERMISSION, so a Policy zero value denies everything and an agent that
+	// has never checked in fails closed. This one is named for the
+	// RESTRICTION, so the zero value PERMITS. That is deliberate: failing
+	// closed here means a machine that cannot reach the server stops backing
+	// up, which is the outcome the product exists to prevent. See
+	// unmanaged.go, and the key's note in NimbusControl Core\Policy.
+	RestrictUnmanagedBackups bool `json:"restrict_unmanaged_backups"`
 }
 
 type CheckinResponse struct {
