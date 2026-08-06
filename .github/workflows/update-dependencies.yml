@@ -1,17 +1,43 @@
 name: Update Dependencies (Manual)
 
+# Bumps Go dependencies across EVERY module in the workspace and pushes the
+# result to the branch it was dispatched on.
+#
+# Rewritten 2026-08-06. What it was doing before:
+#
+#   * it walked a HARDCODED module list that had drifted from the repository.
+#     It cd'd into `service/`, which does not exist -- so the "all" scope
+#     failed there every time, after it had already rewritten gui/, snapshot/
+#     and machinebackup/ go.mod files and before it reached the commit step.
+#     A dispatch left the tree modified and nothing recorded.
+#   * that list also MISSED controlplane, imagebrowse, clientcommon,
+#     pkg/retry, pkg/security and gui/api -- half the workspace never got
+#     updated by the workflow whose job is updating it.
+#   * each module named its dependencies by hand, so anything added since the
+#     list was written was never bumped.
+#   * the `specific` scope had no implementing step. Choosing it ran the
+#     commit and push steps over an unmodified tree.
+#   * nothing checked that the workspace still BUILT before pushing.
+#
+# Modules are now discovered from the filesystem, so the workflow cannot fall
+# out of step with the repository again, and the result has to compile before
+# it is committed.
+
 on:
   workflow_dispatch:
     inputs:
       scope:
         description: 'Update scope'
         required: true
-        default: 'all'
+        default: 'patch-only'
         type: choice
         options:
-          - all
           - patch-only
-          - specific
+          - all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   GO_VERSION: '1.26.5'
@@ -20,108 +46,97 @@ jobs:
   update-deps:
     name: Update Go Dependencies
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install dependencies
-        working-directory: gui
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
-      - name: Update all modules dependencies
-        if: inputs.scope == 'all'
+      - name: Update every module
         env:
           GOWORK: off
         run: |
-          echo "🔄 Updating all dependencies to latest compatible versions..."
+          set -euo pipefail
 
-          # Update gui
-          cd gui
-          go get -u golang.org/x/crypto golang.org/x/net golang.org/x/sys golang.org/x/text golang.org/x/exp
-          go get -u github.com/wailsapp/wails/v2 github.com/google/uuid github.com/labstack/echo/v4
-          go get -u github.com/cornelk/hashmap github.com/go-ole/go-ole
-          go mod tidy
+          # Discovered, not listed. A module added to the repository is
+          # updated by this workflow the moment it exists.
+          mapfile -t modules < <(find . -name go.mod -not -path './gui/frontend/node_modules/*' -printf '%h\n' | sort)
+          if [ ${#modules[@]} -eq 0 ]; then
+            echo "::error::no Go modules found - the discovery is wrong, not the repository"
+            exit 1
+          fi
+          echo "Updating ${#modules[@]} modules (scope: ${{ inputs.scope }})"
 
-          # Update snapshot
-          cd ../snapshot
-          go get -u github.com/go-ole/go-ole golang.org/x/sys
-          go mod tidy
+          for m in "${modules[@]}"; do
+            echo "::group::$m"
+            (
+              cd "$m"
+              if [ "${{ inputs.scope }}" = "patch-only" ]; then
+                # Patch releases only: security fixes without API churn.
+                go get -u=patch ./...
+              else
+                go get -u ./...
+              fi
+              go mod tidy
+            )
+            echo "::endgroup::"
+          done
 
-          # Update machinebackup
-          cd ../machinebackup
-          go get -u github.com/go-ole/go-ole github.com/google/uuid golang.org/x/sys
-          go mod tidy
-
-          # Update service
-          cd ../service
-          go get -u github.com/kardianos/service golang.org/x/sys
-          go mod tidy
-
-          # Update pbscommon
-          cd ../pbscommon
-          go get -u github.com/klauspost/compress golang.org/x/net golang.org/x/text
-          go mod tidy
-
-          # Update directorybackup
-          cd ../directorybackup
-          go get -u github.com/cornelk/hashmap golang.org/x/exp golang.org/x/text golang.org/x/sys
-          go mod tidy
-
-          # Update nbd
-          cd ../nbd
-          go get -u github.com/pojntfx/go-nbd github.com/rivo/tview golang.org/x/sys golang.org/x/term golang.org/x/text
-          go mod tidy
-
-      - name: Update patch versions only
-        if: inputs.scope == 'patch-only'
-        env:
-          GOWORK: off
+      - name: The workspace must still build
         run: |
-          echo "🔄 Updating patch versions only (security fixes)..."
-          cd gui && go get -u=patch ./... && go mod tidy
+          set -euo pipefail
+          # A dependency bump that does not compile is worse than no bump:
+          # it lands on the branch and every later push looks broken. Both
+          # GOOS views, because most of this code is Windows-only.
+          for goos in linux windows; do
+            for tags in "" service; do
+              echo "::group::GOOS=$goos tags=${tags:-none}"
+              if [ -z "$tags" ]; then
+                GOOS=$goos go build ./... || { echo "::error::build failed for GOOS=$goos"; exit 1; }
+              else
+                GOOS=$goos go build -tags "$tags" ./... || { echo "::error::build failed for GOOS=$goos tags=$tags"; exit 1; }
+              fi
+              echo "::endgroup::"
+            done
+          done
 
-      - name: Show changes
+      - name: Show what changed
         run: |
-          echo "📊 Changes made to go.mod files:"
           git diff --stat
-          echo ""
-          echo "📝 Detailed changes:"
           git diff
 
-      - name: Commit and push changes
+      - name: Commit and push
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-          if [[ -n $(git status -s) ]]; then
-            git add "**/go.mod" "**/go.sum"
-            git commit -m "chore(deps): update Go dependencies (${{ inputs.scope }})
-
-            - Updated via manual workflow trigger
-            - Scope: ${{ inputs.scope }}
-            - All go.mod and go.sum files updated"
-
-            git push
-            echo "✅ Dependencies updated and pushed!"
-          else
-            echo "ℹ️ No changes detected - dependencies already up to date"
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes - dependencies were already current."
+            echo "No changes - dependencies were already current." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
 
-      - name: Summary
-        run: |
-          echo "## 🎉 Dependency Update Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Scope:** ${{ inputs.scope }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Changed files:" >> $GITHUB_STEP_SUMMARY
-          git diff --name-only HEAD~1 HEAD | grep "go\.\(mod\|sum\)" >> $GITHUB_STEP_SUMMARY || echo "No changes" >> $GITHUB_STEP_SUMMARY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- '*go.mod' '*go.sum'
+          git commit -m "chore(deps): update Go dependencies (${{ inputs.scope }})" \
+                     -m "Dispatched on ${{ github.ref_name }}. Every module in the workspace was updated, and all four compile views were built before this was committed."
+          git push
+
+          {
+            echo "## Dependencies updated"
+            echo
+            echo "**Scope:** ${{ inputs.scope }}"
+            echo
+            echo '```'
+            git show --stat --oneline HEAD | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -348,10 +348,23 @@ jobs:
         working-directory: gui
         run: go tool cover -html=coverage.out -o coverage.html
 
+      # v3 is two majors stale. Advisory either way: there is no codecov.yml
+      # in this repository and no token configured, so a failure here must
+      # not fail the build.
       - name: Upload coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
         with:
           files: ./gui/coverage.out
+
+      # The HTML report was generated and then discarded. If it is worth the
+      # step that builds it, it is worth being able to open it.
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: gui/coverage.html
+          retention-days: 14
 
   # S1 — workspace test sweep. The `test` job above covers gui + controlplane
   # only; every other module's suite existed but NEVER EXECUTED in CI, because
@@ -1152,7 +1165,9 @@ jobs:
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-cli, build-gui, windows-smoke]
+    # toolchain included deliberately: the dev release already required it,
+    # so without it here a STABLE release verified less than a dev build did.
+    needs: [toolchain, build-cli, build-gui, windows-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -1347,7 +1362,7 @@ jobs:
           echo "**Nimbus Backup — Fully managed Proxmox Backup Server datastores** — [🇬🇧 EN](https://nimbus.rdem-systems.com/en/?utm_source=github) · [🇫🇷 FR](https://nimbus.rdem-systems.com/?utm_source=github)" >> RELEASE_BODY.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body_path: RELEASE_BODY.md
           files: release/*
