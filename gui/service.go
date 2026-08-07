@@ -97,6 +97,13 @@ func (s *NimbusService) run() {
 	// scheduled backup was invisible to the GUI.
 	SetRunRegistry(s.apiServer.Runs())
 
+	// The lockdown control. A predicate rather than a value because the
+	// policy arrives on a check-in: an org that locks a machine expects that
+	// on the next call, not on the next service restart. ControlPolicy()
+	// here is the service-side evaluation, so it already has break-glass
+	// folded in and does not need a round trip.
+	s.apiServer.SetLockedFunc(func() bool { return ControlPolicy().GUIReadOnly })
+
 	// Startup jobs run HERE now, not in the GUI.
 	//
 	// BEHAVIOUR CHANGE, deliberate: runAtStartup used to fire when a user

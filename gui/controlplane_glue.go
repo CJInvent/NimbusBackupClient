@@ -167,6 +167,7 @@ func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 		out["checkin_seconds"] = st.CheckinPeriod
 		out["policy_file_restore"] = st.Policy.FileRestore
 		out["restrict_unmanaged_backups"] = st.Policy.RestrictUnmanagedBackups
+		out["gui_read_only"] = st.Policy.GUIReadOnly
 		// Distinguish "the org grants this" from "the org denies it but the
 		// control server is unreachable and an admin set the local override".
 		// The UI must never present the second as if it were the first.

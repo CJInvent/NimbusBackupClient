@@ -445,8 +445,26 @@ steps 1-2 are additive and independently shippable.
    `NimbusBackupSVC.exe`, and CI now asserts that on every build — a build
    tag is exactly the kind of thing a later refactor removes without
    noticing.
-5. **Read-only mode**, which by then is the ordinary panel minus the
-   mutating endpoints, and is enforced by handlers already written.
+5. **Read-only mode.** The ENFORCEMENT half is built:
+   `gui/api/readonly.go` refuses every request that is not on an explicit
+   allowlist while `gui_read_only` is set, wired in
+   `authMiddleware(readOnlyMiddleware(mux))` — inside auth, so an
+   unauthenticated prober gets 401 and learns nothing rather than 403 and
+   learns the machine is managed and locked.
+
+   **The list is an allowlist, and that is the design.** Enumerating the
+   mutating routes instead would leave every route added later permitted
+   until somebody remembered to list it, and "somebody remembers" is not a
+   control. Method is pinned alongside path, so a reader that grows a POST
+   branch later cannot quietly widen what a locked agent will do.
+
+   Read-only does not stop the machine backing up. Scheduled work and
+   control-plane commands originate inside the service and never touch this
+   API; what stops is the console driving them.
+
+   Still to build: the panel itself — connection tiles, the seven-day table
+   off `/runs/recent` instead of `GetJobHistory`, and omitting the controls
+   `App.IsReadOnly()` now reports on.
 6. **Managed jobs and schedules** (NimbusControl `V4-CLIENT-CONFIG.md`) land
    on top of a pipeline that has one entry point, which is the reason to do
    this first rather than after.

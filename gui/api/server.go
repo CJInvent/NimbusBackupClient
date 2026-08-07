@@ -20,6 +20,9 @@ type Server struct {
 	// backup was invisible to the GUI (docs/V4-PIPELINE.md §2).
 	runs *RunRegistry
 
+	// lockedState carries the read-only predicate (readonly.go).
+	lockedState
+
 	// version is stamped in at service start. It used to be the string
 	// literal "0.1.92" with a TODO beside it, which reported a version two
 	// minors stale to anyone who asked.
@@ -95,7 +98,10 @@ func (s *Server) setupRoutes() {
 // Start starts the HTTP server
 func (s *Server) Start() error {
 	log.Printf("Starting API server on %s", s.addr)
-	return http.ListenAndServe(s.addr, s.authMiddleware(s.mux))
+	// readOnlyMiddleware sits INSIDE auth: an unauthenticated caller gets
+	// 401 and learns nothing, rather than 403 and learns this machine is
+	// managed and locked.
+	return http.ListenAndServe(s.addr, s.authMiddleware(s.readOnlyMiddleware(s.mux)))
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

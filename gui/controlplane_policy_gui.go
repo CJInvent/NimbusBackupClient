@@ -96,13 +96,21 @@ func fetchPolicyFromService() controlplane.Policy {
 	known, _ := st["policy_known"].(bool)
 	if !known {
 		writeDebugLog("[policy] service reports no agent yet; restore stays disabled")
+		// Not GUIReadOnly:true. Failing closed is right for restore, where
+		// the cost of a wrong answer is data leaving the building; it is
+		// wrong for the console, where it would blank the panel of a
+		// machine whose service simply has not checked in yet. The service
+		// refuses the mutating calls either way, so nothing is unsafe about
+		// rendering the controls and letting them 403.
 		return controlplane.Policy{}
 	}
 
 	fileRestore, _ := st["policy_file_restore"].(bool)
 	restrict, _ := st["restrict_unmanaged_backups"].(bool)
+	readOnly, _ := st["gui_read_only"].(bool)
 	return controlplane.Policy{
 		FileRestore:              fileRestore,
 		RestrictUnmanagedBackups: restrict,
+		GUIReadOnly:              readOnly,
 	}
 }

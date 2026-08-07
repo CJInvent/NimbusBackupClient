@@ -91,6 +91,14 @@ type Policy struct {
 	// up, which is the outcome the product exists to prevent. See
 	// unmanaged.go, and the key's note in NimbusControl Core\Policy.
 	RestrictUnmanagedBackups bool `json:"restrict_unmanaged_backups"`
+
+	// GUIReadOnly=true: the console opens as a status panel and nothing
+	// else, and the local API refuses every mutating call. It does NOT stop
+	// the machine backing up -- scheduled work and control-plane commands
+	// never touch that API. Same restriction-named, permissive-by-default
+	// polarity as the field above, for the same reason: failing closed here
+	// would lock the console of every unmanaged install.
+	GUIReadOnly bool `json:"gui_read_only"`
 }
 
 type CheckinResponse struct {

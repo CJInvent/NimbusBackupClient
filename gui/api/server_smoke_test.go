@@ -191,7 +191,7 @@ func bootSmokeServer(t *testing.T) (*httptest.Server, *stubHandler) {
 	t.Helper()
 	h := newStub()
 	s := NewServer("127.0.0.1:0", h, testToken)
-	ts := httptest.NewServer(s.authMiddleware(s.mux))
+	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
 	t.Cleanup(ts.Close)
 	return ts, h
 }

@@ -320,6 +320,19 @@ func (a *App) GetSystemInfo() map[string]interface{} {
 	}
 }
 
+// IsReadOnly reports whether this console is a status panel.
+//
+// The front end uses it to OMIT controls rather than disable them, matching
+// the portal's no-leak rule: a denied control is not in the markup.
+//
+// This is presentation only. The control is the service refusing every
+// mutating call while locked (gui/api/readonly.go) -- so a front end that
+// ignores this, or a modified one that never asks, changes nothing about what
+// the agent will actually do.
+func (a *App) IsReadOnly() bool {
+	return ControlPolicy().GUIReadOnly
+}
+
 func (a *App) GetVersion() string {
 	writeDebugLog(fmt.Sprintf("GetVersion() returned: %s", appVersion))
 	return appVersion

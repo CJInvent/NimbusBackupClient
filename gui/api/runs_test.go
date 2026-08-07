@@ -372,7 +372,7 @@ func newRunsTestServer(t *testing.T) (*Server, *httptest.Server) {
 	// The real stub from the smoke suite: /status delegates to the handler,
 	// and a nil one would make this pass or fail for the wrong reason.
 	s := NewServer("127.0.0.1:0", newStub(), testToken)
-	ts := httptest.NewServer(s.authMiddleware(s.mux))
+	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
 	t.Cleanup(ts.Close)
 	return s, ts
 }
