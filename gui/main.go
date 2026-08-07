@@ -320,6 +320,22 @@ func (a *App) GetSystemInfo() map[string]interface{} {
 	}
 }
 
+// GetConnections backs the panel's connection tiles.
+//
+// An unreachable service returns an empty picture rather than an error: the
+// caller is a poller, and the panel already has a place to say the service is
+// not answering without every tile turning into an error toast.
+func (a *App) GetConnections() (*api.ConnectionsResponse, error) {
+	if a.apiClient == nil {
+		return &api.ConnectionsResponse{PBS: []api.PBSConnection{}, ServerTime: time.Now()}, nil
+	}
+	resp, err := a.apiClient.GetConnections()
+	if err != nil {
+		return &api.ConnectionsResponse{PBS: []api.PBSConnection{}, ServerTime: time.Now()}, nil
+	}
+	return resp, nil
+}
+
 // IsReadOnly reports whether this console is a status panel.
 //
 // The front end uses it to OMIT controls rather than disable them, matching

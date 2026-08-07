@@ -390,3 +390,24 @@ func (c *Client) getRuns(path string) (*RunsResponse, error) {
 	}
 	return &out, nil
 }
+
+// GetConnections returns what this machine can currently reach: every PBS
+// destination and the control plane. Served from the service's cache, so it
+// is safe to poll.
+func (c *Client) GetConnections() (*ConnectionsResponse, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/connections")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connections: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("service returned error: %d", resp.StatusCode)
+	}
+
+	var out ConnectionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}

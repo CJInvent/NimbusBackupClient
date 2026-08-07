@@ -32,6 +32,7 @@ var readOnlyExactPaths = map[string]struct{}{
 	"/runs/active":         {}, // what is running now
 	"/runs/recent":         {}, // the seven-day panel
 	"/controlplane/status": {}, // whether the server is reachable, and the policy
+	"/connections":         {}, // the panel's connection tiles
 }
 
 // readOnlyPrefixes are subtree routes served while locked. Kept separate from

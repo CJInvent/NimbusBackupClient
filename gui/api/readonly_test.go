@@ -72,7 +72,7 @@ func TestLockedAgentStillServesTheStatusPanel(t *testing.T) {
 	// Everything the panel needs, and nothing else. A lockdown that also
 	// blinded the technician would push every question to the MSP helpdesk.
 	for _, path := range []string{
-		"/status", "/runs/active", "/runs/recent", "/runs/" + id,
+		"/status", "/runs/active", "/runs/recent", "/connections", "/runs/" + id,
 	} {
 		if code := req(t, c, http.MethodGet, base+path, true); code != http.StatusOK {
 			t.Errorf("GET %s = %d while locked, want 200 — the panel must still render", path, code)
@@ -172,6 +172,8 @@ func TestReadOnlyAllowedIsPurelyAboutMethodAndPath(t *testing.T) {
 		{http.MethodGet, "/runs/run-1-2", true},
 		{http.MethodGet, "/backup/status/job-1", true},
 		{http.MethodGet, "/controlplane/status", true},
+		{http.MethodGet, "/connections", true},
+		{http.MethodPost, "/connections", false},
 		{http.MethodGet, "/controlplane/save", false},
 		{http.MethodGet, "/backup", false},
 		{http.MethodGet, "/jobs", false},
@@ -181,5 +183,71 @@ func TestReadOnlyAllowedIsPurelyAboutMethodAndPath(t *testing.T) {
 		if got := readOnlyAllowed(c.method, c.path); got != c.want {
 			t.Errorf("readOnlyAllowed(%s, %s) = %v, want %v", c.method, c.path, got, c.want)
 		}
+	}
+}
+
+func TestConnectionsIsHonestWhenUnwired(t *testing.T) {
+	// A panel asking an agent whose provider was never installed must get a
+	// renderable answer, not a 404 that reads as "this agent is broken".
+	_, ts := newRunsTestServer(t)
+
+	var out ConnectionsResponse
+	if code := getJSON(t, ts, "/connections", &out); code != http.StatusOK {
+		t.Fatalf("/connections unwired = %d, want 200", code)
+	}
+	if out.PBS == nil {
+		t.Error("PBS is null; the panel iterates it and an empty list is the same fact")
+	}
+	if len(out.PBS) != 0 {
+		t.Errorf("PBS = %+v, want empty", out.PBS)
+	}
+	if out.ControlPlane.Configured {
+		t.Error("an unwired agent claimed a control plane is configured")
+	}
+	if out.ServerTime.IsZero() {
+		t.Error("server_time absent; a client cannot age the data without it")
+	}
+}
+
+func TestConnectionsReportsReachabilityAsTriState(t *testing.T) {
+	s, ts := newRunsTestServer(t)
+	yes, no := true, false
+	s.SetConnectionsFunc(func() ConnectionsResponse {
+		return ConnectionsResponse{
+			PBS: []PBSConnection{
+				{ID: "default", Name: "Primary", Reachable: &yes, IsDefault: true},
+				{ID: "dr", Name: "Offsite", Reachable: &no},
+				{ID: "new", Name: "Never probed", Reachable: nil},
+			},
+			ControlPlane: ControlPlaneConnection{Configured: true, Connected: true},
+		}
+	})
+
+	var out ConnectionsResponse
+	if code := getJSON(t, ts, "/connections", &out); code != http.StatusOK {
+		t.Fatalf("/connections = %d, want 200", code)
+	}
+	if len(out.PBS) != 3 {
+		t.Fatalf("got %d destinations, want 3", len(out.PBS))
+	}
+	// The whole reason Reachable is a pointer: "nobody has checked" is not
+	// the same fact as "it answered no", and a tile that says OFFLINE for an
+	// unprobed server is a false alarm.
+	if out.PBS[2].Reachable != nil {
+		t.Errorf("an unprobed destination reported %v, want unknown", *out.PBS[2].Reachable)
+	}
+	if out.PBS[0].Reachable == nil || !*out.PBS[0].Reachable {
+		t.Error("a reachable destination did not survive the round trip")
+	}
+	if out.PBS[1].Reachable == nil || *out.PBS[1].Reachable {
+		t.Error("an unreachable destination did not survive the round trip")
+	}
+}
+
+func TestConnectionsServedWhileLocked(t *testing.T) {
+	// The panel is the entire point of a locked console.
+	_, c, base := lockedTestServer(t, true)
+	if code := req(t, c, http.MethodGet, base+"/connections", true); code != http.StatusOK {
+		t.Errorf("GET /connections while locked = %d, want 200", code)
 	}
 }

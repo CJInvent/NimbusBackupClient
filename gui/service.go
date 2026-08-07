@@ -104,6 +104,12 @@ func (s *NimbusService) run() {
 	// folded in and does not need a round trip.
 	s.apiServer.SetLockedFunc(func() bool { return ControlPolicy().GUIReadOnly })
 
+	// The panel's connection tiles. The provider serves from a cache that a
+	// background sweep refreshes, so a console left open cannot generate
+	// steady traffic against every datastore the org owns.
+	s.apiServer.SetConnectionsFunc(s.app.connectionsSnapshot)
+	s.app.startConnectionProbe()
+
 	// Startup jobs run HERE now, not in the GUI.
 	//
 	// BEHAVIOUR CHANGE, deliberate: runAtStartup used to fire when a user

@@ -22,6 +22,8 @@ type Server struct {
 
 	// lockedState carries the read-only predicate (readonly.go).
 	lockedState
+	// connectionsState carries the panel's data provider (connections.go).
+	connectionsState
 
 	// version is stamped in at service start. It used to be the string
 	// literal "0.1.92" with a TODO beside it, which reported a version two
@@ -78,6 +80,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/backup", s.handleBackup)
 	s.mux.HandleFunc("/backup/status/", s.handleBackupStatus)
+	s.mux.HandleFunc("/connections", s.handleConnections)
 	s.mux.HandleFunc("/runs/active", s.handleRunsActive)
 	s.mux.HandleFunc("/runs/recent", s.handleRunsRecent)
 	s.mux.HandleFunc("/runs/", s.handleRunByID)
