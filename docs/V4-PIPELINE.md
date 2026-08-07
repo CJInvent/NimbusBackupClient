@@ -462,9 +462,23 @@ steps 1-2 are additive and independently shippable.
    control-plane commands originate inside the service and never touch this
    API; what stops is the console driving them.
 
-   Still to build: the panel itself — connection tiles, the seven-day table
-   off `/runs/recent` instead of `GetJobHistory`, and omitting the controls
-   `App.IsReadOnly()` now reports on.
+   The PANEL is built too: `src/StatusPanel.jsx`, rendered **instead of**
+   the tabbed UI rather than alongside it with the controls disabled. A
+   greyed-out Start button still tells a user the capability exists and
+   invites them to find out why it is off; an absent one does not.
+
+   It draws from three polled endpoints and nothing else — `/connections`,
+   `/runs/active`, `/runs/recent` — so it has no path to any state the
+   service has not published. The seven-day view is a per-day rollup showing
+   the **worst** outcome of each day, plus the last ten runs in full: a
+   machine backing up hourly has ~168 runs in a week, and a day with eleven
+   successes and one failure is a day something went wrong, so showing it
+   green because the last run passed would be worse than no panel.
+
+   Tri-state reachability survives into the CSS. `-unknown` is neutral, not
+   a paler red: "nobody has checked" is not a degraded state, and colouring
+   it like one sends a technician to inspect a firewall for a config
+   problem.
 6. **Managed jobs and schedules** (NimbusControl `V4-CLIENT-CONFIG.md`) land
    on top of a pipeline that has one entry point, which is the reason to do
    this first rather than after.

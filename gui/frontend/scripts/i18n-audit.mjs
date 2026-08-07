@@ -17,7 +17,10 @@
  */
 import { readFileSync } from 'node:fs';
 
-const FILES = ['src/App.jsx', 'src/PathPicker.jsx'];
+// EVERY component that renders user-visible text. A file missing from this
+// list ships unaudited -- which is how a new panel could carry hardcoded
+// English past a gate whose whole job is catching hardcoded English.
+const FILES = ['src/App.jsx', 'src/PathPicker.jsx', 'src/StatusPanel.jsx'];
 
 // Language-neutral by nature. Keep SHORT and honest.
 const ALLOW = [

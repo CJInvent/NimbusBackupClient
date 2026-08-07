@@ -1047,3 +1047,140 @@ button:focus-visible,
     0%   { margin-left: -35%; }
     100% { margin-left: 100%; }
 }
+
+/* ── Read-only status panel (StatusPanel.jsx) ────────────────────────────
+ *
+ * Shown INSTEAD of the tabbed UI when the org sets gui_read_only. Every
+ * colour comes from the same token set as the rest of the app, so the panel
+ * follows the light/dark and accent choices a user has already made rather
+ * than becoming a second visual language for the locked case.
+ *
+ * Reachability is TRI-STATE and the styling has to keep it that way: -ok is
+ * green, -down is red, and -unknown is deliberately NEUTRAL rather than a
+ * paler red. "Nobody has checked" is not a degraded state, and colouring it
+ * like one sends a technician to inspect a firewall for what is a config
+ * problem.
+ */
+.panel {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 18px 20px 40px;
+    color: var(--nc-text);
+    font-family: var(--nc-font);
+}
+.panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    border-bottom: 1px solid var(--nc-border);
+    padding-bottom: 12px;
+    margin-bottom: 18px;
+}
+.panel-title { margin: 0; font-size: 1.35rem; }
+.panel-sub { color: var(--nc-text-dim); font-size: 0.85rem; margin-top: 2px; }
+.panel-managed {
+    background: var(--nc-warn-bg);
+    border: 1px solid var(--nc-warn-border);
+    color: var(--nc-text);
+    border-radius: var(--nc-radius);
+    padding: 8px 12px;
+    font-size: 0.8rem;
+    max-width: 420px;
+}
+.panel-section { margin-bottom: 26px; }
+.panel-h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--nc-text-dim);
+    margin: 0 0 10px;
+}
+.panel-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.panel-tile {
+    background: var(--nc-panel);
+    border: 1px solid var(--nc-border-soft);
+    border-left: 3px solid var(--nc-border);
+    border-radius: var(--nc-radius);
+    padding: 10px 12px;
+}
+.panel-tile-ok      { border-left-color: var(--nc-ok); }
+.panel-tile-down    { border-left-color: var(--nc-err); }
+.panel-tile-unknown { border-left-color: var(--nc-border); }
+.panel-tile-head { display: flex; align-items: baseline; gap: 6px; }
+.panel-tile-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-tile-state { font-size: 0.75rem; color: var(--nc-text-dim); }
+.panel-tile-ok .panel-tile-dot      { color: var(--nc-ok); }
+.panel-tile-down .panel-tile-dot    { color: var(--nc-err); }
+.panel-tile-unknown .panel-tile-dot { color: var(--nc-text-dim); }
+.panel-tile-line {
+    font-size: 0.78rem;
+    color: var(--nc-text-dim);
+    margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.panel-empty, .panel-idle {
+    color: var(--nc-text-dim);
+    font-size: 0.85rem;
+    padding: 12px;
+    background: var(--nc-panel);
+    border: 1px solid var(--nc-border-soft);
+    border-radius: var(--nc-radius);
+}
+.panel-live {
+    background: var(--nc-panel);
+    border: 1px solid var(--nc-border-soft);
+    border-left: 3px solid var(--nc-run);
+    border-radius: var(--nc-radius);
+    padding: 12px 14px;
+}
+.panel-live-head { display: flex; justify-content: space-between; align-items: baseline; }
+.panel-live-name { font-weight: 600; }
+.panel-live-pct { font-variant-numeric: tabular-nums; color: var(--nc-run); font-weight: 600; }
+.panel-bar { height: 6px; background: var(--nc-border-soft); border-radius: var(--nc-radius-sm); overflow: hidden; margin: 8px 0; }
+.panel-bar-fill { height: 100%; background: var(--nc-run); transition: width var(--nc-fast); }
+.panel-live-msg { font-size: 0.82rem; color: var(--nc-text-dim); min-height: 1.1em; }
+.panel-live-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 4px 16px;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+.panel-live-grid span { color: var(--nc-text-dim); margin-right: 4px; }
+.panel-live-dir {
+    margin-top: 6px;
+    font-family: var(--nc-font-mono);
+    font-size: 0.75rem;
+    color: var(--nc-text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.panel-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px; margin-bottom: 14px; }
+.panel-day {
+    background: var(--nc-panel);
+    border: 1px solid var(--nc-border-soft);
+    border-top: 3px solid var(--nc-border);
+    border-radius: var(--nc-radius);
+    padding: 8px 10px;
+}
+.panel-day.is-ok      { border-top-color: var(--nc-ok); }
+.panel-day.is-failed  { border-top-color: var(--nc-err); }
+.panel-day.is-running { border-top-color: var(--nc-run); }
+.panel-day-date { font-size: 0.75rem; color: var(--nc-text-dim); font-variant-numeric: tabular-nums; }
+.panel-day-count { font-size: 0.85rem; margin-top: 2px; }
+.panel-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.panel-table th {
+    text-align: left;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--nc-text-dim);
+    border-bottom: 1px solid var(--nc-border);
+    padding: 6px 8px;
+    font-weight: 600;
+}
+.panel-table td { padding: 6px 8px; border-bottom: 1px solid var(--nc-border-soft); }
+.panel-table td.is-ok      { color: var(--nc-ok); }
+.panel-table td.is-failed  { color: var(--nc-err); }
+.panel-table td.is-running { color: var(--nc-run); }

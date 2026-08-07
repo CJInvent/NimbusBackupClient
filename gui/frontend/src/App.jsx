@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from './i18n/i18nContext'
+import StatusPanel from './StatusPanel'
 
 import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
@@ -317,6 +318,36 @@ function App() {
   // Three seconds: fast enough that the Start button still feels immediate
   // once events are gone, slow enough to be nothing on a machine that is busy
   // reading a disk.
+  // Is this console a status panel? Asked once at mount and then on the same
+  // slow cadence as everything else, because an org locking a machine should
+  // not need the technician to restart the app for it to take effect.
+  //
+  // PRESENTATION ONLY. The service refuses every mutating local-API call while
+  // locked (gui/api/readonly.go), so a build that ignored this — or a modified
+  // one that never asked — would still get 403s. What this changes is whether
+  // the controls are in the markup at all: absent, not disabled, matching the
+  // portal's no-leak rule. A greyed-out Start button still tells the user the
+  // capability exists and invites them to find out why it is off.
+  const [readOnly, setReadOnly] = useState(null)
+  useEffect(() => {
+    const app = window.go && window.go.main && window.go.main.App
+    if (!app || !app.IsReadOnly) { setReadOnly(false); return }
+    let alive = true
+    const probe = async () => {
+      try {
+        const v = await app.IsReadOnly()
+        if (alive) setReadOnly(!!v)
+      } catch {
+        // Unreachable service is not a locked one. Leaving the full UI up
+        // is safe: every button it draws will 403 until the service answers.
+        if (alive) setReadOnly(false)
+      }
+    }
+    probe()
+    const iv = setInterval(probe, 30000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
+
   const watchedRun = useRef(null)
   useEffect(() => {
     if (!GetActiveRuns) return
@@ -1838,6 +1869,13 @@ function App() {
         )}
       </div>
     )
+  }
+
+  // null means "not asked yet" — render nothing rather than flashing the full
+  // UI for a frame on a machine that turns out to be locked.
+  if (readOnly === null) return null
+  if (readOnly) {
+    return <StatusPanel version={appVersion} hostname={config['backup-id']} />
   }
 
   return (
