@@ -1,0 +1,186 @@
+{
+  "_comment": [
+    "SHARED CALENDAR-EVENT FIXTURES — read by BOTH implementations.",
+    "",
+    "There are two parsers for PVE/systemd calendar events in this product:",
+    "Nimbus\\Backups\\CalendarSchedule (PHP, derives backup_expectations) and",
+    "the agent's Go evaluator (decides when a managed job actually fires).",
+    "They must agree, and dev rule 25 says the way to establish that is a",
+    "SHARED FIXTURE SET rather than two independently written suites — two",
+    "suites written from the same head prove that the head was consistent,",
+    "not that the implementations are.",
+    "",
+    "PROVENANCE: every date below was worked out from a calendar, by hand,",
+    "not produced by running either parser. A fixture generated from one",
+    "implementation would make the other's test a check that it matches a",
+    "particular bug.",
+    "",
+    "This file is authoritative in NimbusControl. The agent vendors a byte",
+    "identical copy at controlplane/testdata/calendar-fixtures.json, and each",
+    "repository asserts its own copy hashes to the value in `sha256` below.",
+    "That catches an accidental one-sided edit, which is the realistic",
+    "failure; it cannot catch a deliberate simultaneous edit to both, and it",
+    "is not pretending to.",
+    "",
+    "2026-08-05 is a Wednesday. 2026-03-08 is US spring-forward.",
+    "",
+    "TIMES ARE LOCAL WALL CLOCK in the fixture's timezone. Occurrences are",
+    "written as 'YYYY-MM-DD HH:MM:SS' with a separate 'utc' field where the",
+    "distinction matters, because the whole point of the timezone tier is",
+    "that these two are not the same instant."
+  ],
+
+  "next_occurrences": [
+    {
+      "why": "the canonical business-hours schedule; the weekend gap is the case an average-based derivation gets wrong",
+      "expr": "mon..fri 02:00",
+      "tz": "UTC",
+      "from": "2026-08-05 12:00:00",
+      "expect": [
+        "2026-08-06 02:00:00",
+        "2026-08-07 02:00:00",
+        "2026-08-10 02:00:00",
+        "2026-08-11 02:00:00"
+      ]
+    },
+    {
+      "why": "sub-daily repetition; Saturday and Sunday are ordinary days here",
+      "expr": "*/4:00",
+      "tz": "UTC",
+      "from": "2026-08-05 09:30:00",
+      "expect": [
+        "2026-08-05 12:00:00",
+        "2026-08-05 16:00:00",
+        "2026-08-05 20:00:00",
+        "2026-08-06 00:00:00"
+      ]
+    },
+    {
+      "why": "weekly — two occurrences is one gap, which is why the derivation needs three",
+      "expr": "sat 03:30",
+      "tz": "UTC",
+      "from": "2026-08-05 00:00:00",
+      "expect": ["2026-08-08 03:30:00", "2026-08-15 03:30:00"]
+    },
+    {
+      "why": "monthly; months have different lengths and the derivation must take the longest",
+      "expr": "*-*-01 00:00",
+      "tz": "UTC",
+      "from": "2026-08-05 00:00:00",
+      "expect": [
+        "2026-09-01 00:00:00",
+        "2026-10-01 00:00:00",
+        "2026-11-01 00:00:00"
+      ]
+    },
+    {
+      "why": "half-hourly stepping from a non-zero minute",
+      "expr": "*:0/30",
+      "tz": "UTC",
+      "from": "2026-08-05 10:05:00",
+      "expect": [
+        "2026-08-05 10:30:00",
+        "2026-08-05 11:00:00",
+        "2026-08-05 11:30:00"
+      ]
+    },
+    {
+      "why": "a WRAPPING weekday range covers sun, mon, tue only — not the five days between",
+      "expr": "sun..tue 01:00",
+      "tz": "UTC",
+      "from": "2026-08-05 12:00:00",
+      "expect": [
+        "2026-08-09 01:00:00",
+        "2026-08-10 01:00:00",
+        "2026-08-11 01:00:00",
+        "2026-08-16 01:00:00"
+      ]
+    },
+    {
+      "why": "asked at exactly the scheduled instant, 'next' means tomorrow — strictly after, not at-or-after",
+      "expr": "*-*-* 02:00",
+      "tz": "UTC",
+      "from": "2026-08-05 02:00:00",
+      "expect": ["2026-08-06 02:00:00"]
+    },
+    {
+      "why": "day 30 has no February; the month is SKIPPED, never clamped to the 28th",
+      "expr": "*-*-30 00:00",
+      "tz": "UTC",
+      "from": "2026-01-31 00:00:00",
+      "expect": ["2026-03-30 00:00:00", "2026-04-30 00:00:00"]
+    },
+    {
+      "why": "the same expression is 02:00 LOCAL in any zone; the instant differs, the expression does not",
+      "expr": "*-*-* 02:00",
+      "tz": "America/New_York",
+      "from": "2026-08-05 00:00:00",
+      "expect": ["2026-08-05 02:00:00"],
+      "utc": ["2026-08-05 06:00:00"]
+    },
+    {
+      "why": "a DST-nonexistent wall time normalizes FORWARD rather than vanishing — skipping it would make one daily backup a 48h gap twice a year",
+      "expr": "*-*-* 02:30",
+      "tz": "America/New_York",
+      "from": "2026-03-07 12:00:00",
+      "expect": ["2026-03-08 03:30:00"]
+    },
+    {
+      "why": "quarterly alias",
+      "expr": "*-01,04,07,10-01 00:00",
+      "tz": "UTC",
+      "from": "2026-08-05 00:00:00",
+      "expect": ["2026-10-01 00:00:00", "2027-01-01 00:00:00"]
+    }
+  ],
+
+  "largest_gap_seconds": [
+    {
+      "why": "THE case this whole derivation exists for: the average is 33.6h, the real Friday-to-Monday gap is 72h, and deriving from the average alerts every Monday on every business-hours schedule in the fleet",
+      "expr": "mon..fri 02:00",
+      "tz": "UTC",
+      "from": "2026-08-05 00:00:00",
+      "expect": 259200
+    },
+    { "why": "daily", "expr": "*-*-* 02:00", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": 86400 },
+    { "why": "four-hourly", "expr": "*/4:00", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": 14400 },
+    {
+      "why": "weekly — the window must EXTEND past 14 days to see a second and third occurrence",
+      "expr": "sat 03:30", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": 604800
+    },
+    {
+      "why": "monthly derives the LONGEST month, not the first one it happens to see",
+      "expr": "*-*-01 00:00", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": 2678400
+    },
+    {
+      "why": "mon/wed/fri: the Friday-to-Monday gap is 3 days, not the 2-day midweek one",
+      "expr": "mon,wed,fri 22:00", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": 259200
+    },
+    {
+      "why": "a daily schedule stays 24h across a DST transition, because the nonexistent wall time normalized forward instead of being skipped",
+      "expr": "*-*-* 02:30", "tz": "America/New_York", "from": "2026-03-01 00:00:00", "expect": 86400
+    },
+    {
+      "why": "an expression that can never fire again has NO interval; inventing one marks the job overdue forever a fixed distance from now",
+      "expr": "2024-01-01 00:00", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": null
+    },
+    {
+      "why": "February 30th never matches; the scan must terminate and report no interval",
+      "expr": "*-02-30 00:00", "tz": "UTC", "from": "2026-08-05 00:00:00", "expect": null
+    }
+  ],
+
+  "valid": [
+    "mon..fri 02:00", "*/4:00", "sat 03:30", "*-*-01 00:00", "*:0/30",
+    "mon,wed,fri 22:00", "12:00", "*-*-* 04:15", "sat..sun 05:00",
+    "2026-12-24 18:00", "*-01,07-01 00:00", "00:00", "mon..fri",
+    "minutely", "hourly", "daily", "weekly", "monthly", "yearly",
+    "annually", "quarterly", "semiannually"
+  ],
+
+  "invalid": [
+    "", "   ", "funday 02:00", "25:00", "02:61", "*-13-01 00:00",
+    "*-*-32 00:00", "02:00:00:00", "5..1 02:00", "*:*/0",
+    "mon tue 02:00", "02:00 03:00", "*-10..2-01 00:00"
+  ]
+}
