@@ -176,6 +176,13 @@ var schedulerTickCount int
 
 // checkAndRunScheduledJobs checks if any jobs need to run
 func (a *App) checkAndRunScheduledJobs() {
+	// Managed jobs first: they are the org's own work, and evaluating them
+	// is independent of whether this machine has any local jobs at all.
+	// Doing it before the early return below matters — a fully managed
+	// machine has an EMPTY scheduled_jobs.json, and the local path returns
+	// straight away on that.
+	a.checkManagedJobs()
+
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
 		writeDebugLog(fmt.Sprintf("[Scheduler] Error loading scheduled jobs: %v", err))

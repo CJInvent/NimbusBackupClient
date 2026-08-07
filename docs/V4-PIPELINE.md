@@ -490,13 +490,25 @@ steps 1-2 are additive and independently shippable.
    is one with nothing else in the container — and can run a managed job on
    a portal `run_backup`.
 
-   **Not yet: a managed job firing on its own schedule.** That needs a Go
-   evaluator for calendar expressions that agrees with the PHP one, and
-   their agreement needs a SHARED FIXTURE SET rather than two independently
-   written suites (dev rule 25). Until it exists, `ScheduleTime` is left
-   empty on an adapted managed job rather than filled with a lossy HH:MM
-   approximation that would give the local scheduler a second, wrong opinion
-   about when the job runs.
+   **Managed jobs now fire on their own schedules.**
+   `controlplane/calendar.go` is the Go evaluator, pinned against the same
+   fixture file the PHP parser is tested with, and
+   `gui/managed_scheduler.go` evaluates it on the scheduler tick. Fire
+   history lives in a THIRD file (`managed_job_state.json`) because
+   `managed_jobs.json` is replaced wholesale every check-in — storing "last
+   fired" there would reset it every two minutes and turn a daily job into
+   a backup storm.
+
+   Two rules, both about NOT starting backups: a job seen for the first
+   time is SEEDED rather than fired, so authoring a job at 14:00 whose
+   schedule says 02:00 does not start a backup on every machine in the org
+   the moment it is saved; and a missed window COLLAPSES to one run,
+   because catching up on backups whose moment has passed is pointless when
+   the only state anyone wants is the current one.
+
+   `ScheduleTime` is still left empty on an adapted managed job. It is the
+   legacy HH:MM field, the local scheduler keys on it, and filling it would
+   give that scheduler a second and wrong opinion about when the job runs.
 
 ---
 
