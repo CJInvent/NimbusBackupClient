@@ -58,6 +58,15 @@ type Agent struct {
 	// the callback, not this loop.
 	OnPBSPollSchedule func(intervalSeconds, offsetSeconds int)
 
+	// OnManagedJobs is invoked whenever a check-in delivers the
+	// server-defined job set (i.e. every cycle). Same push shape as
+	// OnPolicy, same reason: whoever owns the reacting behaviour owns the
+	// callback, not this loop.
+	//
+	// The slice is the COMPLETE set. A handler must replace what it holds,
+	// not merge — deletion has no representation other than absence.
+	OnManagedJobs func([]ManagedJob)
+
 	AgentVersion string
 
 	// PolicyMaxAge optionally bounds how long a delivered policy stays in
@@ -208,6 +217,12 @@ func (a *Agent) CheckinNow() {
 	a.policyAt.Store(time.Now())
 	if a.OnPolicy != nil {
 		a.OnPolicy(resp.Policy)
+	}
+	// Managed jobs land with policy, before commands, for the same reason:
+	// a run_backup command naming a managed job must find that job already
+	// applied rather than racing the check-in that delivered it.
+	if a.OnManagedJobs != nil {
+		a.OnManagedJobs(resp.ManagedJobs)
 	}
 	if a.OnPBSPollSchedule != nil {
 		a.OnPBSPollSchedule(resp.PBSPollIntervalSeconds, resp.PBSPollOffsetSeconds)

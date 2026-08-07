@@ -483,6 +483,21 @@ steps 1-2 are additive and independently shippable.
    on top of a pipeline that has one entry point, which is the reason to do
    this first rather than after.
 
+   Server side is built (`backup_jobs`, delivery on the check-in,
+   server-derived expectations). Client side receives the set, caches it in
+   `managed_jobs.json` — a SEPARATE file from `scheduled_jobs.json`, because
+   the managed set is replaced wholesale and the only safe wholesale replace
+   is one with nothing else in the container — and can run a managed job on
+   a portal `run_backup`.
+
+   **Not yet: a managed job firing on its own schedule.** That needs a Go
+   evaluator for calendar expressions that agrees with the PHP one, and
+   their agreement needs a SHARED FIXTURE SET rather than two independently
+   written suites (dev rule 25). Until it exists, `ScheduleTime` is left
+   empty on an adapted managed job rather than filled with a lossy HH:MM
+   approximation that would give the local scheduler a second, wrong opinion
+   about when the job runs.
+
 ---
 
 ## 7. The CLI binaries

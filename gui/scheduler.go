@@ -353,7 +353,12 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	// run_backup command, which is managed work by definition and is never
 	// gated: the org restricting a machine to managed jobs must not stop the
 	// org from running one.
-	if requestID == "" && !UnmanagedBackupsPermitted() {
+	// A MANAGED job is the org's own work, whoever started it locally, so
+	// the unmanaged gate must not touch it. Without this check the gate
+	// would key purely on "the local scheduler started it" and an org that
+	// set restrict_unmanaged_backups would silently stop its OWN jobs on
+	// every machine it restricted — turning a lockdown into an outage.
+	if requestID == "" && !isManagedJobID(job.ID) && !UnmanagedBackupsPermitted() {
 		writeDebugLog(fmt.Sprintf("Job %s not started: %v", job.Name, ErrUnmanagedBackupsDisabled))
 		return
 	}

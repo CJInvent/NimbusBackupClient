@@ -49,6 +49,17 @@ func (a *App) StartControlPlane() {
 		return
 	}
 
+	// Restore the last known managed job set before the loop starts, so a
+	// portal run_backup naming a managed job works during the window before
+	// the first check-in completes — and so an agent that cannot reach the
+	// server at all still knows what it was last told to run.
+	//
+	// Loaded HERE, by whoever hosts the agent, rather than at service
+	// start: the GUI build can host one too (SaveControlPlaneFromMap ->
+	// RestartControlPlane), and the cache is only meaningful where the
+	// agent that fills it lives.
+	loadManagedJobs()
+
 	cpClient = &controlplane.Client{
 		BaseURL:         cfg.ControlServerURL,
 		CertFingerprint: cfg.ControlCertFP,
@@ -90,6 +101,7 @@ func (a *App) StartControlPlane() {
 		AgentVersion:   appVersion,
 		BuildInventory: a.cpBuildInventory,
 		HandleCommand:  a.cpHandleCommand,
+		OnManagedJobs:  applyManagedJobsFromCheckin,
 		OnPolicy: func(p controlplane.Policy) {
 			writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
 		},
@@ -319,6 +331,20 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 		if err != nil {
 			return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": err.Error()}}
 		}
+
+		// Managed jobs are searched FIRST and by the server's own name.
+		// The server is asking for a job it defined; finding a local job
+		// that happens to share the name and running that instead would be
+		// the wrong backup, taken with the wrong paths, reported against
+		// the org's job.
+		for _, m := range currentManagedJobs() {
+			sj := managedToScheduledJob(m)
+			if m.Name == name || sj.ID == name || fmt.Sprintf("%d", m.ID) == name {
+				go a.executeScheduledJob(sj, requestID)
+				return controlplane.CommandResult{OK: true, Result: map[string]interface{}{"note": "managed backup dispatched"}}
+			}
+		}
+
 		for _, j := range jobs {
 			if j.Name == name || j.ID == name {
 				job := j
@@ -330,6 +356,12 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 	default:
 		return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": "unsupported command: " + cmd.Command}}
 	}
+}
+
+// applyManagedJobsFromCheckin is the OnManagedJobs hook. Named rather than a
+// closure so the check-in loop's callback list reads as a list of behaviours.
+func applyManagedJobsFromCheckin(jobs []controlplane.ManagedJob) {
+	applyManagedJobs(jobs)
 }
 
 // BreakGlassInEffect reports whether the local override is currently

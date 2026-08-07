@@ -101,6 +101,30 @@ type Policy struct {
 	GUIReadOnly bool `json:"gui_read_only"`
 }
 
+// ManagedJob is one server-defined backup job. Field names mirror
+// docs/AGENT-API.md exactly; this type is the wire contract, not a
+// convenience shape.
+type ManagedJob struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Scope is informational: "org", "group" or "agent". The agent runs
+	// every job it is sent regardless of scope -- see the accumulation note
+	// on CheckinResponse.ManagedJobs.
+	Scope        string   `json:"scope"`
+	BackupType   string   `json:"backup_type"` // "directory" | "machine"
+	BackupDirs   []string `json:"backup_dirs"`
+	DriveLetters []string `json:"drive_letters"`
+	ExcludeList  []string `json:"exclude_list"`
+	UseVSS       bool     `json:"use_vss"`
+	Compression  string   `json:"compression"`
+	// Schedule is a PVE/systemd calendar event, or empty for a job that
+	// runs only when the server triggers it.
+	Schedule string `json:"schedule"`
+	// Timezone is an IANA name, or empty to evaluate Schedule in this
+	// machine's own zone.
+	Timezone string `json:"timezone"`
+}
+
 type CheckinResponse struct {
 	Commands       []Command `json:"commands"`
 	CheckinSeconds int       `json:"checkin_seconds"`
@@ -122,6 +146,23 @@ type CheckinResponse struct {
 	// separate (longer) interval.
 	PBSPollIntervalSeconds int `json:"pbs_poll_interval_seconds"`
 	PBSPollOffsetSeconds   int `json:"pbs_poll_offset_seconds"`
+
+	// ManagedJobs is the complete set of server-defined backup jobs for
+	// this agent, delivered fresh on every check-in.
+	//
+	// AUTHORITATIVE AND WHOLESALE. The agent replaces its managed set with
+	// this list; it does not diff and merge. Deletion has no other
+	// representation -- a removed job shows up only as an absence, so an
+	// agent that merged would keep running a job the org deleted, forever,
+	// with no way for the server to say otherwise.
+	//
+	// Jobs ACCUMULATE across org, group and agent scope rather than
+	// overriding one another, so several entries here is the normal case
+	// and running only the most specific would silently stop backing up
+	// whatever the broader scope named.
+	//
+	// Locally-created jobs are NOT in this list and are not affected by it.
+	ManagedJobs []ManagedJob `json:"managed_jobs"`
 }
 
 // RunStatus values — the server's state machine is forward-only
