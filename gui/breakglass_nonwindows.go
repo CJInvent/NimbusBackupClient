@@ -7,3 +7,7 @@ package main
 func emergencyFileRestoreRequested() bool { return false }
 
 func unmanagedBackupsOverrideRequested() bool { return false }
+
+// readNimbusString has nothing to read off Windows; the level falls back to
+// its default, which is what resolveLogLevel does with an empty string.
+func readNimbusString(name string) string { return "" }

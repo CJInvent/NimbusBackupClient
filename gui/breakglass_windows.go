@@ -40,6 +40,28 @@ func emergencyFileRestoreRequested() bool {
 // without it the read silently lands in the WOW6432Node view — where the
 // administrator who typed the documented `reg add` did not put the value, so
 // the override would appear unset with no error to explain it.
+// readNimbusString reads one string value under HKLM\SOFTWARE\NimbusBackup.
+//
+// Beside readNimbusFlag rather than in the logging module: one place knows
+// where Nimbus keeps its machine-scope settings, and WOW64_64KEY is easy to
+// forget in a second copy — without it a 32-bit agent on 64-bit Windows reads
+// WOW6432Node, where the administrator who followed the documentation did not
+// write the value.
+func readNimbusString(name string) string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, breakGlassKeyPath,
+		registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = k.Close() }()
+
+	v, _, err := k.GetStringValue(name)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
 func readNimbusFlag(name string) bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, breakGlassKeyPath,
 		registry.QUERY_VALUE|registry.WOW64_64KEY)

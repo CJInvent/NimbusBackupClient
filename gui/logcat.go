@@ -53,6 +53,15 @@ func SetLogCategories(spec string) {
 }
 
 func categoryEnabled(c logCategory) bool {
+	// DEBUG or lower turns every category on. Levels and categories are ONE
+	// verbosity system, not two: leaving an operator with a registry level
+	// AND an unrelated launch flag, either of which could be the reason a
+	// line is missing, is the shape of problem logging.go exists to remove.
+	// A launch flag can still enable one category without raising the level
+	// for everything.
+	if logLevelEnabled(levelDebug) {
+		return true
+	}
 	logcatMu.RLock()
 	defer logcatMu.RUnlock()
 	return enabledCategories[c]
