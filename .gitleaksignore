@@ -1,0 +1,46 @@
+# .gitleaksignore — per-finding, reviewed exceptions ONLY.
+#
+# Each line is a specific finding fingerprint (commit:file:rule:line). This
+# file must never contain broad path or rule exclusions: the point of secret
+# scanning is that it stays noisy about credential-shaped strings, including
+# in test code. If a finding is a real secret, rotate it and rewrite history
+# — do not add it here.
+#
+# Same policy, and same wording, as NimbusControl's. Secret scanning was added
+# to this repository later than to the server, so these entries are the
+# backlog that existed on the day it was switched on rather than exceptions
+# anyone chose to accept.
+#
+# ---------------------------------------------------------------------------
+# c0ddb13 — gui/api/server_smoke_test.go line 28
+# `testToken` for the local-API smoke suite: the literal
+# 0123456789abcdef repeated, invented for the test. Reviewed and confirmed
+# non-sensitive — it authenticates a loopback httptest server that exists for
+# the duration of one `go test`, and grants nothing anywhere. Deliberately an
+# obvious non-value so a reader can see at a glance it is a fixture.
+c0ddb13859d58918c1747e7c5658051678fefd4d:gui/api/server_smoke_test.go:generic-api-key:28
+
+# ---------------------------------------------------------------------------
+# b9dafbf — CONFIG_FORMAT_SPEC.md line 448
+# A DOCUMENTATION EXAMPLE of the config file's shape, showing a placeholder
+# PBS secret (a1b2c3d4-e5f6-7890-abcd-ef1234567890 — a counting pattern, not a
+# key) for a fictional "acme-corp" tenant. Reviewed and confirmed
+# non-sensitive. The file itself no longer exists at HEAD; this entry is here
+# only because gitleaks scans full history.
+b9dafbf9ae9816be8dd262de6cd0151d9e4f6bac:CONFIG_FORMAT_SPEC.md:generic-api-key:448
+
+# ---------------------------------------------------------------------------
+# f96ee3d — gui/logging_test.go lines 80, 84
+# Fixture values standing in for a token and an encryption key in the
+# redaction tests, which need credential-SHAPED strings to prove that
+# redaction matches on shape at all. Reviewed and confirmed non-sensitive:
+# invented for the test, never a credential for anything.
+#
+# Fixed forward: gui/logging_test.go now generates every fixture secret at run
+# time with crypto/rand. That also makes the tests stronger, because a fixed
+# value can pass by luck — it might be caught by a pattern aimed at something
+# else — while a fresh random value can only survive if the redaction matches
+# the shape it stands in for. These entries remain only because the commit
+# cannot be un-made without rewriting published history.
+f96ee3da25f72ff2575da6806cb137cd6421529b:gui/logging_test.go:generic-api-key:80
+f96ee3da25f72ff2575da6806cb137cd6421529b:gui/logging_test.go:generic-api-key:84

@@ -302,6 +302,28 @@ jobs:
         env:
           GOWORK: off
 
+  # Secret scanning. The SERVER has had this since its Phase-2 work; this
+  # repository did not, which is the wrong way round — it is the one that
+  # ships a code-signed MSI, and a credential committed here reaches a
+  # customer's machine rather than a container an operator controls.
+  #
+  # fetch-depth: 0 because a secret is a secret in history too: removing it
+  # at HEAD does not un-publish it, and the remediation is to rotate.
+  # Reviewed non-findings live in .gitleaksignore, per finding, never as a
+  # path or rule exclusion.
+  gitleaks:
+    name: Secret Scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Unit tests
   test:
     name: Unit Tests
@@ -577,7 +599,7 @@ jobs:
   # Build CLI for all platforms
   build-cli:
     name: Build CLI
-    needs: [security, test, workspace-tests, compile-views, frontend-gate]
+    needs: [security, test, workspace-tests, compile-views, frontend-gate, gitleaks]
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -646,7 +668,7 @@ jobs:
   # Build GUI (Windows only for now)
   build-gui:
     name: Build GUI
-    needs: [security, test, workspace-tests, compile-views, frontend-gate]
+    needs: [security, test, workspace-tests, compile-views, frontend-gate, gitleaks]
     env:
       # Flips the S8/S9 signature checks from advisory to blocking. Set the
       # signing secrets (see docs/CODE-SIGNING.md) and this becomes true on

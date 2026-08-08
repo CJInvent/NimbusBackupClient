@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"strings"
 	"testing"
 )
@@ -71,17 +73,45 @@ func TestCategoriesFollowTheLevel(t *testing.T) {
 	}
 }
 
+// fakeSecret returns a credential-shaped value generated AT RUN TIME.
+//
+// Never a literal. The server repository's .gitleaksignore records that every
+// secret finding in its history has been a fixture credential in a test file,
+// and states the rule: fix forward, do not add exceptions, the scanner stays
+// noisy about credential-shaped strings including in test code. This file was
+// the client's first two findings.
+//
+// It also makes the tests stronger. A fixed value can pass by luck — it might
+// happen to be caught by a pattern aimed at something else — whereas a fresh
+// random value each run can only survive if the redaction actually matches the
+// SHAPE the fixture stands in for.
+func fakeSecret(t *testing.T, n int) string {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("generating a fixture secret: %v", err)
+	}
+	return hex.EncodeToString(b)
+}
+
 func TestRedactionRemovesSecretsWhateverTheirShape(t *testing.T) {
+	bearer := fakeSecret(t, 6)
+	nimbus := fakeSecret(t, 8)
+	pbsTok := fakeSecret(t, 4) + "-" + fakeSecret(t, 4)
+	apiKey := fakeSecret(t, 8)
+	passwd := fakeSecret(t, 5)
+	hexKey := fakeSecret(t, 18) // >= 32 hex chars, the shape the key rule wants
+
 	cases := []struct {
 		in     string
 		secret string
 	}{
-		{"GET /api Authorization: Bearer abc123def", "abc123def"},
-		{"X-Nimbus-Token: 0123456789abcdef", "0123456789abcdef"},
-		{"connecting with root@pam!agent:0f1e2d3c-4b5a-6978", "0f1e2d3c-4b5a-6978"},
-		{"url=https://pbs/api?api_key=supersecretvalue", "supersecretvalue"},
-		{"password=hunter2 for user bob", "hunter2"},
-		{"key: 0123456789abcdef0123456789abcdef0123", "0123456789abcdef0123456789abcdef0123"},
+		{"GET /api Authorization: Bearer " + bearer, bearer},
+		{"X-Nimbus-Token: " + nimbus, nimbus},
+		{"connecting with root@pam!agent:" + pbsTok, pbsTok},
+		{"url=https://pbs/api?api_key=" + apiKey, apiKey},
+		{"password=" + passwd + " for user bob", passwd},
+		{"key: " + hexKey, hexKey},
 	}
 	for _, c := range cases {
 		got := redactLogLine(c.in)
@@ -98,8 +128,8 @@ func TestRedactionKeepsWhatTheLogIsFor(t *testing.T) {
 	// A redactor that eats paths, snapshot ids and token NAMES makes the
 	// support bundle useless, which is a different way of having no logs.
 	keep := []struct{ line, want string }{
-		{"connecting with root@pam!agent:0f1e2d3c-4b5a-6978", "root@pam!agent"},
-		{"url=https://pbs.example.com/api2/json?api_key=zzzzzzzzzzzz", "https://pbs.example.com/api2/json"},
+		{"connecting with root@pam!agent:" + fakeSecret(t, 6), "root@pam!agent"},
+		{"url=https://pbs.example.com/api2/json?api_key=" + fakeSecret(t, 6), "https://pbs.example.com/api2/json"},
 		{`backing up C:\Users\Bob\Documents`, `C:\Users\Bob\Documents`},
 		{"chunk digest 3b1f0a9c2d4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a", "3b1f0a9c"},
 		{"snapshot host/WS-01/2026-08-05T02:00:00Z", "host/WS-01/2026-08-05T02:00:00Z"},
