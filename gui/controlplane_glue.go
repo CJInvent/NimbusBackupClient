@@ -82,7 +82,7 @@ func (a *App) StartControlPlane() {
 			AgentVersion: appVersion,
 		})
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("[controlplane] enrollment failed (will retry next start): %v", err))
+			writeWarnLog(fmt.Sprintf("[controlplane] enrollment failed (will retry next start): %v", err))
 			return
 		}
 		cpClient.AgentID, cpClient.Secret = resp.AgentID, resp.Secret
@@ -91,7 +91,7 @@ func (a *App) StartControlPlane() {
 		a.config.ControlSecret = encryptSecret(resp.Secret)
 		a.config.ControlEnrollToken = ""
 		if err := a.config.Save(); err != nil {
-			writeDebugLog(fmt.Sprintf("[controlplane] WARNING: enrolled but config save failed: %v", err))
+			writeWarnLog(fmt.Sprintf("[controlplane] WARNING: enrolled but config save failed: %v", err))
 		}
 		writeDebugLog(fmt.Sprintf("[controlplane] enrolled as agent %d", resp.AgentID))
 	}
@@ -304,7 +304,7 @@ func cpCheckPBSReachability(cfg *Config) *bool {
 		// A problem with the check itself (couldn't build the request) --
 		// not a real connectivity answer either way. Leave it unknown
 		// rather than report a possibly-wrong true/false.
-		writeDebugLog(fmt.Sprintf("[controlplane] PBS connectivity check failed to run: %v", err))
+		writeErrorLog(fmt.Sprintf("[controlplane] PBS connectivity check failed to run: %v", err))
 		return nil
 	}
 	return &reachable

@@ -55,7 +55,7 @@ func loadManagedJobs() {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			writeDebugLog(fmt.Sprintf("[managed] could not read %s: %v", path, err))
+			writeErrorLog(fmt.Sprintf("[managed] could not read %s: %v", path, err))
 		}
 		return
 	}
@@ -109,7 +109,7 @@ func applyManagedJobs(jobs []controlplane.ManagedJob) {
 		return
 	}
 	if err := atomicWriteFile(path, data, 0600); err != nil {
-		writeDebugLog(fmt.Sprintf("[managed] could not cache job set: %v", err))
+		writeErrorLog(fmt.Sprintf("[managed] could not cache job set: %v", err))
 	}
 }
 

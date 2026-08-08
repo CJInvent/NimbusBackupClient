@@ -84,7 +84,7 @@ func getExchangeCircularLogging() (queried, accumulate bool, detail string) {
 		"Write-Output ($d.Count.ToString() + '|' + $off.Count.ToString())"
 	out, err := exec.Command("powershell.exe", "-NonInteractive", "-Command", ps).CombinedOutput()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Exchange] circular-logging query failed: %v", err))
+		writeErrorLog(fmt.Sprintf("[Exchange] circular-logging query failed: %v", err))
 		return false, false, ""
 	}
 	fields := strings.Split(strings.TrimSpace(string(out)), "|")

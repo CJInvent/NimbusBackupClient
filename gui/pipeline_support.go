@@ -63,7 +63,7 @@ func (a *App) maybeRunExchangePostBackup() {
 	}
 	installed, version := detectExchange()
 	if !installed {
-		writeDebugLog("[Exchange] app-aware tasks enabled but no Exchange installation detected - skipping")
+		writeWarnLog("[Exchange] app-aware tasks enabled but no Exchange installation detected - skipping")
 		return
 	}
 	writeDebugLog(fmt.Sprintf("[Exchange] Running post-backup tasks for Exchange %s (health=%v, truncateLogs=%v)",

@@ -63,7 +63,7 @@ func (s *NimbusService) run() {
 	// from a previously crashed Nimbus process. Without this, the next backup
 	// can fail with "VSS_START - shadow copy creation is already in progress".
 	if err := snapshot.VSSCleanup(); err != nil {
-		writeDebugLog(fmt.Sprintf("VSS cleanup at startup reported error: %v", err))
+		writeErrorLog(fmt.Sprintf("VSS cleanup at startup reported error: %v", err))
 	}
 
 	// Recalculate stale nextRun values (e.g. after service restart or missed window)
@@ -88,7 +88,7 @@ func (s *NimbusService) run() {
 	// request (fail closed) rather than exposing the privileged API unauthenticated.
 	apiToken, tokErr := api.EnsureToken(getAPITokenPath())
 	if tokErr != nil {
-		writeDebugLog(fmt.Sprintf("API token init failed (API will reject all requests): %v", tokErr))
+		writeErrorLog(fmt.Sprintf("API token init failed (API will reject all requests): %v", tokErr))
 	}
 	s.apiServer = api.NewServer("127.0.0.1:18765", s.app, apiToken)
 	s.apiServer.SetVersion(appVersion)
@@ -125,7 +125,7 @@ func (s *NimbusService) run() {
 
 	go func() {
 		if err := s.apiServer.Start(); err != nil {
-			writeDebugLog(fmt.Sprintf("API server error: %v", err))
+			writeErrorLog(fmt.Sprintf("API server error: %v", err))
 		}
 	}()
 

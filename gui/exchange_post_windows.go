@@ -44,7 +44,7 @@ func runExchangePostBackup(version string, healthCheck, truncate bool) {
 func runExchangeLogTruncation() {
 	vols := exchangeVolumes()
 	if len(vols) == 0 {
-		writeDebugLog("[Exchange] log truncation skipped: could not determine Exchange volumes (no truncation performed)")
+		writeWarnLog("[Exchange] log truncation skipped: could not determine Exchange volumes (no truncation performed)")
 		return
 	}
 
@@ -61,14 +61,14 @@ func runExchangeLogTruncation() {
 
 	tmp, err := os.CreateTemp("", "nimbus-exch-*.dsh")
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Exchange] log truncation: cannot create diskshadow script: %v", err))
+		writeErrorLog(fmt.Sprintf("[Exchange] log truncation: cannot create diskshadow script: %v", err))
 		return
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 	if _, err := tmp.WriteString(sb.String()); err != nil {
 		_ = tmp.Close()
-		writeDebugLog(fmt.Sprintf("[Exchange] log truncation: cannot write diskshadow script: %v", err))
+		writeErrorLog(fmt.Sprintf("[Exchange] log truncation: cannot write diskshadow script: %v", err))
 		return
 	}
 	_ = tmp.Close()
@@ -84,7 +84,7 @@ func exchangeVolumes() []string {
 		"Get-MailboxDatabase | ForEach-Object { $_.EdbFilePath.DriveName; $_.LogFolderPath.DriveName } | Sort-Object -Unique"
 	out, err := exec.Command("powershell.exe", "-NonInteractive", "-Command", ps).CombinedOutput()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Exchange] could not query database volumes: %v", err))
+		writeErrorLog(fmt.Sprintf("[Exchange] could not query database volumes: %v", err))
 		return nil
 	}
 	seen := map[string]bool{}
@@ -109,7 +109,7 @@ func runExchangeCommand(label, name string, args ...string) {
 		if ee, ok := err.(*exec.ExitError); ok {
 			code = " (exit " + strconv.Itoa(ee.ExitCode()) + ")"
 		}
-		writeDebugLog(fmt.Sprintf("[Exchange] TASK FAILED: %s%s: %v", label, code, err))
+		writeErrorLog(fmt.Sprintf("[Exchange] TASK FAILED: %s%s: %v", label, code, err))
 		if trimmed != "" {
 			writeDebugLog(fmt.Sprintf("[Exchange] %s output: %s", label, truncateForLog(trimmed, 3000)))
 		}

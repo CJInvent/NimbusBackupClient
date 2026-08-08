@@ -243,13 +243,13 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 				historyEntry.Status = "failed"
 			}
 			if err := a.AddJobHistory(historyEntry); err != nil {
-				writeDebugLog(fmt.Sprintf("Warning: failed to add backup to history: %v", err))
+				writeWarnLog(fmt.Sprintf("Warning: failed to add backup to history: %v", err))
 			}
 
 			if success && req.BackupType == "directory" {
 				a.config.LastBackupDirs = req.BackupDirs
 				if err := a.config.Save(); err != nil {
-					writeDebugLog(fmt.Sprintf("Failed to save last backup dirs: %v", err))
+					writeErrorLog(fmt.Sprintf("Failed to save last backup dirs: %v", err))
 				}
 			}
 		},

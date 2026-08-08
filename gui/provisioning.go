@@ -59,7 +59,7 @@ func (a *App) ApplyProvisioningProfile() bool {
 
 	profile, err := controlplane.ParseProfile(raw)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[provisioning] REFUSED profile: %v", err))
+		writeErrorLog(fmt.Sprintf("[provisioning] REFUSED profile: %v", err))
 		return false
 	}
 
@@ -91,7 +91,7 @@ func (a *App) ApplyProvisioningProfile() bool {
 		a.config.DefaultBackupMode = profile.DefaultMode
 	}
 	if err := a.config.Save(); err != nil {
-		writeDebugLog(fmt.Sprintf("[provisioning] WARNING: profile applied but config save failed: %v", err))
+		writeWarnLog(fmt.Sprintf("[provisioning] WARNING: profile applied but config save failed: %v", err))
 		return false
 	}
 	writeDebugLog("[provisioning] profile applied; enrollment will run on this start")

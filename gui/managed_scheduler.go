@@ -111,7 +111,7 @@ func saveManagedStateLocked() {
 		return
 	}
 	if err := atomicWriteFile(path, data, 0600); err != nil {
-		writeDebugLog(fmt.Sprintf("[managed-sched] could not persist fire history: %v", err))
+		writeErrorLog(fmt.Sprintf("[managed-sched] could not persist fire history: %v", err))
 	}
 }
 

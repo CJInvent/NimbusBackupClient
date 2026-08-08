@@ -247,7 +247,7 @@ func LoadConfig() *Config {
 	// stay read-only.
 	if needsSecretMigration {
 		if err := config.Save(); err != nil {
-			writeDebugLog(fmt.Sprintf("[Secrets] WARNING: failed to persist secret encryption migration: %v", err))
+			writeWarnLog(fmt.Sprintf("[Secrets] WARNING: failed to persist secret encryption migration: %v", err))
 		} else {
 			writeDebugLog("[Secrets] Migrated stored secrets to encrypted form (encv1)")
 		}

@@ -101,7 +101,7 @@ func loadOrCreateDEK() ([]byte, string, error) {
 			}
 			return upgradeDEKProtector(path, dek, mk.Protector)
 		case "plaintext":
-			writeDebugLog("[Secrets] WARNING: master key is stored with the PLAINTEXT protector - stored secrets are only obfuscated, not protected")
+			writeWarnLog("[Secrets] WARNING: master key is stored with the PLAINTEXT protector - stored secrets are only obfuscated, not protected")
 			return upgradeDEKProtector(path, blob, mk.Protector)
 		default:
 			return nil, "", fmt.Errorf("unknown master key protector %q", mk.Protector)
@@ -134,17 +134,17 @@ func wrapDEK(dek []byte) (string, []byte) {
 			writeDebugLog("[Secrets] Master key wrapped by the TPM protector (Platform Crypto Provider)")
 			return "tpm", blob
 		} else {
-			writeDebugLog(fmt.Sprintf("[Secrets] TPM wrap round-trip verification failed (%v) - falling back", err2))
+			writeWarnLog(fmt.Sprintf("[Secrets] TPM wrap round-trip verification failed (%v) - falling back", err2))
 		}
 	} else {
-		writeDebugLog(fmt.Sprintf("[Secrets] TPM protector unavailable (%v) - falling back to DPAPI", err))
+		writeWarnLog(fmt.Sprintf("[Secrets] TPM protector unavailable (%v) - falling back to DPAPI", err))
 	}
 
 	if blob, err := dpapiProtect(dek); err == nil {
 		writeDebugLog("[Secrets] Master key wrapped by the DPAPI (machine) protector")
 		return "dpapi", blob
 	} else {
-		writeDebugLog(fmt.Sprintf("[Secrets] WARNING: DPAPI unavailable (%v) - falling back to PLAINTEXT protector; stored secrets will only be obfuscated", err))
+		writeWarnLog(fmt.Sprintf("[Secrets] WARNING: DPAPI unavailable (%v) - falling back to PLAINTEXT protector; stored secrets will only be obfuscated", err))
 	}
 
 	return "plaintext", dek
@@ -173,7 +173,7 @@ func upgradeDEKProtector(path string, dek []byte, current string) ([]byte, strin
 		return dek, current, nil
 	}
 	if err := writeMasterKey(path, newProtector, blob); err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] WARNING: failed to persist protector upgrade %s -> %s: %v", current, newProtector, err))
+		writeWarnLog(fmt.Sprintf("[Secrets] WARNING: failed to persist protector upgrade %s -> %s: %v", current, newProtector, err))
 		return dek, current, nil
 	}
 	writeDebugLog(fmt.Sprintf("[Secrets] Master key protector upgraded: %s -> %s", current, newProtector))
@@ -201,22 +201,22 @@ func encryptSecret(plain string) string {
 	}
 	dek, _, err := getDEK()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] WARNING: no master key (%v) - storing secret unencrypted", err))
+		writeWarnLog(fmt.Sprintf("[Secrets] WARNING: no master key (%v) - storing secret unencrypted", err))
 		return plain
 	}
 	block, err := aes.NewCipher(dek)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] cipher init failed: %v - storing secret unencrypted", err))
+		writeErrorLog(fmt.Sprintf("[Secrets] cipher init failed: %v - storing secret unencrypted", err))
 		return plain
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] gcm init failed: %v - storing secret unencrypted", err))
+		writeErrorLog(fmt.Sprintf("[Secrets] gcm init failed: %v - storing secret unencrypted", err))
 		return plain
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] nonce generation failed: %v - storing secret unencrypted", err))
+		writeErrorLog(fmt.Sprintf("[Secrets] nonce generation failed: %v - storing secret unencrypted", err))
 		return plain
 	}
 	sealed := gcm.Seal(nonce, nonce, []byte(plain), nil)
@@ -233,31 +233,31 @@ func decryptSecret(v string) string {
 	}
 	raw, err := base64.StdEncoding.DecodeString(v[len(secretPrefixV1):])
 	if err != nil {
-		writeDebugLog("[Secrets] ERROR: stored secret is corrupt - it must be re-entered")
+		writeErrorLog("[Secrets] ERROR: stored secret is corrupt - it must be re-entered")
 		return ""
 	}
 	dek, _, err := getDEK()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] ERROR: cannot load master key (%v) - stored secret must be re-entered", err))
+		writeErrorLog(fmt.Sprintf("[Secrets] ERROR: cannot load master key (%v) - stored secret must be re-entered", err))
 		return ""
 	}
 	block, err := aes.NewCipher(dek)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] ERROR: cipher init failed (%v)", err))
+		writeErrorLog(fmt.Sprintf("[Secrets] ERROR: cipher init failed (%v)", err))
 		return ""
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Secrets] ERROR: gcm init failed (%v)", err))
+		writeErrorLog(fmt.Sprintf("[Secrets] ERROR: gcm init failed (%v)", err))
 		return ""
 	}
 	if len(raw) < gcm.NonceSize() {
-		writeDebugLog("[Secrets] ERROR: stored secret is truncated - it must be re-entered")
+		writeErrorLog("[Secrets] ERROR: stored secret is truncated - it must be re-entered")
 		return ""
 	}
 	plain, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
 	if err != nil {
-		writeDebugLog("[Secrets] ERROR: stored secret cannot be decrypted with this machine's master key - it must be re-entered")
+		writeErrorLog("[Secrets] ERROR: stored secret cannot be decrypted with this machine's master key - it must be re-entered")
 		return ""
 	}
 	return string(plain)

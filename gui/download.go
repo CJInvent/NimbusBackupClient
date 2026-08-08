@@ -99,7 +99,7 @@ func (a *App) DownloadSelection(pbsID, backupID, snapshotID string,
 				tmpParent, formatBytesGo(needed), formatBytesGo(sc.FreeBytes))
 		}
 	} else {
-		writeDebugLog(fmt.Sprintf("DownloadSelection: temp space check failed (continuing): %v", err))
+		writeErrorLog(fmt.Sprintf("DownloadSelection: temp space check failed (continuing): %v", err))
 	}
 	sc, err := evaluateSpace(destPath, needed)
 	if err != nil {

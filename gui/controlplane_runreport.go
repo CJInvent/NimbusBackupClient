@@ -224,7 +224,7 @@ func cpStampSnapshotNotes(opts *BackupOptions, rep *controlplane.RunReporter, ba
 	go func() {
 		note := "nimbus-job:" + runUUID
 		if err := pbs.SetSnapshotNotes(opts.BackupType, backupID, backupTime, note); err != nil {
-			writeDebugLog(fmt.Sprintf("[controlplane] failed to stamp PBS snapshot notes for run %s: %v", runUUID, err))
+			writeErrorLog(fmt.Sprintf("[controlplane] failed to stamp PBS snapshot notes for run %s: %v", runUUID, err))
 		}
 	}()
 }

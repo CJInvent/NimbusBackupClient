@@ -464,12 +464,12 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 		// resumed" error that masks the real cause.
 		var authErr *pbscommon.AuthErr
 		if errors.As(err, &authErr) || strings.Contains(err.Error(), "PBS authentication failed") {
-			writeDebugLog(fmt.Sprintf("PBS rejected the backup session: %v", err))
+			writeErrorLog(fmt.Sprintf("PBS rejected the backup session: %v", err))
 			return abort(fmt.Errorf("PBS rejected the backup session: %w", err))
 		}
 		// Anything else just means no usable previous index (normal for a
 		// first backup): start with an empty known-chunk set.
-		writeDebugLog(fmt.Sprintf("No previous backup found: %v", err))
+		writeWarnLog(fmt.Sprintf("No previous backup found: %v", err))
 	}
 
 	CS := MachineChunkState{}
@@ -765,7 +765,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 		// stream would silently corrupt the image, which is worse).
 		readerErr := make(chan error, 1)
 		failRead := func(err error) {
-			writeDebugLog(fmt.Sprintf("Disk read failed: %v", err))
+			writeErrorLog(fmt.Sprintf("Disk read failed: %v", err))
 			readerErr <- err
 			close(ch)
 		}
@@ -828,7 +828,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 						pos += uint64(nbytes)
 					}
 					if pos != P.EndByte {
-						writeDebugLog(fmt.Sprintf("Failed to read partition entirely %d/%d", pos, P.EndByte))
+						writeErrorLog(fmt.Sprintf("Failed to read partition entirely %d/%d", pos, P.EndByte))
 					}
 				} else {
 					snap, ok := snapshots[P.Letter+":\\"]
@@ -852,7 +852,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 					}
 
 					if uint64(P.EndByte) != uint64(P.StartByte)+uint64(l) {
-						writeDebugLog("VSS snapshot is smaller than the partition — padding with zeros")
+						writeWarnLog("VSS snapshot is smaller than the partition — padding with zeros")
 					}
 
 					npad := P.EndByte - (uint64(P.StartByte) + uint64(l))
@@ -891,7 +891,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 						npad -= uint64(len(sl))
 					}
 					if pos != P.EndByte {
-						writeDebugLog(fmt.Sprintf("Failed to read partition entirely %d/%d", pos, P.EndByte))
+						writeErrorLog(fmt.Sprintf("Failed to read partition entirely %d/%d", pos, P.EndByte))
 					}
 				}
 			}
@@ -971,7 +971,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	// already aborted before the index was committed (PBS discards the partial)
 	// and the deferred VSS Release has removed the shadow copy and its symlink.
 	stopped := func() error {
-		writeDebugLog("Machine backup stopped by user — aborted before index commit; partial backup discarded and VSS snapshot released")
+		writeErrorLog("Machine backup stopped by user — aborted before index commit; partial backup discarded and VSS snapshot released")
 		if opts.OnComplete != nil {
 			opts.OnComplete(false, errBackupStopped)
 		}

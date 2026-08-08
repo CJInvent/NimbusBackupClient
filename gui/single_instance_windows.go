@@ -34,14 +34,14 @@ const (
 func CheckSingleInstance() bool {
 	mutexNamePtr, err := syscall.UTF16PtrFromString(mutexName)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Failed to create mutex name: %v", err))
+		writeErrorLog(fmt.Sprintf("Failed to create mutex name: %v", err))
 		return true // Allow launch on error
 	}
 
 	// Try to create or open the mutex
 	mutex, err := windows.CreateMutex(nil, false, mutexNamePtr)
 	if err != nil && err != windows.ERROR_ALREADY_EXISTS {
-		writeDebugLog(fmt.Sprintf("Failed to create mutex: %v", err))
+		writeErrorLog(fmt.Sprintf("Failed to create mutex: %v", err))
 		return true // Allow launch on error
 	}
 
@@ -54,7 +54,7 @@ func CheckSingleInstance() bool {
 		if activateExistingWindow() {
 			writeDebugLog("Successfully activated existing window")
 		} else {
-			writeDebugLog("Could not find existing window to activate")
+			writeErrorLog("Could not find existing window to activate")
 		}
 
 		// Close our mutex handle and exit

@@ -27,7 +27,7 @@ func (a *App) GetSecurityWarnings() []string {
 	postureOnce.Do(func() {
 		postureWarnings = collectSecurityWarnings()
 		for _, w := range postureWarnings {
-			writeDebugLog(fmt.Sprintf("[SecurityPosture] WARNING: %s", w))
+			writeWarnLog(fmt.Sprintf("[SecurityPosture] WARNING: %s", w))
 		}
 		if len(postureWarnings) == 0 {
 			writeDebugLog("[SecurityPosture] No issues detected")

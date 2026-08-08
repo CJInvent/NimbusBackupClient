@@ -49,13 +49,29 @@ import (
 // typo in a registry value must not be able to turn off logging on a machine,
 // and must not stop it backing up either.
 //
-// WARN AND ERROR ARE DELIBERATELY NOT OFFERED, even though the server has
-// them. This agent's ~280 operational log calls are all one severity —
-// writeDebugLog — so accepting ERROR would produce a completely silent agent,
-// which is worse than a noisy one and looks identical to a broken one.
-// Offering a level the code cannot honour is how a setting becomes a trap.
-// Classifying those call sites is its own piece of work; when it is done, the
-// two names get added here and nowhere else.
+// WARN AND ERROR ARE SEVERITY LABELS HERE, NOT FILTER THRESHOLDS, and that is
+// a deliberate departure from the server.
+//
+// The obvious plan was to classify the ~280 operational call sites and then
+// offer WARN and ERROR as settable levels. Classification was done — see
+// writeWarnLog and writeErrorLog below — but it CANNOT BE CERTIFIED COMPLETE,
+// for a reason that is structural rather than a matter of effort: eight call
+// sites pass a VARIABLE, `writeDebugLog(msg)`. Whether that line is narration
+// or a failure depends on what the caller put in it, and no amount of reading
+// this file tells you.
+//
+// So the settable level stops at INFO. A missed failure staying at INFO is
+// harmless when INFO is never suppressed; the same miss under a settable ERROR
+// would hide the one line that mattered, on a machine an administrator had
+// quietened precisely because they expected it to still report failures.
+// Offering a threshold whose safety I cannot demonstrate is how a setting
+// becomes a trap.
+//
+// What the labels buy without that risk: severity is visible in the file and
+// greppable, so a support bundle can be triaged by reading `[ERROR]` lines
+// first, and monitoring can key on them. If the variable-message call sites
+// are ever given explicit severities, the thresholds can be added — here and
+// nowhere else.
 //
 // LEVELS AND CATEGORIES ARE ONE SYSTEM, not two. logcat.go's categories are
 // per-launch flags for verbose subsystems (pbs, chunks, security, api); the
@@ -72,6 +88,11 @@ const (
 	levelTrace logLevel = 10
 	levelDebug logLevel = 20
 	levelInfo  logLevel = 30
+
+	// Above INFO, and therefore never suppressed by any settable level.
+	// These are labels, not thresholds — see the note above.
+	levelWarn  logLevel = 40
+	levelError logLevel = 50
 )
 
 const logLevelValueName = "LogLevel"
@@ -217,6 +238,25 @@ func writeDebugLog(message string) {
 		return
 	}
 	writeLogToLogger(serviceLogger, "SERVICE", message)
+}
+
+// writeWarnLog records something degraded but survivable: a fallback taken, a
+// retry, a capability missing, a value skipped.
+//
+// Never suppressed. WARN is above INFO and the settable level stops at INFO,
+// so raising the level cannot hide these — which is what makes labelling them
+// safe even though the classification is incomplete.
+func writeWarnLog(message string) {
+	writeLogToLogger(serviceLogger, "WARN", message)
+}
+
+// writeErrorLog records an operational failure.
+//
+// Never suppressed, for the same reason as writeWarnLog. If a line that
+// belongs here is still going through writeDebugLog, the consequence is that
+// it is labelled SERVICE rather than ERROR — mislabelled, not lost.
+func writeErrorLog(message string) {
+	writeLogToLogger(serviceLogger, "ERROR", message)
 }
 
 // writeBackupLog writes to backup log (backup operations).

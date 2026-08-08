@@ -28,7 +28,7 @@ func (a *App) RecalculateNextRuns() {
 
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Error loading scheduled jobs: %v", err))
+		writeErrorLog(fmt.Sprintf("Error loading scheduled jobs: %v", err))
 		return
 	}
 
@@ -42,7 +42,7 @@ func (a *App) RecalculateNextRuns() {
 
 		nextRun, err := time.Parse(time.RFC3339, job.NextRun)
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("Error parsing nextRun for %s: %v", job.Name, err))
+			writeErrorLog(fmt.Sprintf("Error parsing nextRun for %s: %v", job.Name, err))
 			continue
 		}
 
@@ -59,18 +59,18 @@ func (a *App) RecalculateNextRuns() {
 	if modified {
 		jobsPath, err := getScheduledJobsPath()
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("Error getting jobs path: %v", err))
+			writeErrorLog(fmt.Sprintf("Error getting jobs path: %v", err))
 			return
 		}
 
 		data, err := json.MarshalIndent(jobs, "", "  ")
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("Error marshaling jobs: %v", err))
+			writeErrorLog(fmt.Sprintf("Error marshaling jobs: %v", err))
 			return
 		}
 
 		if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
-			writeDebugLog(fmt.Sprintf("Error saving recalculated jobs: %v", err))
+			writeErrorLog(fmt.Sprintf("Error saving recalculated jobs: %v", err))
 		} else {
 			writeDebugLog("Successfully recalculated stale nextRun values")
 		}
@@ -109,14 +109,14 @@ func (a *App) CleanupAbandonedJobs() {
 
 	history, err := a.GetJobHistory()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Error loading job history: %v", err))
+		writeErrorLog(fmt.Sprintf("Error loading job history: %v", err))
 		return
 	}
 
 	modified := false
 	for i, entry := range history {
 		if entry.Status == "running" {
-			writeDebugLog(fmt.Sprintf("Marking abandoned job as failed: %s", entry.Name))
+			writeErrorLog(fmt.Sprintf("Marking abandoned job as failed: %s", entry.Name))
 			history[i].Status = "failed"
 			history[i].Message = "Aborted (application interrupted)"
 			history[i].Timestamp = time.Now().Format(time.RFC3339)
@@ -128,18 +128,18 @@ func (a *App) CleanupAbandonedJobs() {
 		// Save updated history
 		historyPath, err := getJobHistoryPath()
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("Error getting history path: %v", err))
+			writeErrorLog(fmt.Sprintf("Error getting history path: %v", err))
 			return
 		}
 
 		data, err := json.MarshalIndent(history, "", "  ")
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("Error marshaling history: %v", err))
+			writeErrorLog(fmt.Sprintf("Error marshaling history: %v", err))
 			return
 		}
 
 		if err := atomicWriteFile(historyPath, data, 0600); err != nil {
-			writeDebugLog(fmt.Sprintf("Error saving updated history: %v", err))
+			writeErrorLog(fmt.Sprintf("Error saving updated history: %v", err))
 		} else {
 			writeDebugLog("Successfully cleaned up abandoned jobs")
 		}
@@ -155,7 +155,7 @@ func (a *App) HandleStartupRun() {
 
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Error loading scheduled jobs: %v", err))
+		writeErrorLog(fmt.Sprintf("Error loading scheduled jobs: %v", err))
 		return
 	}
 
@@ -185,7 +185,7 @@ func (a *App) checkAndRunScheduledJobs() {
 
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Scheduler] Error loading scheduled jobs: %v", err))
+		writeErrorLog(fmt.Sprintf("[Scheduler] Error loading scheduled jobs: %v", err))
 		return
 	}
 
@@ -217,7 +217,7 @@ func (a *App) checkAndRunScheduledJobs() {
 
 		nextRun, err := time.Parse(time.RFC3339, job.NextRun)
 		if err != nil {
-			writeDebugLog(fmt.Sprintf("[Scheduler] Error parsing next run time for %s: %v", job.Name, err))
+			writeErrorLog(fmt.Sprintf("[Scheduler] Error parsing next run time for %s: %v", job.Name, err))
 			continue
 		}
 

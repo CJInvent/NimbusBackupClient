@@ -110,3 +110,38 @@ func TestRedactionKeepsWhatTheLogIsFor(t *testing.T) {
 		}
 	}
 }
+
+func TestWarnAndErrorAreNeverSuppressed(t *testing.T) {
+	// The load-bearing property of making WARN/ERROR LABELS rather than
+	// thresholds. Classification of the ~280 operational call sites cannot be
+	// certified complete — eight of them pass a variable, so no amount of
+	// reading tells you whether the line is narration or a failure. A missed
+	// failure staying at INFO is harmless only while INFO is never
+	// suppressed, and that is what this pins.
+	orig := activeLevel
+	defer func() { activeLevel = orig }()
+
+	for _, lvl := range []logLevel{levelTrace, levelDebug, levelInfo} {
+		activeLevel = lvl
+		if !logLevelEnabled(levelWarn) {
+			t.Errorf("WARN suppressed at settable level %v", lvl)
+		}
+		if !logLevelEnabled(levelError) {
+			t.Errorf("ERROR suppressed at settable level %v", lvl)
+		}
+	}
+}
+
+func TestNoSettableLevelCanSuppressAFailure(t *testing.T) {
+	// Stated as its own assertion because it is the reason the settable set
+	// stops at INFO: if a name above INFO ever became configurable, every
+	// unclassified failure line would go quiet on the machines an
+	// administrator had quietened precisely because they still expected
+	// failures to be reported.
+	for _, name := range []string{"WARN", "ERROR", "FATAL"} {
+		if resolveLogLevel(name) > levelInfo {
+			t.Errorf("%q resolved to a threshold above INFO; that can hide an "+
+				"unclassified failure", name)
+		}
+	}
+}

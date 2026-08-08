@@ -63,7 +63,7 @@ func (a *App) pinFingerprintLocal(id, fingerprint string) error {
 	}
 	pbs.CertFingerprint = fingerprint
 	if err := a.config.UpdatePBSServer(pbs); err != nil {
-		writeDebugLog(fmt.Sprintf("pinFingerprintLocal: could not persist fingerprint for %q: %v", id, err))
+		writeErrorLog(fmt.Sprintf("pinFingerprintLocal: could not persist fingerprint for %q: %v", id, err))
 		return fmt.Errorf("%s :: %v", errFingerprintSave, err)
 	}
 	// Read the file back so the log states unambiguously whether the fingerprint
@@ -78,7 +78,7 @@ func (a *App) pinFingerprintLocal(id, fingerprint string) error {
 			if s != nil {
 				onDisk = s.CertFingerprint
 			}
-			writeDebugLog(fmt.Sprintf("pinFingerprintLocal: WARNING fingerprint for %q not on disk after save (on-disk=%q) — config.json unwritable or overwritten", id, onDisk))
+			writeWarnLog(fmt.Sprintf("pinFingerprintLocal: WARNING fingerprint for %q not on disk after save (on-disk=%q) — config.json unwritable or overwritten", id, onDisk))
 		}
 	}
 	return nil

@@ -123,7 +123,7 @@ func (a *App) probeOne(id, name, host, datastore string, isDefault bool, cfg *Co
 	}
 	reachable, err := client.CheckConnectivity()
 	if err != nil {
-		writeDebugLog("[connections] probe of " + id + " could not run: " + err.Error())
+		writeErrorLog("[connections] probe of " + id + " could not run: " + err.Error())
 		return conn
 	}
 	conn.Reachable = &reachable

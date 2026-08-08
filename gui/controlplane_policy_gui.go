@@ -82,7 +82,7 @@ func fetchPolicyFromService() controlplane.Policy {
 	}
 	st, err := client.GetControlPlaneStatus()
 	if err != nil || st == nil {
-		writeDebugLog("[policy] service did not answer; restore stays disabled until it does")
+		writeWarnLog("[policy] service did not answer; restore stays disabled until it does")
 		return controlplane.Policy{}
 	}
 
@@ -95,7 +95,7 @@ func fetchPolicyFromService() controlplane.Policy {
 
 	known, _ := st["policy_known"].(bool)
 	if !known {
-		writeDebugLog("[policy] service reports no agent yet; restore stays disabled")
+		writeWarnLog("[policy] service reports no agent yet; restore stays disabled")
 		// Not GUIReadOnly:true. Failing closed is right for restore, where
 		// the cost of a wrong answer is data leaving the building; it is
 		// wrong for the console, where it would blank the panel of a

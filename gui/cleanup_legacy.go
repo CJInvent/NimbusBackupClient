@@ -61,7 +61,7 @@ func cleanupRegistryEntry() {
 		writeDebugLog("Removed legacy Registry auto-start entry")
 	} else if err != registry.ErrNotExist {
 		// Some other error, log it
-		writeDebugLog("Registry cleanup: " + err.Error())
+		writeErrorLog("Registry cleanup: " + err.Error())
 	} else {
 		// Entry doesn't exist - that's fine
 		writeDebugLog("No legacy Registry entry found (already clean)")

@@ -105,7 +105,7 @@ func (a *App) SaveScheduledJob(job ScheduledJob) error {
 	// Load existing jobs
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Error loading existing jobs: %v", err))
+		writeErrorLog(fmt.Sprintf("Error loading existing jobs: %v", err))
 	}
 
 	// Set enabled by default
@@ -168,7 +168,7 @@ func (a *App) GetScheduledJobs() ([]ScheduledJob, error) {
 func (a *App) GetScheduledJobsForAPI() []map[string]interface{} {
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("GetScheduledJobsForAPI error: %v", err))
+		writeErrorLog(fmt.Sprintf("GetScheduledJobsForAPI error: %v", err))
 		return []map[string]interface{}{}
 	}
 
@@ -296,7 +296,7 @@ func (a *App) GetJobHistory() ([]JobHistory, error) {
 func (a *App) AddJobHistory(entry JobHistory) error {
 	history, err := a.GetJobHistory()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Error loading history: %v", err))
+		writeErrorLog(fmt.Sprintf("Error loading history: %v", err))
 	}
 
 	// Add new entry at the beginning
@@ -331,7 +331,7 @@ func calculateNextRun(scheduleTime string) string {
 	now := time.Now()
 	var hour, min int
 	if _, err := fmt.Sscanf(scheduleTime, "%d:%d", &hour, &min); err != nil {
-		writeDebugLog(fmt.Sprintf("Error parsing schedule time %s: %v", scheduleTime, err))
+		writeErrorLog(fmt.Sprintf("Error parsing schedule time %s: %v", scheduleTime, err))
 		return ""
 	}
 
@@ -366,7 +366,7 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	// Check if job is already running
 	runningJobsMutex.Lock()
 	if runningJobs[job.ID] {
-		writeDebugLog(fmt.Sprintf("Job %s is already running, skipping", job.Name))
+		writeWarnLog(fmt.Sprintf("Job %s is already running, skipping", job.Name))
 		runningJobsMutex.Unlock()
 		return
 	}
@@ -429,13 +429,13 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	}
 
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("Scheduled job error: %v", err))
+		writeErrorLog(fmt.Sprintf("Scheduled job error: %v", err))
 		historyEntry.Status = "failed"
 		historyEntry.Message = fmt.Sprintf("Erreur: %v", err)
 	}
 
 	if err := a.AddJobHistory(historyEntry); err != nil {
-		writeDebugLog(fmt.Sprintf("Warning: Failed to add job history: %v", err))
+		writeWarnLog(fmt.Sprintf("Warning: Failed to add job history: %v", err))
 	}
 
 	// Update job's last run and calculate next run
@@ -453,6 +453,6 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	jobsPath, _ := getScheduledJobsPath()
 	data, _ := json.MarshalIndent(jobs, "", "  ")
 	if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
-		writeDebugLog(fmt.Sprintf("Warning: Failed to save updated jobs: %v", err))
+		writeWarnLog(fmt.Sprintf("Warning: Failed to save updated jobs: %v", err))
 	}
 }

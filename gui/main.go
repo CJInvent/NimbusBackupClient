@@ -140,7 +140,7 @@ func main() {
 	webviewDataDir := filepath.Join(webviewBase, "NimbusBackup", "WebView2")
 	// #nosec G703 -- base is the OS-provided LOCALAPPDATA/APPDATA env var (the GUI runs as the user, not the elevated service); path suffix is constant, no user-controlled traversal
 	if err := os.MkdirAll(webviewDataDir, 0o755); err != nil {
-		writeDebugLog(fmt.Sprintf("WebView2 data dir %s not creatable: %v; falling back to temp", webviewDataDir, err))
+		writeWarnLog(fmt.Sprintf("WebView2 data dir %s not creatable: %v; falling back to temp", webviewDataDir, err))
 		webviewDataDir = filepath.Join(os.TempDir(), "NimbusBackup", "WebView2")
 		_ = os.MkdirAll(webviewDataDir, 0o755)
 	}
@@ -299,7 +299,7 @@ func (a *App) GetConfig() *Config {
 func (a *App) GetHostname() string {
 	hostname, err := os.Hostname()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("GetHostname() error: %v", err))
+		writeErrorLog(fmt.Sprintf("GetHostname() error: %v", err))
 		return "unknown"
 	}
 	writeDebugLog(fmt.Sprintf("GetHostname() returned: %s", hostname))
@@ -405,7 +405,7 @@ func (a *App) ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 	writeDebugLog("ListPhysicalDisks() called from frontend")
 	disks, err := ListPhysicalDisks()
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("ListPhysicalDisks() error: %v", err))
+		writeErrorLog(fmt.Sprintf("ListPhysicalDisks() error: %v", err))
 		return nil, err
 	}
 	writeDebugLog(fmt.Sprintf("Found %d physical disks", len(disks)))
@@ -522,7 +522,7 @@ func (a *App) SaveConfig(config *Config) error {
 			return err
 		}
 		if err := a.apiClient.SaveConfig(m); err != nil {
-			writeDebugLog(fmt.Sprintf("SaveConfig: service-side save failed: %v", err))
+			writeErrorLog(fmt.Sprintf("SaveConfig: service-side save failed: %v", err))
 			return err
 		}
 		a.ReloadConfig()
@@ -539,13 +539,13 @@ func (a *App) SaveConfig(config *Config) error {
 
 	// Validate before saving
 	if err := config.Validate(); err != nil {
-		writeDebugLog(fmt.Sprintf("Config validation failed: %v", err))
+		writeErrorLog(fmt.Sprintf("Config validation failed: %v", err))
 		return err
 	}
 
 	// Save to disk
 	if err := config.Save(); err != nil {
-		writeDebugLog(fmt.Sprintf("Config save to disk failed: %v", err))
+		writeErrorLog(fmt.Sprintf("Config save to disk failed: %v", err))
 		return err
 	}
 
@@ -600,7 +600,7 @@ func (a *App) TestConnection(config *Config) error {
 
 	// Perform real HTTP test (checks DNS, connectivity, auth, datastore access)
 	if err := client.TestConnection(); err != nil {
-		writeDebugLog(fmt.Sprintf("Connection test failed: %v", err))
+		writeErrorLog(fmt.Sprintf("Connection test failed: %v", err))
 		return err
 	}
 
@@ -678,7 +678,7 @@ func (a *App) AddPBSServer(pbs *PBSServer) error {
 			return err
 		}
 		if err := a.apiClient.SavePBSServer(m); err != nil {
-			writeDebugLog(fmt.Sprintf("AddPBSServer: service-side save failed: %v", err))
+			writeErrorLog(fmt.Sprintf("AddPBSServer: service-side save failed: %v", err))
 			return err
 		}
 		a.ReloadConfig()
@@ -698,7 +698,7 @@ func (a *App) UpdatePBSServer(pbs *PBSServer) error {
 			return err
 		}
 		if err := a.apiClient.SavePBSServer(m); err != nil {
-			writeDebugLog(fmt.Sprintf("UpdatePBSServer: service-side save failed: %v", err))
+			writeErrorLog(fmt.Sprintf("UpdatePBSServer: service-side save failed: %v", err))
 			return err
 		}
 		a.ReloadConfig()
@@ -719,7 +719,7 @@ func (a *App) DeletePBSServer(id string) error {
 	writeDebugLog(fmt.Sprintf("DeletePBSServer(%s) called", id))
 	if a.delegateConfigWrites() {
 		if err := a.apiClient.DeletePBSServer(id); err != nil {
-			writeDebugLog(fmt.Sprintf("DeletePBSServer: service-side delete failed: %v", err))
+			writeErrorLog(fmt.Sprintf("DeletePBSServer: service-side delete failed: %v", err))
 			return err
 		}
 		a.ReloadConfig()
@@ -733,7 +733,7 @@ func (a *App) SetDefaultPBSServer(id string) error {
 	writeDebugLog(fmt.Sprintf("SetDefaultPBSServer(%s) called", id))
 	if a.delegateConfigWrites() {
 		if err := a.apiClient.SetDefaultPBS(id); err != nil {
-			writeDebugLog(fmt.Sprintf("SetDefaultPBSServer: service-side set failed: %v", err))
+			writeErrorLog(fmt.Sprintf("SetDefaultPBSServer: service-side set failed: %v", err))
 			return err
 		}
 		a.ReloadConfig()
@@ -769,7 +769,7 @@ func (a *App) GetServerFingerprint(baseURL string) (string, error) {
 	writeDebugLog(fmt.Sprintf("GetServerFingerprint(%s) called", security.SanitizeURL(baseURL)))
 	fp, err := pbscommon.FetchServerFingerprint(baseURL)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("GetServerFingerprint failed: %v", err))
+		writeErrorLog(fmt.Sprintf("GetServerFingerprint failed: %v", err))
 		return "", err
 	}
 	writeDebugLog(fmt.Sprintf("GetServerFingerprint discovered: %s", fp))
@@ -793,7 +793,7 @@ func (a *App) PinPBSServerFingerprint(id, fingerprint string) error {
 	if !a.isServiceProcess && a.mode == api.ModeService && a.apiClient != nil {
 		writeDebugLog(fmt.Sprintf("PinPBSServerFingerprint(%s): delegating write to service", id))
 		if err := a.apiClient.PinFingerprint(id, fingerprint); err != nil {
-			writeDebugLog(fmt.Sprintf("PinPBSServerFingerprint: service-side pin failed: %v", err))
+			writeErrorLog(fmt.Sprintf("PinPBSServerFingerprint: service-side pin failed: %v", err))
 			return err
 		}
 		// Refresh our in-memory copy so a follow-up TestPBSConnection in this process
@@ -875,7 +875,7 @@ func (a *App) startBackupViaService(backupType string, backupDirs []string, driv
 
 	resp, err := a.apiClient.StartBackup(req)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("[Service Mode] Backup request failed: %v", err))
+		writeErrorLog(fmt.Sprintf("[Service Mode] Backup request failed: %v", err))
 		return fmt.Errorf("%s :: %v", errServiceComm, err)
 	}
 
@@ -908,7 +908,7 @@ func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, e
 	snaps, err := ListSnapshotsInline(cfg.BaseURL, cfg.AuthID, cfg.Secret,
 		cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, backupID)
 	if err != nil {
-		writeDebugLog(fmt.Sprintf("ListSnapshotsInline failed: %v", err))
+		writeErrorLog(fmt.Sprintf("ListSnapshotsInline failed: %v", err))
 		return nil, fmt.Errorf("%s :: %v", errSnapshotList, err)
 	}
 
@@ -1088,7 +1088,7 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 			defer func() {
 				if r := recover(); r != nil {
 					err = fmt.Errorf("restore panic: %v", r)
-					writeDebugLog(fmt.Sprintf("CRITICAL: restore panic: %v\n%s", r, debug.Stack()))
+					writeErrorLog(fmt.Sprintf("CRITICAL: restore panic: %v\n%s", r, debug.Stack()))
 				}
 			}()
 			err = RestoreSnapshotInline(opts)
@@ -1097,7 +1097,7 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 		msg := "Restore completed"
 		if err != nil {
 			msg = err.Error()
-			writeDebugLog(fmt.Sprintf("Restore failed: %v", err))
+			writeErrorLog(fmt.Sprintf("Restore failed: %v", err))
 		}
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "restore:complete", map[string]interface{}{
