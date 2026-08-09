@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -124,6 +125,18 @@ type PBSClient struct {
 	Datastore string
 	Namespace string
 
+	// crypt, when set, encrypts every chunk this client writes and decrypts
+	// every chunk it reads.
+	//
+	// UNEXPORTED, with SetCryptKey below as the only way in. The field holds
+	// a live AEAD built from the org's backup key, and an exported field on a
+	// struct this widely constructed would eventually be set from a config
+	// literal, logged in a %+v, or copied into a second client with a
+	// different key. Set it once, from the key delivery path, or leave it nil.
+	//
+	// nil means unencrypted, which is what every existing deployment is.
+	crypt *CryptConfig
+
 	// Shared zstd encoder (see encoder()): built once, used by all upload
 	// workers concurrently via EncodeAll.
 	encOnce  sync.Once
@@ -192,8 +205,12 @@ func CloseAllActive() {
 
 const PBS_FIXED_CHUNK_SIZE = 4 * 1024 * 1024
 
-var blobCompressedMagic = []byte{49, 185, 88, 66, 111, 182, 163, 127}
-var blobUncompressedMagic = []byte{66, 171, 56, 7, 190, 131, 112, 161}
+// The blob magics live in crypt.go, read from upstream's file_formats.rs with
+// the source path recorded. These were a SECOND definition of the same
+// constants — they agreed, but nothing made them agree, and the symptom of a
+// future divergence would be blobs PBS silently cannot read.
+var blobCompressedMagic = CompressedBlobMagic[:]
+var blobUncompressedMagic = UncompressedBlobMagic[:]
 
 type SnapshotsResp struct {
 	Data []BackupManifest `json:"data"`
@@ -643,10 +660,74 @@ func (pbs *PBSClient) encoder() *zstd.Encoder {
 	return pbs.enc
 }
 
+// SetCryptKey turns on encryption for this client, from a raw 32-byte backup
+// key.
+//
+// Returns the key's PBS fingerprint so the caller can record WHICH key a
+// snapshot was written under without holding the key to find out later. That
+// is the same discipline the server's vault uses: identify by fingerprint,
+// never by material.
+//
+// Refuses to replace a key already set. A client that swapped keys mid-session
+// would write chunks under two different digests into one index — the index
+// would reference digests that exist and decrypt to nothing, and it would look
+// fine until a restore.
+func (pbs *PBSClient) SetCryptKey(rawKey []byte) ([32]byte, error) {
+	if pbs.crypt != nil {
+		return [32]byte{}, errors.New("encryption key already set for this client")
+	}
+	cc, err := NewCryptConfig(rawKey)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	pbs.crypt = cc
+	return cc.Fingerprint(), nil
+}
+
+// Encrypted reports whether this client encrypts.
+//
+// The callers that need to know are the ones deciding what to record about a
+// snapshot, not ones deciding whether to encrypt — that decision belongs to
+// whoever set the key.
+func (pbs *PBSClient) Encrypted() bool { return pbs.crypt != nil }
+
+// ChunkDigest computes the digest PBS will store this chunk under.
+//
+// THE DIGEST DEPENDS ON THE KEY when encryption is on: PBS uses
+// sha256(plaintext || id_key), so the same bytes under two different keys are
+// two different chunks. That is what makes dedup scope equal key scope, and it
+// is why this must be asked of the CLIENT rather than computed independently
+// wherever a digest is needed.
+func (pbs *PBSClient) ChunkDigest(plaintext []byte) [32]byte {
+	if pbs.crypt != nil {
+		return pbs.crypt.ComputeDigest(plaintext)
+	}
+	return sha256.Sum256(plaintext)
+}
+
 func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []byte, dynamic bool, compressed bool) error {
 	// Preallocate: magic + crc + worst-case payload. Avoids the append-growth
 	// reallocations the old code did on every chunk.
 	outBuffer := make([]byte, 0, len(chunkdata)+len(blobCompressedMagic)+8)
+
+	// ENCRYPTION SHORT-CIRCUITS COMPRESSION, and that is not an oversight.
+	// PBS has a separate magic for the encrypted-and-compressed form
+	// (EncrComprBlobMagic), and writing zstd output under the plain encrypted
+	// magic would produce a blob PBS accepts and cannot read — the worst
+	// possible failure, because it only surfaces at restore. Until that form
+	// is implemented, an encrypted chunk is encrypted and not compressed.
+	//
+	// The cost is smaller than it looks: this client already re-uploads
+	// uncompressed whenever compression fails to shrink a chunk, and
+	// encrypted data does not compress anyway.
+	if pbs.crypt != nil {
+		encrypted, err := pbs.crypt.EncodeEncryptedBlob(chunkdata)
+		if err != nil {
+			return fmt.Errorf("encrypting chunk %s: %w", digest, err)
+		}
+		return pbs.putChunk(writerid, digest, encrypted, len(chunkdata), dynamic)
+	}
+
 	if compressed {
 		outBuffer = append(outBuffer, blobCompressedMagic...)
 
@@ -669,12 +750,23 @@ func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []by
 		outBuffer = append(outBuffer, chunkdata...)
 	}
 
-	//fmt.Printf("Compressed: %d , Orig: %d\n", len(compressedData), len(chunkdata))
+	return pbs.putChunk(writerid, digest, outBuffer, len(chunkdata), dynamic)
+}
+
+// putChunk POSTs an already-encoded blob.
+//
+// Split out so the encrypted and unencrypted paths cannot drift in how they
+// talk to the server: `size` is the PLAINTEXT length in both, which is what
+// PBS records and what the index refers to, while `encoded-size` is the bytes
+// on the wire. Getting those two the wrong way round on one path only would
+// be invisible until a restore.
+func (pbs *PBSClient) putChunk(writerid uint64, digest string, encoded []byte, plaintextSize int, dynamic bool) error {
+	outBuffer := encoded
 
 	q := &url.Values{}
 	q.Add("digest", digest)
 	q.Add("encoded-size", fmt.Sprintf("%d", len(outBuffer)))
-	q.Add("size", fmt.Sprintf("%d", len(chunkdata)))
+	q.Add("size", fmt.Sprintf("%d", plaintextSize))
 	q.Add("wid", fmt.Sprintf("%d", writerid))
 	suburl := "/dynamic_chunk?"
 	if !dynamic {
@@ -1345,8 +1437,15 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 			return nil, err
 		}
 		return ret2, nil
+	} else if pbs.crypt != nil {
+		return pbs.crypt.DecodeEncryptedBlob(ret)
 	} else {
-		return nil, fmt.Errorf("encrypted chunks not supported")
+		// Named precisely. "Not supported" was true when nothing here could
+		// decrypt; now the likely cause is a client configured without the
+		// key for a datastore that has one, and telling an operator "not
+		// supported" would send them looking for a missing feature instead
+		// of a missing key.
+		return nil, fmt.Errorf("chunk %s is encrypted but this client has no encryption key configured", digest)
 	}
 
 }

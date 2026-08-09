@@ -315,3 +315,87 @@ func TestCRCIsLittleEndian(t *testing.T) {
 func contains(hay, needle string) bool {
 	return bytes.Contains([]byte(hay), []byte(needle))
 }
+
+// ---- wiring into PBSClient -------------------------------------------------
+//
+// crypt.go's own tests prove the FORMAT. These prove the client actually uses
+// it, which is a separate thing: every one of them would pass against a
+// correct CryptConfig that nothing called.
+
+func TestClientIsUnencryptedUntilAKeyIsSet(t *testing.T) {
+	// Every existing deployment is this, and must stay this. A client that
+	// started encrypting because a field defaulted wrong would write chunks
+	// no existing datastore could read.
+	var pbs PBSClient
+	if pbs.Encrypted() {
+		t.Fatal("a zero-value client reports itself encrypted")
+	}
+	plain := []byte("hello")
+	if got, want := pbs.ChunkDigest(plain), sha256.Sum256(plain); got != want {
+		t.Error("an unencrypted client does not use the plain sha256 digest")
+	}
+}
+
+func TestSetCryptKeyReportsTheFingerprintAndRefusesToSwap(t *testing.T) {
+	key := make([]byte, KeySize)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	var pbs PBSClient
+	fp, err := pbs.SetCryptKey(key)
+	if err != nil {
+		t.Fatalf("SetCryptKey: %v", err)
+	}
+	if !pbs.Encrypted() {
+		t.Error("client does not report itself encrypted after a key was set")
+	}
+
+	cc, err := NewCryptConfig(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp != cc.Fingerprint() {
+		t.Error("the reported fingerprint is not the key's fingerprint")
+	}
+
+	// A client that swapped keys mid-session would write chunks under two
+	// different digests into ONE index. The index would reference digests
+	// that exist and decrypt to nothing, and it would look fine until a
+	// restore.
+	other := make([]byte, KeySize)
+	other[0] = 0xff
+	if _, err := pbs.SetCryptKey(other); err == nil {
+		t.Error("SetCryptKey replaced a key that was already set")
+	}
+}
+
+func TestChunkDigestDependsOnTheKey(t *testing.T) {
+	// This is what makes dedup scope equal key scope (V4-SPEC §9), and it is
+	// the reason the digest must be asked of the CLIENT rather than computed
+	// wherever one is needed.
+	plain := []byte("the same bytes exactly")
+
+	k1 := make([]byte, KeySize)
+	k2 := make([]byte, KeySize)
+	k2[0] = 1
+
+	var a, b PBSClient
+	if _, err := a.SetCryptKey(k1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SetCryptKey(k2); err != nil {
+		t.Fatal(err)
+	}
+
+	da, db := a.ChunkDigest(plain), b.ChunkDigest(plain)
+	if da == db {
+		t.Error("two different keys produced the same digest — dedup would cross a key boundary")
+	}
+	if da == sha256.Sum256(plain) {
+		t.Error("an encrypted client used the plain sha256 digest")
+	}
+	// Stable for one key: dedup depends on it being a function of the bytes.
+	if a.ChunkDigest(plain) != da {
+		t.Error("the digest is not stable for one key")
+	}
+}
