@@ -11,7 +11,7 @@ anything in the repository, and `go.sum` does not gate what goes into it.
 Not fixed here — it wants its own commit, and `go mod tidy` output should be
 reviewed rather than taken.
 
-**Last updated:** 2026-08-05. Branch: `v4_dev`.
+**Last updated:** 2026-08-09. Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in
 **NimbusControl**, because most of it describes a server/client contract that
@@ -62,47 +62,114 @@ wire:
   `main.appVersion` and the WiX ProductVersion, so every dev MSI had been
   stamping itself a full minor behind the repo's own tags.
 
-## What has NOT been built
+## Where the client work stands
 
-Nothing client-side from the v4 feature set. In dependency order:
+Items 1–3 below were the "not built" list in the previous revision. **All
+three are built.** Encryption is in progress. Each has its own design record;
+this is the index.
 
-1. **Managed configuration.** The server has no representation of a backup job
-   at all — directories, exclusions, drive letters, VSS, compression, backup
-   type and schedule live only in `scheduled_jobs.json`, written by the GUI.
-   Managed jobs become read-only on the client; local jobs stay, are reported
-   through the existing `agents.inventory` blob (display only, never read back
-   as config), and are clearable by an `agent_commands` verb. Collision rule:
-   managed wins, then rename.
-2. **PVE calendar-event scheduling**, replacing
-   `ScheduledJob.ScheduleTime string // HH:MM`, which is daily-only.
-3. **GUI lockdown** — read-only, single status page. Two traps, both written
-   up in `V4-CLIENT-CONFIG.md` §5:
-   - `ModeStandalone` is **overloaded**: it means both "no service found,
-     execute directly" *and* "I **am** the service". The real discriminator is
-     `isServiceProcess`, which is why every live check reads
-     `!a.isServiceProcess && a.mode == api.ModeService`. A gate keyed on mode
-     alone either blocks the service from running managed backups or fails
-     open in the GUI.
-   - direct execution becomes a registry toggle, default off
-     (`HKLM\SOFTWARE\NimbusBackup`, following `gui/breakglass_windows.go`), so
-     the GUI cannot silently become a backup engine when the service stops.
-   - `restrictToOwners` is applied only to the API token file today;
-     `config.json` and `scheduled_jobs.json` still inherit ProgramData's
-     permissive ACL.
-4. **Encryption** (spec phase E). The client has **none**:
-   `pbscommon/pbsapi.go` returns `"encrypted chunks not supported"` and chunk
-   digests are plain `sha256.Sum256`. This is a wire-layer rewrite, not a
-   feature flag, and it is the largest item in the program.
+### 1. Managed configuration — **DONE**
+The server owns `backup_jobs` and delivers the set on every check-in. The
+client caches it in `managed_jobs.json` and fires it on schedule.
 
-   When it happens, collapse the four `dynamic/fixed × compressed/uncompressed`
-   wrappers over `UploadChunk` into one options-taking call rather than adding
-   an encryption axis and turning four into eight (audit CLIENT-3). The two
-   uncompressed ones are already dead; they were left in place deliberately
-   because deleting half a symmetric set is tidying the next phase undoes.
+Three files, and the split is load-bearing:
+
+| file | owner |
+|---|---|
+| `scheduled_jobs.json` | the user's own jobs |
+| `managed_jobs.json` | the server's set — **replaced wholesale** every check-in |
+| `managed_job_state.json` | fire history — the agent's |
+
+Fire history cannot live with the managed set: that file is replaced every
+check-in, so a daily job would re-fire on the first tick after each one.
+
+Two rules, both about NOT starting backups: a job seen for the first time is
+**seeded, not fired** (otherwise authoring a job at 14:00 with an 02:00
+schedule backs up the whole org immediately), and a missed window **collapses
+to one run** (catching up on backups whose moment has passed is pointless).
+
+### 2. PVE calendar-event scheduling — **DONE**
+`controlplane/calendar.go`, a deliberately literal port of the PHP parser. The
+two are held to agreement by a **shared fixture file**,
+`controlplane/testdata/calendar-fixtures.json`, byte-identical to the server's
+copy with its SHA-256 asserted in both repositories.
+
+It caught a real divergence on its first run: Go's `time.Date` rolls a
+DST-nonexistent wall time **backward**, PHP rolls it **forward**. Fixed in
+`normalizeForward`.
+
+### 3. GUI lockdown — **DONE**, and it became the whole client rewire
+Record: **`docs/V4-PIPELINE.md`**, including the corrections made along the
+way. Outcomes:
+
+- one backup pipeline, in the service, called by both builds' entry points
+- **the GUI links no backup engine at all** — asserted in CI with `go tool nm`
+  against an unstripped probe binary, because `wails build` strips symbols and
+  a grep over an empty symbol table would pass while proving nothing
+- `ModeStandalone`'s overload resolved by splitting it into `ModeInProcess`
+  and `ModeServiceUnavailable`
+- direct execution became a **service-side** toggle, not a GUI one: the
+  service is what the control plane talks to, so org policy can render the
+  toggle inert while the server is reachable — a GUI flag never could be
+- polling is the only observation path; `StatusPanel.jsx` renders instead of
+  the tab UI when locked
+
+**Still open from this item:** `restrictToOwners` is applied only to the API
+token file; `config.json` and `scheduled_jobs.json` still inherit
+ProgramData's permissive ACL.
+
+### 4. Encryption (spec phase E) — **IN PROGRESS**
+`pbscommon/crypt.go` implements the PBS chunk format, and `pbsapi.go` now
+encrypts what it writes and decrypts what it reads.
+
+Facts that cost real effort to establish and must not be re-derived from
+memory — every constant was read from upstream source, and `crypt_config.rs`
+lives under **`pbs-tools/`**, not `pbs-datastore/`:
+
+- the IV is **16 bytes**. Go's `cipher.NewGCM` gives 12, and a 12-byte IV
+  round-trips against itself perfectly while producing a blob PBS cannot read
+- the digest is `sha256(plaintext ‖ id_key)` — the key is **appended**, and
+  prepending breaks dedup silently
+- `pbkdf2_hmac(enc_key, "_id_key", 10, sha256)`: the key is the *password* and
+  `"_id_key"` is the *salt*, which reads backwards. Ten iterations is domain
+  separation, not stretching — "hardening" it changes every digest
+- encryption **short-circuits compression**, because PBS has a separate magic
+  for the encrypted-and-compressed form and writing zstd under the plain
+  encrypted magic yields a blob PBS accepts and cannot read
+
+Remaining: index and manifest signing with the id_key HMAC, and the
+encrypted-and-compressed blob form.
+
+The `UploadChunk` wrapper collapse (audit CLIENT-3) is still outstanding and
+is now more attractive: `putChunk` has been extracted, so the shared tail
+already exists.
 
 ## Building and testing
 
-Go 1.26.5 and Docker are **not** available in the development sandbox used so
-far, so everything in this repository has been CI-verified only. If you have a
-local Go toolchain, use it — it is faster than a push, and two red builds in
-the server repo were caused by exactly that gap.
+**Everything except the MSI build now runs in the development sandbox**, and
+should be used — it is faster than a push, and the gap caused several red
+builds before it was closed.
+
+- **Go 1.26.5** (the CI pin) comes from the `actions/go-versions` GitHub
+  release assets, not `go.dev/dl` — that redirects to a host outside the
+  allowlist. Fetch the asset through the API with
+  `-H "Accept: application/octet-stream"`.
+- Building `gui/` needs `replace` directives in a **copy** of `go.work`
+  pointing `golang.org/x/*` and `gopkg.in/*` at their GitHub mirrors; never
+  commit those. `git.sr.ht/~jackmordaunt/go-toast` has no mirror, but nothing
+  imports it, so a two-line stub module satisfies the graph.
+- Verify **all four views**: `GOOS={linux,windows} go vet [-tags service]
+  ./gui/...`. A symbol can exist in three and be missing from the fourth.
+- `gui/api` and `controlplane` are dependency-free modules: `GOWORK=off
+  GOPROXY=off go test -race .` works directly in the real tree.
+- **golangci-lint runs twice**, matching CI: the default pass, then
+  `--build-tags=service --disable=unused`. `unused` is disabled in the second
+  because it reports symbols with no visible caller, which only has a
+  meaningful answer where every caller is visible.
+- The frontend builds with `npm install && npm run build` (`npm ci` fails on a
+  lock mismatch), and `gui/frontend/dist/` **is tracked** — rebuild and commit
+  it.
+- **gitleaks** runs locally from its GitHub release tarball. Run it before
+  pushing anything containing a credential-shaped string; `.gitleaksignore`
+  explains why fixtures are generated at run time rather than written as
+  literals.
