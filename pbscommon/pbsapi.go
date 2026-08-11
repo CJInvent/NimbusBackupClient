@@ -95,6 +95,18 @@ type FixedIndexCreateReq struct {
 
 type Unprotected struct {
 	ChunkUploadStats ChunkUploadStats `json:"chunk_upload_stats"`
+
+	// KeyFingerprint names WHICH key signed this manifest, in PBS's own
+	// colon-separated form. It lives under `unprotected` because that block is
+	// excluded from the signature — deliberately, upstream: a reader has to be
+	// able to work out which key to fetch BEFORE it can verify anything, so the
+	// key's identity cannot itself be inside the thing the key protects.
+	//
+	// It is not a security control. `check_fingerprint` uses it to say "wrong
+	// key" instead of "bad signature", which is the difference between an
+	// operator fetching the right key and an operator believing the backup is
+	// corrupt.
+	KeyFingerprint string `json:"key-fingerprint,omitempty"`
 }
 
 type BackupManifest struct {
@@ -462,7 +474,7 @@ func (pbs *PBSClient) CreateFixedIndex(fic FixedIndexCreateReq) (uint64, error) 
 	fmt.Println("Writer id: ", R.WriterID)
 	defer resp2.Body.Close()
 	f := File{
-		CryptMode: "none",
+		CryptMode: pbs.indexCryptMode(),
 		Csum:      "",
 		Filename:  fic.ArchiveName,
 		Size:      0,
@@ -613,7 +625,7 @@ func (pbs *PBSClient) CreateDynamicIndex(name string) (uint64, error) {
 	fmt.Println("Writer id: ", R.WriterID)
 	defer resp2.Body.Close()
 	f := File{
-		CryptMode: "none",
+		CryptMode: pbs.indexCryptMode(),
 		Csum:      "",
 		Filename:  name,
 		Size:      0,
@@ -690,6 +702,25 @@ func (pbs *PBSClient) SetCryptKey(rawKey []byte) ([32]byte, error) {
 // snapshot, not ones deciding whether to encrypt — that decision belongs to
 // whoever set the key.
 func (pbs *PBSClient) Encrypted() bool { return pbs.crypt != nil }
+
+// indexCryptMode is the manifest `crypt-mode` for an INDEX this client is about
+// to write (a .fidx or .didx).
+//
+// This is a claim about the CHUNKS the index references, not about the index
+// file, and PBS acts on it: `FileInfo::chunk_crypt_mode()` maps `none` and
+// `sign-only` to "expect plain chunks". An encrypted index left declared `none`
+// therefore tells a verify job to read encrypted chunks as plain ones — the
+// snapshot uploads cleanly, the manifest looks ordinary, and the datastore
+// reports corruption later against data that is in fact intact.
+//
+// Blobs do NOT go through here. This client writes them unencrypted, and their
+// entries say `none` truthfully.
+func (pbs *PBSClient) indexCryptMode() string {
+	if pbs.crypt != nil {
+		return "encrypt"
+	}
+	return "none"
+}
 
 // ChunkDigest computes the digest PBS will store this chunk under.
 //
@@ -907,6 +938,11 @@ func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
 	// the persisted JSON and /finish rejects it.
 	sum := sha256.Sum256(out)
 	pbs.Manifest.Files = append(pbs.Manifest.Files, File{
+		// LITERAL "none", not indexCryptMode(): this really is a plain blob
+		// even on an encrypted client, and the field must describe the bytes
+		// rather than the client's configuration. Upstream encrypts non-
+		// manifest blobs; we do not yet, and saying "encrypt" here to look
+		// consistent would make a verify job try to decrypt cleartext.
 		CryptMode: "none",
 		Csum:      hex.EncodeToString(sum[:]),
 		Filename:  name,
@@ -916,8 +952,58 @@ func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
 	return nil
 }
 
+// EncodeManifest renders the manifest exactly as it will be stored, signing it
+// when this client has a key.
+//
+// THE MANIFEST IS SIGNED, NEVER ENCRYPTED. That is not an omission here: it is
+// what upstream's own client does (proxmox-backup-client/src/main.rs uploads
+// MANIFEST_BLOB_NAME with `encrypt: false, compress: true`). The manifest has
+// to stay readable without a key, or a datastore could not list what a snapshot
+// contains, and the server could not verify chunk counts. Its integrity comes
+// from the signature instead of from secrecy.
+//
+// The signature covers a CANONICAL rendering with `signature` and `unprotected`
+// removed — see canonical.go for why the rendering matters. Because a verifier
+// re-canonicalises what it reads, the bytes we actually store may be formatted
+// however we like; only the canonical form is signed.
+func (pbs *PBSClient) EncodeManifest() ([]byte, error) {
+	plain, err := json.Marshal(pbs.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	if pbs.crypt == nil {
+		return plain, nil
+	}
+
+	doc, err := DecodeJSONDocument(plain)
+	if err != nil {
+		return nil, fmt.Errorf("manifest re-parse: %w", err)
+	}
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		return nil, errors.New("manifest did not serialise as a JSON object")
+	}
+
+	// Strip BEFORE canonicalising, matching `json_signature`. The canonical
+	// writer refuses nulls, so forgetting either of these is a hard error at
+	// the next line rather than a signature nobody can verify.
+	delete(obj, "signature")
+	delete(obj, "unprotected")
+
+	canonical, err := ToCanonicalJSON(obj)
+	if err != nil {
+		return nil, fmt.Errorf("manifest canonicalisation: %w", err)
+	}
+	tag := pbs.crypt.ComputeAuthTag(canonical)
+
+	signed := pbs.Manifest
+	signed.Signature = hex.EncodeToString(tag[:])
+	signed.Unprotected.KeyFingerprint = FingerprintString(pbs.crypt.Fingerprint())
+	return json.Marshal(signed)
+}
+
 func (pbs *PBSClient) UploadManifest() error {
-	manifestBin, err := json.Marshal(pbs.Manifest)
+	manifestBin, err := pbs.EncodeManifest()
 	if err != nil {
 		return err
 	}

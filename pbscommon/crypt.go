@@ -3,12 +3,14 @@ package pbscommon
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"strings"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -138,9 +140,48 @@ func (c *CryptConfig) ComputeDigest(data []byte) [32]byte {
 	return out
 }
 
+// ComputeAuthTag is HMAC-SHA256 over data, keyed with the derived id_key.
+//
+// Upstream builds an openssl PKey::hmac from id_key at construction and signs
+// with SHA256 (crypt_config.rs, `data_signer` / `compute_auth_tag`). This is
+// the same primitive; Go's hmac.New(sha256.New, key) is what PKey::hmac gives.
+//
+// NOTE THAT THIS IS NOT ComputeDigest. Both take the id_key and some bytes and
+// give 32 bytes back, and they are different constructions for different jobs:
+// chunk digests are a plain SHA-256 with the key APPENDED (a namespace, so two
+// keys never collide in one datastore), while this is a real HMAC used to
+// AUTHENTICATE a manifest. Using either where the other belongs produces a
+// stable, plausible, wrong value.
+func (c *CryptConfig) ComputeAuthTag(data []byte) [32]byte {
+	mac := hmac.New(sha256.New, c.idKey[:])
+	mac.Write(data)
+	var out [32]byte
+	copy(out[:], mac.Sum(nil))
+	return out
+}
+
 // Fingerprint is PBS's own identifier for this key.
 func (c *CryptConfig) Fingerprint() [32]byte {
 	return c.ComputeDigest(fingerprintInput[:])
+}
+
+// FingerprintString renders a fingerprint the way PBS writes it into a
+// manifest: lowercase hex with a colon between every byte pair.
+//
+// Transcribed from pbs-api-types/src/crypto.rs `as_fingerprint`. The colons are
+// not decoration — `Fingerprint::from_str` strips them before hex-decoding, so
+// a bare hex string is accepted on read, but writing one makes our manifests
+// visibly different from every other client's for no reason.
+func FingerprintString(fp [32]byte) string {
+	var b strings.Builder
+	b.Grow(32*2 + 31)
+	for i, v := range fp {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		fmt.Fprintf(&b, "%02x", v)
+	}
+	return b.String()
 }
 
 // EncodeEncryptedBlob produces the on-disk form of one encrypted chunk:
