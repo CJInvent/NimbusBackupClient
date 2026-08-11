@@ -551,6 +551,11 @@ func (pbs *PBSClient) CloseFixedIndex(writerid uint64, checksum string, totalsiz
 	f.Csum = checksum
 	f.Size = int64(totalsize)
 
+	// One line per INDEX, never per chunk. crypt-mode here is the claim that
+	// covers every chunk the index references — the same fact at a granularity
+	// a human can read.
+	audit("index %s closed: crypt-mode=%s, %s logical", f.Filename, f.CryptMode, ByteCountSI(int64(totalsize)))
+
 	return nil
 }
 
@@ -693,7 +698,12 @@ func (pbs *PBSClient) SetCryptKey(rawKey []byte) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	pbs.crypt = cc
-	return cc.Fingerprint(), nil
+	fp := cc.Fingerprint()
+	// The fingerprint, never the key. This is the line a restore or an audit
+	// reads to answer "which key wrote this snapshot", so it is worth more
+	// than the sum of the per-file lines below it.
+	audit("encryption ENABLED for this session, key fingerprint %s", FingerprintString(fp))
+	return fp, nil
 }
 
 // Encrypted reports whether this client encrypts.
@@ -889,16 +899,63 @@ func (pbs *PBSClient) CloseDynamicIndex(writerid uint64, checksum string, totals
 	f.Csum = checksum
 	f.Size = int64(totalsize)
 
+	// One line per INDEX, never per chunk. crypt-mode here is the claim that
+	// covers every chunk the index references — the same fact at a granularity
+	// a human can read.
+	audit("index %s closed: crypt-mode=%s, %s logical", f.Filename, f.CryptMode, ByteCountSI(int64(totalsize)))
+
 	return nil
 }
 
-func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
-	out := make([]byte, 0)
-	out = append(out, blobUncompressedMagic...)
+// ManifestBlobName is PBS's own name for the manifest, and the ONE blob that
+// is never encrypted. Named as a constant because that exemption is a rule,
+// not a coincidence, and a string literal compared in two places eventually
+// becomes two different rules.
+const ManifestBlobName = "index.json.blob"
 
-	checksum := crc32.ChecksumIEEE(data)
-	out = binary.LittleEndian.AppendUint32(out, checksum)
-	out = append(out, data...)
+// encodeBlob renders a blob as PBS stores it, and reports the crypt-mode that
+// honestly describes the result.
+//
+// The manifest is EXEMPT. Everything else goes up encrypted when this client
+// has a key — see UploadBlob for what those blobs contain and why leaving them
+// in the clear was the wrong default.
+//
+// Compression is not applied on either path. The unencrypted path never
+// compressed blobs, and the encrypted path must not until the
+// encrypted-and-compressed magic is implemented (see UploadChunk).
+func (pbs *PBSClient) encodeBlob(name string, data []byte) ([]byte, string, error) {
+	if pbs.crypt == nil || name == ManifestBlobName {
+		out := make([]byte, 0, 12+len(data))
+		out = append(out, blobUncompressedMagic...)
+		out = binary.LittleEndian.AppendUint32(out, crc32.ChecksumIEEE(data))
+		out = append(out, data...)
+		return out, "none", nil
+	}
+
+	out, err := pbs.crypt.EncodeEncryptedBlob(data)
+	if err != nil {
+		return nil, "", fmt.Errorf("encrypting blob %s: %w", name, err)
+	}
+	return out, "encrypt", nil
+}
+
+// UploadBlob stores one opaque per-snapshot file.
+//
+// EVERY BLOB EXCEPT THE MANIFEST IS ENCRYPTED when a key is set. That was not
+// true before: the ACL side-car, the status side-car and qemu-server.conf went
+// up in the clear from a client that was otherwise encrypting everything, so a
+// snapshot advertised as encrypted still exposed the filesystem's ACL
+// structure, the machine's own description of itself, and a VM's full
+// configuration to anyone who could read the datastore.
+//
+// The manifest stays readable — see EncodeManifest. It is protected by its
+// signature instead, and it has to be parseable without a key or a datastore
+// cannot list what a snapshot contains.
+func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
+	out, cryptMode, err := pbs.encodeBlob(name, data)
+	if err != nil {
+		return err
+	}
 
 	q := &url.Values{}
 	q.Add("encoded-size", fmt.Sprintf("%d", len(out)))
@@ -938,16 +995,18 @@ func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
 	// the persisted JSON and /finish rejects it.
 	sum := sha256.Sum256(out)
 	pbs.Manifest.Files = append(pbs.Manifest.Files, File{
-		// LITERAL "none", not indexCryptMode(): this really is a plain blob
-		// even on an encrypted client, and the field must describe the bytes
-		// rather than the client's configuration. Upstream encrypts non-
-		// manifest blobs; we do not yet, and saying "encrypt" here to look
-		// consistent would make a verify job try to decrypt cleartext.
-		CryptMode: "none",
+		// From encodeBlob, not from indexCryptMode(): the field must describe
+		// THE BYTES WE JUST WROTE, and the manifest is a blob that is exempt
+		// from encryption on a client that encrypts everything else. Deriving
+		// this from the client's configuration would label the manifest
+		// "encrypt" and make a verify job try to decrypt cleartext.
+		CryptMode: cryptMode,
 		Csum:      hex.EncodeToString(sum[:]),
 		Filename:  name,
 		Size:      int64(len(out)),
 	})
+
+	audit("blob %s: crypt-mode=%s, %d plaintext bytes stored as %d", name, cryptMode, len(data), len(out))
 
 	return nil
 }
@@ -999,6 +1058,8 @@ func (pbs *PBSClient) EncodeManifest() ([]byte, error) {
 	signed := pbs.Manifest
 	signed.Signature = hex.EncodeToString(tag[:])
 	signed.Unprotected.KeyFingerprint = FingerprintString(pbs.crypt.Fingerprint())
+	audit("manifest SIGNED (not encrypted, by design) under key %s, %d files listed",
+		signed.Unprotected.KeyFingerprint, len(signed.Files))
 	return json.Marshal(signed)
 }
 
@@ -1539,6 +1600,37 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 // DebugLogFn, when set by the host application, receives diagnostic lines
 // from hot paths (timings, retries). Nil = silent. Set once at startup.
 var DebugLogFn func(string)
+
+// AuditLogFn receives the record of what this client did to a snapshot's
+// bytes: which key, which crypt-mode, which files encrypted, which not.
+//
+// SEPARATE FROM DebugLogFn ON PURPOSE. DebugLogFn is diagnostics, and the host
+// routes it through a level-gated writer — an agent quietened by an admin
+// stops producing it. That is correct for timings and wrong for this. Whether
+// a customer's data was encrypted, and under which key, is the question a
+// restore, an incident review or a compliance audit asks months later, and it
+// must not depend on what LogLevel happened to be set to at the time. The host
+// wires this to the per-run backup log, which is not level-gated.
+//
+// WHAT MUST NEVER REACH IT: key material. Lines here name a key by its PBS
+// FINGERPRINT — a public identifier anyone holding the datastore can compute —
+// never by the key, the id_key, or anything derived that is not already
+// public. A test asserts the raw key never appears in what this receives.
+//
+// Nil = silent, so the CLI tools and tests are unaffected. Set once at startup.
+var AuditLogFn func(string)
+
+// audit emits one audit line if the host is listening.
+//
+// Deliberately NOT called per chunk. A 931 GB machine is roughly 240,000
+// chunks, and a per-chunk line would bury the handful of facts that matter in
+// a log nobody can read — the crypt-mode of an index covers every chunk under
+// it, which is the same claim at a useful granularity.
+func audit(format string, args ...any) {
+	if AuditLogFn != nil {
+		AuditLogFn(fmt.Sprintf(format, args...))
+	}
+}
 
 // ByteCountSI renders a byte count for log lines (SI units).
 func ByteCountSI(b int64) string {

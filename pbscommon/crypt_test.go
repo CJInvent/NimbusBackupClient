@@ -188,11 +188,15 @@ func TestEncryptedBlobLayout(t *testing.T) {
 	if !bytes.Equal(blob[:8], EncryptedBlobMagic[:]) {
 		t.Errorf("magic = %v, want ENCRYPTED_BLOB_MAGIC_1_0", blob[:8])
 	}
-	// Upstream builds the header with crc: [0; 4] and says the server
-	// computes it on upload. Writing a value we invented would be worse than
-	// writing none, because it would be checked.
-	if !bytes.Equal(blob[8:12], []byte{0, 0, 0, 0}) {
-		t.Errorf("crc = %v, want zero — the server computes it", blob[8:12])
+	// THIS ASSERTION USED TO REQUIRE A ZERO CRC, and it was wrong — it pinned
+	// a bug in place rather than catching it. The reading it came from stopped
+	// at upstream's `crc: [0; 4]` header literal, which is a placeholder that
+	// `blob.set_crc(blob.compute_crc())` overwrites a few lines later for every
+	// variant, encrypted included. Left as a comment because "the server
+	// computes the CRC" is exactly the kind of claim somebody restates from
+	// memory. It does not; we do. Coverage is asserted in blob_crypt_test.go.
+	if bytes.Equal(blob[8:12], []byte{0, 0, 0, 0}) {
+		t.Error("crc is zero — upstream writes a real one on every blob variant")
 	}
 	// The plaintext must not be sitting in the blob.
 	if bytes.Contains(blob, plaintext) {

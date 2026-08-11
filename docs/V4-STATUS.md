@@ -118,6 +118,20 @@ way. Outcomes:
 token file; `config.json` and `scheduled_jobs.json` still inherit
 ProgramData's permissive ACL.
 
+### 5. Crypto audit trail — **DONE**
+`pbscommon.AuditLogFn`, separate from `DebugLogFn` and wired in
+`gui/pbslog_glue.go` to `writeBackupLog`, which is **not level-gated** and
+prefers the per-run logger. The separation is the point: whether a customer's
+data was encrypted and under which key is asked at restore time, during an
+incident, or by an auditor — months after whoever set `LogLevel` has forgotten
+doing it, and a diagnostics channel an admin can quieten is the wrong place
+for it.
+
+One line per session (key enabled, by **fingerprint**), per index close
+(crypt-mode, covering every chunk beneath it), per blob, and for the manifest.
+**Never per chunk** — a 931 GB machine is ~240,000 of them. A test asserts the
+raw key and the derived id_key never appear in what the hook receives.
+
 ### 4. Encryption (spec phase E) — **IN PROGRESS**
 `pbscommon/crypt.go` implements the PBS chunk format, and `pbsapi.go` now
 encrypts what it writes and decrypts what it reads.
@@ -137,8 +151,42 @@ lives under **`pbs-tools/`**, not `pbs-datastore/`:
   for the encrypted-and-compressed form and writing zstd under the plain
   encrypted magic yields a blob PBS accepts and cannot read
 
-Remaining: index and manifest signing with the id_key HMAC, and the
-encrypted-and-compressed blob form.
+**Manifest signing is done** (`EncodeManifest`), and with it two things that
+were quietly wrong:
+
+- index entries declared `crypt-mode: "none"` while referencing encrypted
+  chunks. `FileInfo::chunk_crypt_mode()` reads `none` as *expect plain
+  chunks*, so a verify job would have reported corruption against intact data
+- `EncodeEncryptedBlob` wrote a **zero CRC**. That came from reading
+  upstream's `crc: [0; 4]` header literal without reading four lines further,
+  where `blob.set_crc(blob.compute_crc())` overwrites it unconditionally for
+  every variant. Chunks reach the same function via `DataChunkBuilder`, so
+  upstream never emits a zero CRC and `DataBlob::decode` calls `verify_crc`.
+  Now real — and it covers the **ciphertext only**, starting at
+  `header_size(magic)` = 44, so the IV and tag are outside it. A CRC taken
+  from byte 12 (which is right for the unencrypted paths) verifies against
+  itself and against no Proxmox server.
+
+More facts that must not be re-derived from memory: `compute_auth_tag` is an
+**HMAC-SHA256 keyed with id_key**, NOT the append-the-key digest chunks use;
+the signature covers canonical JSON with **both** `signature` and
+`unprotected` removed; and **the manifest is signed, never encrypted** —
+`proxmox-backup-client` uploads it with `encrypt: false`, because a datastore
+must be able to list a snapshot's files without a key.
+
+The signing tests are pinned to upstream's own vector
+(`pbs-datastore/src/manifest.rs::test_manifest_signature`) rather than to a
+round trip, per dev rule 25.
+
+**Blobs are now encrypted too** — everything except the manifest. They were
+going up in the clear from a client that was otherwise encrypting everything,
+so a snapshot advertised as encrypted still exposed the ACL side-car, the
+status side-car and a VM's full `qemu-server.conf`. Checked against the
+consumer before changing it: `NimbusControl/scanner` opens **only**
+`index.json.blob`, accounts every other blob by its manifest-declared size,
+and already returns a typed `FormatError::Encrypted` for the encrypted magics.
+
+Remaining in phase E: the encrypted-and-compressed blob form.
 
 The `UploadChunk` wrapper collapse (audit CLIENT-3) is still outstanding and
 is now more attractive: `putChunk` has been extracted, so the shared tail

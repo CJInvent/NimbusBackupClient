@@ -60,6 +60,12 @@ const (
 	// KeySize is AES-256.
 	KeySize = 32
 
+	// EncryptedHeaderLen is sizeof(EncryptedDataBlobHeader): magic, CRC, IV,
+	// tag. Named because it is also where the CRC's covered range begins,
+	// which is the one thing about this format that is easy to get wrong in a
+	// way nothing local detects.
+	EncryptedHeaderLen = 8 + 4 + IVSize + TagSize
+
 	// idKeyIterations and idKeySalt reproduce
 	// pbkdf2_hmac(enc_key, b"_id_key", 10, sha256) exactly. Ten iterations is
 	// NOT a password KDF and is not meant to be: the input is already a
@@ -184,15 +190,27 @@ func FingerprintString(fp [32]byte) string {
 	return b.String()
 }
 
-// EncodeEncryptedBlob produces the on-disk form of one encrypted chunk:
+// EncodeEncryptedBlob produces the on-disk form of one encrypted chunk or blob:
 //
 //	MAGIC(8) || CRC32(4) || IV(16) || TAG(16) || ciphertext
 //
-// The CRC is written as ZERO. Upstream's own encode() builds the header with
-// `crc: [0; 4]` and its comment explains why: the server computes and verifies
-// the CRC on upload, "so there is usually no need to compute it on the client
-// side". Writing a value we invented would be worse than writing none, because
-// it would be checked.
+// THE CRC IS REAL, AND IT COVERS THE CIPHERTEXT ONLY.
+//
+// An earlier revision of this function wrote zero, on the reading that
+// upstream's encode() builds its header with `crc: [0; 4]`. It does — and then
+// overwrites it: the last statement before `Ok(blob)` is
+// `blob.set_crc(blob.compute_crc())`, unconditionally, for every variant
+// including the encrypted ones. Chunks reach that same function through
+// DataChunkBuilder, so upstream never emits a zero CRC for anything. Ours did,
+// and `DataBlob::decode` calls `verify_crc`, so a PBS verify job would have
+// failed on every encrypted chunk this client uploaded — reported as
+// corruption, against data that was intact.
+//
+// The COVERED RANGE is the part that would be got wrong next: upstream's
+// compute_crc starts at `header_size(magic)`, which for an encrypted magic is
+// sizeof(EncryptedDataBlobHeader) = 44 — so the IV and tag are OUTSIDE the
+// checksum. Starting at 12, as the unencrypted paths correctly do, produces a
+// CRC that verifies against itself and against no Proxmox server.
 //
 // Compression is NOT applied here. PBS picks between the plain and compressed
 // magics based on whether zstd actually shrank the data, and this client's
@@ -215,12 +233,17 @@ func (c *CryptConfig) EncodeEncryptedBlob(plaintext []byte) ([]byte, error) {
 	ciphertext := sealed[:len(sealed)-TagSize]
 	tag := sealed[len(sealed)-TagSize:]
 
-	out := make([]byte, 0, 8+4+IVSize+TagSize+len(ciphertext))
+	out := make([]byte, 0, EncryptedHeaderLen+len(ciphertext))
 	out = append(out, EncryptedBlobMagic[:]...)
-	out = append(out, 0, 0, 0, 0) // CRC — the server's to compute
+	out = append(out, 0, 0, 0, 0) // placeholder, filled in below
 	out = append(out, iv...)
 	out = append(out, tag...)
 	out = append(out, ciphertext...)
+
+	// Over the ciphertext, NOT from byte 12. See the header.
+	if err := PutCRC(out, BlobCRC(out[EncryptedHeaderLen:])); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -230,7 +253,7 @@ func (c *CryptConfig) EncodeEncryptedBlob(plaintext []byte) ([]byte, error) {
 // exists at all. A recovery path nobody has exercised is a recovery path
 // nobody has.
 func (c *CryptConfig) DecodeEncryptedBlob(blob []byte) ([]byte, error) {
-	const headerLen = 8 + 4 + IVSize + TagSize
+	const headerLen = EncryptedHeaderLen
 	if len(blob) < headerLen {
 		return nil, fmt.Errorf("blob too short: %d bytes, header alone is %d", len(blob), headerLen)
 	}
@@ -259,6 +282,16 @@ func (c *CryptConfig) DecodeEncryptedBlob(blob []byte) ([]byte, error) {
 	sealed := make([]byte, 0, len(ciphertext)+TagSize)
 	sealed = append(sealed, ciphertext...)
 	sealed = append(sealed, tag...)
+
+	// CRC first, matching upstream's load path, which calls verify_crc before
+	// decode. It is checked for the DIAGNOSIS, not the security — the AEAD tag
+	// already makes tampering with the ciphertext detectable. A CRC mismatch
+	// says "these bytes changed on disk or in transit"; an AEAD failure alone
+	// cannot distinguish that from the wrong key, and those two send an
+	// operator to entirely different places.
+	if stored := binary.LittleEndian.Uint32(blob[8:12]); stored != BlobCRC(ciphertext) {
+		return nil, fmt.Errorf("blob CRC mismatch (stored %08x): the stored bytes differ from what was written", stored)
+	}
 
 	plaintext, err := c.aead.Open(nil, iv, sealed, nil)
 	if err != nil {
