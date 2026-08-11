@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+
+	"github.com/klauspost/compress/zstd"
 	"strings"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -212,12 +214,36 @@ func FingerprintString(fp [32]byte) string {
 // checksum. Starting at 12, as the unencrypted paths correctly do, produces a
 // CRC that verifies against itself and against no Proxmox server.
 //
-// Compression is NOT applied here. PBS picks between the plain and compressed
-// magics based on whether zstd actually shrank the data, and this client's
-// chunker does not compress — so emitting ENCRYPTED_BLOB_MAGIC_1_0
-// unconditionally is correct rather than a simplification. If compression is
-// added later it must switch the magic, not just the payload.
+// This function does not compress. For the compressed form see
+// EncodeEncryptedBlobCompressed — the two differ by MAGIC as well as payload,
+// which is the whole reason they are separate entry points rather than a bool.
 func (c *CryptConfig) EncodeEncryptedBlob(plaintext []byte) ([]byte, error) {
+	return c.encodeEncrypted(plaintext, EncryptedBlobMagic)
+}
+
+// EncodeEncryptedBlobCompressed writes the encrypted-and-compressed form, or
+// falls back to the plain encrypted one when compression did not pay.
+//
+// The caller supplies the zstd bytes because the compressor is the client's
+// shared, level-configured encoder and this package should not own a second
+// one. What lives HERE is the decision, because the decision is a format rule:
+// upstream's encode() keeps the compressed payload only `if compr_data.len() <
+// data.len()`, and it switches the MAGIC when it does. Writing zstd output
+// under ENCRYPTED_BLOB_MAGIC_1_0 produces a blob PBS accepts and cannot read —
+// the failure that only surfaces at restore.
+//
+// Note the comparison is against the PLAINTEXT length, not against the
+// plaintext plus a header. That is upstream's rule, and matching it matters
+// less for the bytes saved than for staying on the same side of the boundary
+// as the client that may later read this.
+func (c *CryptConfig) EncodeEncryptedBlobCompressed(plaintext, compressed []byte) ([]byte, error) {
+	if len(compressed) < len(plaintext) {
+		return c.encodeEncrypted(compressed, EncrComprBlobMagic)
+	}
+	return c.encodeEncrypted(plaintext, EncryptedBlobMagic)
+}
+
+func (c *CryptConfig) encodeEncrypted(payload []byte, magic [8]byte) ([]byte, error) {
 	iv := make([]byte, IVSize)
 	if _, err := rand.Read(iv); err != nil {
 		return nil, fmt.Errorf("iv: %w", err)
@@ -226,7 +252,7 @@ func (c *CryptConfig) EncodeEncryptedBlob(plaintext []byte) ([]byte, error) {
 	// Go's Seal appends the tag to the ciphertext; PBS wants it in the HEADER,
 	// before the ciphertext. Split rather than reorder bytes blindly, so the
 	// intent survives a reader who has not met this format.
-	sealed := c.aead.Seal(nil, iv, plaintext, nil) // empty AAD, matching upstream
+	sealed := c.aead.Seal(nil, iv, payload, nil) // empty AAD, matching upstream
 	if len(sealed) < TagSize {
 		return nil, errors.New("sealed output shorter than the tag")
 	}
@@ -234,7 +260,7 @@ func (c *CryptConfig) EncodeEncryptedBlob(plaintext []byte) ([]byte, error) {
 	tag := sealed[len(sealed)-TagSize:]
 
 	out := make([]byte, 0, EncryptedHeaderLen+len(ciphertext))
-	out = append(out, EncryptedBlobMagic[:]...)
+	out = append(out, magic[:]...)
 	out = append(out, 0, 0, 0, 0) // placeholder, filled in below
 	out = append(out, iv...)
 	out = append(out, tag...)
@@ -260,14 +286,12 @@ func (c *CryptConfig) DecodeEncryptedBlob(blob []byte) ([]byte, error) {
 
 	var magic [8]byte
 	copy(magic[:], blob[:8])
+	compressed := false
 	switch magic {
 	case EncryptedBlobMagic:
 		// the only form this client writes
 	case EncrComprBlobMagic:
-		// Named specifically rather than lumped into "unknown magic": a
-		// reader meeting this has a blob written by a client that compressed,
-		// and needs to know it is a missing zstd step and not corruption.
-		return nil, errors.New("compressed encrypted blob: zstd decompression is not implemented")
+		compressed = true
 	case UncompressedBlobMagic, CompressedBlobMagic:
 		return nil, errors.New("blob is not encrypted")
 	default:
@@ -293,19 +317,47 @@ func (c *CryptConfig) DecodeEncryptedBlob(blob []byte) ([]byte, error) {
 		return nil, fmt.Errorf("blob CRC mismatch (stored %08x): the stored bytes differ from what was written", stored)
 	}
 
-	plaintext, err := c.aead.Open(nil, iv, sealed, nil)
+	payload, err := c.aead.Open(nil, iv, sealed, nil)
 	if err != nil {
 		// One message for a wrong key and for tampering: distinguishing them
 		// tells an attacker which of the two they achieved.
 		return nil, errors.New("chunk could not be decrypted: wrong key or damaged data")
 	}
-	return plaintext, nil
+
+	// DECOMPRESS AFTER DECRYPTING, never the other way round. The zstd frame
+	// is inside the ciphertext, so nothing can be decompressed before the AEAD
+	// tag has been checked — which is also what stops this being a decompression
+	// bomb served by anyone who can write to the datastore.
+	if compressed {
+		out, err := blobDecoder.DecodeAll(payload, nil)
+		if err != nil {
+			// Distinct from the decrypt failure above: the key was right and
+			// the tag verified, so the bytes are ours and the problem is the
+			// frame. Collapsing the two would send an operator hunting for a
+			// key that was never wrong.
+			return nil, fmt.Errorf("encrypted blob decrypted but its zstd frame did not decompress: %w", err)
+		}
+		return out, nil
+	}
+	return payload, nil
 }
+
+// blobDecoder is shared: klauspost's DecodeAll is safe for concurrent use, and
+// a per-call decoder allocates window state on a path that runs once per chunk.
+//
+// Constructed with no limit override because the ciphertext it reads has
+// already been authenticated by the time we get here.
+var blobDecoder = func() *zstd.Decoder {
+	d, err := zstd.NewReader(nil)
+	if err != nil {
+		panic("pbscommon: zstd decoder: " + err.Error())
+	}
+	return d
+}()
 
 // BlobCRC computes the CRC32 PBS uses over a blob's payload.
 //
-// Provided for verification tooling rather than for the write path — see
-// EncodeEncryptedBlob on why the client writes zero. IEEE polynomial, which is
+// IEEE polynomial, which is
 // what Rust's crc32fast implements.
 func BlobCRC(payload []byte) uint32 {
 	return crc32.ChecksumIEEE(payload)

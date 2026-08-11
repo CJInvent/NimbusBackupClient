@@ -751,21 +751,27 @@ func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []by
 	// reallocations the old code did on every chunk.
 	outBuffer := make([]byte, 0, len(chunkdata)+len(blobCompressedMagic)+8)
 
-	// ENCRYPTION SHORT-CIRCUITS COMPRESSION, and that is not an oversight.
-	// PBS has a separate magic for the encrypted-and-compressed form
-	// (EncrComprBlobMagic), and writing zstd output under the plain encrypted
-	// magic would produce a blob PBS accepts and cannot read — the worst
-	// possible failure, because it only surfaces at restore. Until that form
-	// is implemented, an encrypted chunk is encrypted and not compressed.
+	// ENCRYPTED CHUNKS COMPRESS TOO, now that EncrComprBlobMagic is
+	// implemented. This path used to short-circuit compression, because zstd
+	// output under the plain encrypted magic is a blob PBS accepts and cannot
+	// read, and that failure only surfaces at restore. The fix is to switch
+	// the magic, which EncodeEncryptedBlobCompressed does — not to skip the
+	// compression.
 	//
-	// The cost is smaller than it looks: this client already re-uploads
-	// uncompressed whenever compression fails to shrink a chunk, and
-	// encrypted data does not compress anyway.
+	// COMPRESS THEN ENCRYPT, in that order and no other. Ciphertext is
+	// incompressible by construction, so encrypting first would silently cost
+	// every encrypted customer their entire compression ratio while still
+	// producing valid blobs. The ordering is the whole value of the feature.
+	//
+	// The `compressed` argument is still honoured: a caller that asked for no
+	// compression gets none, encrypted or not.
 	if pbs.crypt != nil {
-		encrypted, err := pbs.crypt.EncodeEncryptedBlob(chunkdata)
+		encrypted, err := pbs.encodeEncryptedChunk(chunkdata, compressed)
 		if err != nil {
 			return fmt.Errorf("encrypting chunk %s: %w", digest, err)
 		}
+		// PLAINTEXT length, as on every other path — see putChunk. It is the
+		// pre-compression, pre-encryption size in all four combinations.
 		return pbs.putChunk(writerid, digest, encrypted, len(chunkdata), dynamic)
 	}
 
@@ -792,6 +798,23 @@ func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []by
 	}
 
 	return pbs.putChunk(writerid, digest, outBuffer, len(chunkdata), dynamic)
+}
+
+// encodeEncryptedChunk renders one chunk in whichever encrypted form applies.
+//
+// Split out of UploadChunk so the compress-then-encrypt decision is reachable
+// from a test without a PBS server. It was not, and a sabotage that reverted
+// this path to encrypt-only went undetected — the unit tests covered
+// EncodeEncryptedBlobCompressed itself while nothing checked that the upload
+// path still called it.
+func (pbs *PBSClient) encodeEncryptedChunk(chunkdata []byte, compress bool) ([]byte, error) {
+	if !compress {
+		return pbs.crypt.EncodeEncryptedBlob(chunkdata)
+	}
+	zbytes := pbs.encoder().EncodeAll(chunkdata, make([]byte, 0, len(chunkdata)))
+	// The shrink test and the magic choice both live in
+	// EncodeEncryptedBlobCompressed, so the two cannot disagree.
+	return pbs.crypt.EncodeEncryptedBlobCompressed(chunkdata, zbytes)
 }
 
 // putChunk POSTs an already-encoded blob.

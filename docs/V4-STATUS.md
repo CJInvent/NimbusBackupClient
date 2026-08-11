@@ -186,7 +186,24 @@ consumer before changing it: `NimbusControl/scanner` opens **only**
 `index.json.blob`, accounts every other blob by its manifest-declared size,
 and already returns a typed `FormatError::Encrypted` for the encrypted magics.
 
-Remaining in phase E: the encrypted-and-compressed blob form.
+**The encrypted-and-compressed form is implemented, and PHASE E IS
+COMPLETE.** Encrypted chunks used to skip compression entirely, because zstd
+output under `ENCRYPTED_BLOB_MAGIC_1_0` is a blob PBS accepts and cannot read.
+The answer was to switch the magic, not to skip the compression:
+`EncodeEncryptedBlobCompressed` keeps the compressed payload only when it is
+shorter than the plaintext — upstream's rule — and emits
+`ENCR_COMPR_BLOB_MAGIC_1_0` when it does.
+
+**Compress, then encrypt.** Ciphertext is incompressible by construction, so
+the reverse order still produces valid blobs while silently costing every
+encrypted customer their whole compression ratio. A test asserts on SIZE,
+since that is the only observable that separates the two orderings. On decode,
+decompression happens strictly after the AEAD tag verifies, so an unauthenticated
+zstd frame is never expanded.
+
+Until now every encrypted snapshot was stored uncompressed. Existing ones stay
+that way; the digest is over plaintext, so they dedup against new ones
+regardless.
 
 The `UploadChunk` wrapper collapse (audit CLIENT-3) is still outstanding and
 is now more attractive: `putChunk` has been extracted, so the shared tail
