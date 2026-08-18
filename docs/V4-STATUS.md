@@ -209,6 +209,48 @@ The `UploadChunk` wrapper collapse (audit CLIENT-3) is still outstanding and
 is now more attractive: `putChunk` has been extracted, so the shared tail
 already exists.
 
+### 5. Key delivery and the verification gate (spec phase F) — **STARTED**
+
+`controlplane/backupkey.go` holds the wire types and **the gate decision as a
+pure function**, in the same style as `breakglass.go` and `unmanaged.go`, so
+the logic that stops a backup is testable without a server, a registry or a
+Windows machine. `Client.FetchBackupKey` and `Client.ReportKeyStatus` are
+wired.
+
+**The gate exists because "not encrypted" and "could not encrypt" are
+different answers.** Backing up in the clear because a key was unavailable
+silently downgrades a customer who believes their data is encrypted, and on
+every dashboard it looks identical to a customer who chose not to encrypt —
+nobody finds out until someone reads a snapshot they assumed was protected. So
+a nil `backup_key` (encryption off) proceeds unencrypted, while an advertised
+key we cannot obtain or verify REFUSES to start.
+
+That refusal points the opposite way to `restrict_unmanaged_backups`, which
+defaults permissive precisely because a restrictive default silently stops
+backups. The difference is observability: a refusal reports a status, carries a
+detail string and shows up as a failed run, whereas a silent downgrade is not
+observable at all.
+
+`TestNeverDowngradesSilently` sweeps the entire input space rather than the
+cases anyone thought of, asserting that no combination yields "back up
+unencrypted" while a key is advertised — and the converse, that encryption is
+never claimed without the matching key.
+
+**STILL MISSING — nothing works end to end yet:**
+
+- **Storage.** The key must go through the EXISTING `gui/secrets.go` DEK and
+  protector chain (§6 — extend it, never add a second secret store). But
+  `encryptSecret` FALLS BACK TO STORING PLAINTEXT when the DEK is unavailable,
+  and `decryptSecret` returns `""` on failure. Those semantics are right for a
+  PBS token, which is re-enterable, and WRONG for a backup key: silently
+  writing it in the clear defeats the point of encrypting at all, and an empty
+  string returned to a caller that reads it as "no key" is exactly the collapse
+  the gate exists to prevent. Same DEK, same protectors, DIFFERENT failure
+  behaviour — fail loudly, never degrade.
+- Calling the gate from the backup path, and reporting via `/key-status`.
+- Writing `escrow_blob` to PBS as `rsa-encrypted.key.blob`, which is what makes
+  the server-side org recovery bundle redundant rather than load-bearing.
+
 ## Building and testing
 
 **Everything except the MSI build now runs in the development sandbox**, and

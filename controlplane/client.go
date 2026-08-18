@@ -126,6 +126,37 @@ func (c *Client) Checkin(req CheckinRequest) (*CheckinResponse, error) {
 
 // ReportRun posts a phase change. Safe to retry: the server upserts by
 // RunUUID and its state machine is forward-only.
+// FetchBackupKey retrieves this agent's backup key material.
+//
+// CALL ONLY ON A MISMATCH. The server rate limits this to 3/hour per agent, and
+// that limit is a design statement rather than a throttle: an agent that fetches
+// more often is failing to persist what it was given, and the limit makes that
+// visible instead of letting it hide inside normal traffic.
+//
+// A 404 means no key is assigned — distinct from an error, and distinct again
+// from an empty body, which is why the server never returns one.
+func (c *Client) FetchBackupKey() (*BackupKeyMaterial, error) {
+	var out BackupKeyMaterial
+	if err := c.post("/api/agent/v1/backup-key", struct{}{}, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReportKeyStatus tells the server what this machine found in its own key
+// storage, and learns whether that matches what was assigned.
+//
+// The server cannot recompute any of this — whether DPAPI unsealed, whether a
+// TPM was present, whether the stored key round-tripped are facts only this
+// machine has. What it can do, and does, is compare the key_id.
+func (c *Client) ReportKeyStatus(rep KeyStatusReport) (*KeyStatusResponse, error) {
+	var out KeyStatusResponse
+	if err := c.post("/api/agent/v1/key-status", rep, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) ReportRun(r RunReport) error {
 	return c.post("/api/agent/v1/runs", r, nil, true)
 }

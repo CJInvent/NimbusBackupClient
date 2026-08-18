@@ -163,6 +163,18 @@ type CheckinResponse struct {
 	//
 	// Locally-created jobs are NOT in this list and are not affected by it.
 	ManagedJobs []ManagedJob `json:"managed_jobs"`
+
+	// BackupKey names WHICH key this machine must encrypt under. The
+	// IDENTIFIER and the org's PUBLIC escrow key — never the material, which
+	// moves through POST /backup-key and only on a mismatch.
+	//
+	// A NIL POINTER IS MEANINGFUL AND IS NOT THE SAME AS A FAILURE: it means
+	// encryption is not enabled for this org, so back up in the clear. An org
+	// whose key we cannot obtain is a different state entirely and must refuse
+	// to start. Collapsing the two silently downgrades a customer who believes
+	// their backups are encrypted, and looks identical to the configured case
+	// on every dashboard. See BackupKeyDecision in backupkey.go.
+	BackupKey *BackupKeyAd `json:"backup_key"`
 }
 
 // RunStatus values — the server's state machine is forward-only
