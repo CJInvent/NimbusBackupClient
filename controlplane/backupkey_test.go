@@ -31,6 +31,16 @@ func adFor(keyID string) *BackupKeyAd {
 	return &BackupKeyAd{ID: 1, KeyID: keyID, Version: 1, Scope: "org"}
 }
 
+// durable/weak/broken are the three storage states, named so the table below
+// reads as the decision it is testing rather than as struct literals.
+func durable(storedKeyID string) KeyStorage {
+	return KeyStorage{Durable: true, StoredKeyID: storedKeyID}
+}
+func weak() KeyStorage { return KeyStorage{Durable: false} }
+func broken(err error) KeyStorage {
+	return KeyStorage{Durable: true, Err: err}
+}
+
 func TestBackupKeyDecisionTable(t *testing.T) {
 	assigned := strings.Repeat("a1", 32)
 	other := strings.Repeat("b2", 32)
@@ -39,60 +49,68 @@ func TestBackupKeyDecisionTable(t *testing.T) {
 	cases := []struct {
 		name           string
 		ad             *BackupKeyAd
-		stored         string
-		storageErr     error
+		st             KeyStorage
 		alreadyFetched bool
 		want           BackupKeyAction
 	}{
-		// Encryption off. A broken key store is NOT a reason to stop backing
-		// up an org that does not encrypt — the key is irrelevant to the work.
-		{"no key advertised", nil, "", nil, false, BackupKeyProceedPlain},
-		{"no key advertised, storage broken", nil, "", boom, false, BackupKeyProceedPlain},
-		{"no key advertised, stale key stored", nil, other, nil, false, BackupKeyProceedPlain},
+		// Encryption off. Storage state is irrelevant — a broken key store is
+		// not a reason to stop backing up an org that does not encrypt.
+		{"no key advertised", nil, durable(""), false, BackupKeyProceedPlain},
+		{"no key advertised, storage broken", nil, broken(boom), false, BackupKeyProceedPlain},
+		{"no key advertised, no durable storage", nil, weak(), false, BackupKeyProceedPlain},
+		{"no key advertised, stale key stored", nil, durable(other), false, BackupKeyProceedPlain},
 
-		// Steady state.
-		{"holds the assigned key", adFor(assigned), assigned, nil, false, BackupKeyProceedEncrypted},
-		{"holds it, after a fetch", adFor(assigned), assigned, nil, true, BackupKeyProceedEncrypted},
+		// Steady state on a machine that can keep a key.
+		{"holds the assigned key", adFor(assigned), durable(assigned), false, BackupKeyProceedEncrypted},
+		{"holds it, after a fetch", adFor(assigned), durable(assigned), true, BackupKeyProceedEncrypted},
 
 		// First encounter and rotation both mean "go and get it".
-		{"nothing stored yet", adFor(assigned), "", nil, false, BackupKeyFetch},
-		{"holds the previous key", adFor(assigned), other, nil, false, BackupKeyFetch},
+		{"nothing stored yet", adFor(assigned), durable(""), false, BackupKeyFetch},
+		{"holds the previous key", adFor(assigned), durable(other), false, BackupKeyFetch},
 
 		// Asked once and still wrong. Not another attempt — a refusal.
-		{"fetched and still nothing", adFor(assigned), "", nil, true, BackupKeyRefuse},
-		{"fetched and still wrong", adFor(assigned), other, nil, true, BackupKeyRefuse},
+		{"fetched and still nothing", adFor(assigned), durable(""), true, BackupKeyRefuse},
+		{"fetched and still wrong", adFor(assigned), durable(other), true, BackupKeyRefuse},
 
-		// Storage itself is broken while encryption IS required. We cannot
-		// prove what we hold, so we cannot claim to encrypt.
-		{"storage unavailable", adFor(assigned), "", boom, false, BackupKeyRefuse},
-		{"storage unavailable, key looks right", adFor(assigned), assigned, boom, false, BackupKeyRefuse},
+		// NO DURABLE STORAGE: fetch for this run, never write it down. This is
+		// the branch that stops the other two from being a choice between
+		// writing the key in the clear and not encrypting at all.
+		{"weak storage, first pass", adFor(assigned), weak(), false, BackupKeyFetchEphemeral},
+		{"weak storage, fetch failed", adFor(assigned), weak(), true, BackupKeyRefuse},
 
-		// A key block with no identifier: nothing to verify against, so
-		// "encrypted" would be an unverifiable claim.
-		{"advertised with empty key_id", adFor(""), assigned, nil, false, BackupKeyRefuse},
-		{"advertised with blank key_id", adFor("   "), assigned, nil, false, BackupKeyRefuse},
+		// Storage could not be CONSULTED — distinct from consulted-and-weak.
+		// We cannot tell what is sitting there, so we can neither trust it nor
+		// safely decide to skip persisting.
+		{"storage unreadable", adFor(assigned), broken(boom), false, BackupKeyRefuse},
+		{"storage unreadable, key looks right", adFor(assigned), KeyStorage{Durable: true, Err: boom, StoredKeyID: assigned}, false, BackupKeyRefuse},
+
+		// A key block with no identifier: nothing to verify against.
+		{"advertised with empty key_id", adFor(""), durable(assigned), false, BackupKeyRefuse},
+		{"advertised with blank key_id", adFor("   "), durable(assigned), false, BackupKeyRefuse},
 	}
 
 	for _, c := range cases {
-		got, reason := BackupKeyDecision(c.ad, c.stored, c.storageErr, c.alreadyFetched)
+		got, reason := BackupKeyDecision(c.ad, c.st, c.alreadyFetched)
 		if got != c.want {
 			t.Errorf("%s: got %s, want %s (reason %q)", c.name, got, c.want, reason)
 		}
 		// Every refusal must say why. A backup that stops with no reason is
-		// the failure mode the gate is supposed to replace, not reproduce: on
-		// a dashboard it looks the same as a machine with nothing to back up.
+		// the failure mode the gate replaces, not one to reproduce: on a
+		// dashboard it looks the same as a machine with nothing to back up.
 		if got == BackupKeyRefuse && strings.TrimSpace(reason) == "" {
 			t.Errorf("%s: refused with no reason given", c.name)
 		}
 	}
 }
 
-// THE ONE THAT MATTERS. Sweep the whole input space and assert that no
-// combination yields "back up unencrypted" while a key is advertised.
+// THE INVARIANT THAT MATTERS MOST, and it survived the design change: no input
+// may yield "back up unencrypted" while a key is advertised, and none may yield
+// "proceed encrypted" without the matching key actually in durable storage.
 //
-// The table above checks the cases I thought of. This checks the ones I did
-// not: any future edit that adds a branch returning ProceedPlain under an
-// advertised key fails here even if nobody remembers to extend the table.
+// The sweep is over the whole input space rather than the cases anyone thought
+// of, so a future branch that gets this wrong fails here even if nobody
+// remembers to extend the table above — which is exactly what happened when the
+// ephemeral branch was added: the table needed new rows, this did not.
 func TestNeverDowngradesSilently(t *testing.T) {
 	assigned := strings.Repeat("a1", 32)
 
@@ -100,33 +118,42 @@ func TestNeverDowngradesSilently(t *testing.T) {
 		"assigned":     adFor(assigned),
 		"empty key_id": adFor(""),
 	}
-	storedOpts := map[string]string{
-		"nothing":   "",
-		"assigned":  assigned,
-		"different": strings.Repeat("b2", 32),
-	}
-	errOpts := map[string]error{
-		"no error": nil,
-		"broken":   errors.New("storage failure"),
+	storages := map[string]KeyStorage{
+		"durable, nothing":   durable(""),
+		"durable, assigned":  durable(assigned),
+		"durable, different": durable(strings.Repeat("b2", 32)),
+		"weak":               weak(),
+		"unreadable":         broken(errors.New("storage failure")),
+		"unreadable w/ key":  {Durable: true, Err: errors.New("storage failure"), StoredKeyID: assigned},
 	}
 
 	for adName, ad := range ads {
-		for storedName, stored := range storedOpts {
-			for errName, e := range errOpts {
-				for _, fetched := range []bool{false, true} {
-					got, _ := BackupKeyDecision(ad, stored, e, fetched)
-					if got == BackupKeyProceedPlain {
-						t.Fatalf(
-							"SILENT DOWNGRADE: ad=%s stored=%s err=%s fetched=%v produced %s "+
-								"— a key is advertised, so backing up in the clear is never correct",
-							adName, storedName, errName, fetched, got)
+		for stName, st := range storages {
+			for _, fetched := range []bool{false, true} {
+				got, _ := BackupKeyDecision(ad, st, fetched)
+
+				if got == BackupKeyProceedPlain {
+					t.Fatalf("SILENT DOWNGRADE: ad=%s storage=%s fetched=%v produced %s "+
+						"— a key is advertised, so backing up in the clear is never correct",
+						adName, stName, fetched, got)
+				}
+
+				// Encryption may only be CLAIMED when the assigned key is
+				// actually held in storage we trust and could read.
+				if got == BackupKeyProceedEncrypted {
+					if st.Err != nil || !st.Durable || ad.KeyID == "" || st.StoredKeyID != ad.KeyID {
+						t.Fatalf("CLAIMED ENCRYPTION WITHOUT THE KEY: ad=%s storage=%s fetched=%v",
+							adName, stName, fetched)
 					}
-					// Equally: never claim encryption without the right key.
-					if got == BackupKeyProceedEncrypted && (e != nil || stored != ad.KeyID || ad.KeyID == "") {
-						t.Fatalf(
-							"CLAIMED ENCRYPTION WITHOUT THE KEY: ad=%s stored=%s err=%s fetched=%v",
-							adName, storedName, errName, fetched)
-					}
+				}
+
+				// Ephemeral is only ever offered where nothing will be
+				// written. Offering it on a durable machine would quietly stop
+				// persisting a key that machine could have kept — turning an
+				// outage-tolerant agent into one that needs the server up.
+				if got == BackupKeyFetchEphemeral && (st.Durable || st.Err != nil) {
+					t.Fatalf("EPHEMERAL ON A MACHINE THAT CAN STORE: ad=%s storage=%s fetched=%v",
+						adName, stName, fetched)
 				}
 			}
 		}
@@ -136,11 +163,11 @@ func TestNeverDowngradesSilently(t *testing.T) {
 // A refusal must not loop. Fetch is only ever offered once per cycle.
 func TestRefusalIsTerminalWithinACycle(t *testing.T) {
 	ad := adFor(strings.Repeat("a1", 32))
-	if got, _ := BackupKeyDecision(ad, "", nil, false); got != BackupKeyFetch {
+	if got, _ := BackupKeyDecision(ad, durable(""), false); got != BackupKeyFetch {
 		t.Fatalf("first pass should fetch, got %s", got)
 	}
 	// Same inputs, but the fetch has now happened and did not help.
-	if got, _ := BackupKeyDecision(ad, "", nil, true); got != BackupKeyRefuse {
+	if got, _ := BackupKeyDecision(ad, durable(""), true); got != BackupKeyRefuse {
 		t.Fatalf("after a failed fetch the gate must refuse, got %s", got)
 	}
 }
@@ -150,7 +177,7 @@ func TestRefusalReasonsAreOperatorReadable(t *testing.T) {
 	assigned := strings.Repeat("a1", 32)
 	other := strings.Repeat("b2", 32)
 
-	_, mismatch := BackupKeyDecision(adFor(assigned), other, nil, true)
+	_, mismatch := BackupKeyDecision(adFor(assigned), durable(other), true)
 	// Both key ids, shortened. A full 64-hex pair in a sentence is unreadable,
 	// and the leading bytes are enough to tell two keys apart.
 	if !strings.Contains(mismatch, "a1a1a1a1a1a1") || !strings.Contains(mismatch, "b2b2b2b2b2b2") {
@@ -160,7 +187,7 @@ func TestRefusalReasonsAreOperatorReadable(t *testing.T) {
 		t.Errorf("mismatch reason contains a full key_id, which is unreadable: %q", mismatch)
 	}
 
-	_, unavailable := BackupKeyDecision(adFor(assigned), "", errors.New("TPM absent"), false)
+	_, unavailable := BackupKeyDecision(adFor(assigned), broken(errors.New("TPM absent")), false)
 	// The underlying cause must survive: "storage unavailable" alone sends an
 	// operator hunting, while the actual error names the thing to fix.
 	if !strings.Contains(unavailable, "TPM absent") {
@@ -178,23 +205,25 @@ func TestKeyStatusMatchesTheDecision(t *testing.T) {
 	other := strings.Repeat("b2", 32)
 
 	cases := []struct {
-		name       string
-		ad         *BackupKeyAd
-		stored     string
-		storageErr error
-		want       KeyStorageStatus
-		wantKeyID  string
+		name      string
+		ad        *BackupKeyAd
+		st        KeyStorage
+		want      KeyStorageStatus
+		wantKeyID string
 	}{
-		{"holding the right key", adFor(assigned), assigned, nil, KeyStorageOK, assigned},
-		{"nothing stored", adFor(assigned), "", nil, KeyStorageAbsent, ""},
-		{"holding the wrong key", adFor(assigned), other, nil, KeyStorageMismatch, other},
-		// No key_id when storage is broken: we do not know what we hold, and
-		// reporting a remembered value would claim a key we cannot produce.
-		{"storage broken", adFor(assigned), assigned, errors.New("nope"), KeyStorageUnavailable, ""},
+		{"holding the right key", adFor(assigned), durable(assigned), KeyStorageOK, assigned},
+		{"nothing stored", adFor(assigned), durable(""), KeyStorageAbsent, ""},
+		{"holding the wrong key", adFor(assigned), durable(other), KeyStorageMismatch, other},
+		// No key_id when storage is unreadable: we do not know what we hold,
+		// and reporting a remembered value would claim a key we cannot produce.
+		{"storage unreadable", adFor(assigned), broken(errors.New("nope")), KeyStorageUnavailable, ""},
+		// EPHEMERAL IS NOT A FAULT. Reporting it as one would fill a fleet view
+		// with red for machines working exactly as designed.
+		{"ephemeral", adFor(assigned), weak(), KeyStorageOK, assigned},
 	}
 
 	for _, c := range cases {
-		got := KeyStatusFor(c.ad, c.stored, c.storageErr)
+		got := KeyStatusFor(c.ad, c.st)
 		if got.Status != c.want {
 			t.Errorf("%s: status %q, want %q", c.name, got.Status, c.want)
 		}
@@ -203,10 +232,18 @@ func TestKeyStatusMatchesTheDecision(t *testing.T) {
 		}
 	}
 
+	// An ephemeral machine must still be FINDABLE. It reports ok, so the only
+	// thing distinguishing it is the detail string — and an operator needs to
+	// know which machines stop backing up during an outage BEFORE the outage.
+	eph := KeyStatusFor(adFor(assigned), weak())
+	if !strings.Contains(eph.Detail, "never written") && !strings.Contains(eph.Detail, "per run") {
+		t.Errorf("an ephemeral machine is indistinguishable from an ordinary one: %q", eph.Detail)
+	}
+
 	// The status must never disagree with the action. A fleet view built on a
 	// status that contradicts what the machine did is a fiction.
-	ok := KeyStatusFor(adFor(assigned), assigned, nil)
-	act, _ := BackupKeyDecision(adFor(assigned), assigned, nil, false)
+	ok := KeyStatusFor(adFor(assigned), durable(assigned))
+	act, _ := BackupKeyDecision(adFor(assigned), durable(assigned), false)
 	if (ok.Status == KeyStorageOK) != (act == BackupKeyProceedEncrypted) {
 		t.Error("reported OK but did not proceed encrypted (or vice versa)")
 	}
@@ -228,7 +265,7 @@ func TestKeyStatusValuesMatchTheServersEnum(t *testing.T) {
 // truncated-mid-word detail ends up on an operator's screen.
 func TestDetailIsBounded(t *testing.T) {
 	huge := strings.Repeat("x", 5000)
-	rep := KeyStatusFor(adFor(strings.Repeat("a1", 32)), "", errors.New(huge))
+	rep := KeyStatusFor(adFor(strings.Repeat("a1", 32)), broken(errors.New(huge)))
 	if len(rep.Detail) > 500 {
 		t.Errorf("detail is %d chars, server caps at 500", len(rep.Detail))
 	}

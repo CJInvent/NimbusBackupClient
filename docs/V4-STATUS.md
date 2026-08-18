@@ -236,17 +236,49 @@ cases anyone thought of, asserting that no combination yields "back up
 unencrypted" while a key is advertised — and the converse, that encryption is
 never claimed without the matching key.
 
+**TWO MODES, chosen by what the machine can support — not by preference.**
+
+The plaintext-fallback dilemma is gone. It used to be a choice between writing
+the key that decrypts every backup next to the config it protects, and not
+encrypting at all. There is a third option:
+
+| storage | behaviour | trade |
+|---|---|---|
+| DPAPI / TPM | store the key; fetch only on a mismatch | survives a control-plane outage |
+| plaintext fallback only | never write it; fetch per run, RAM only | backups need the control plane reachable |
+
+**Why not ephemeral everywhere.** `gui/managed_jobs.go` persists the job set
+specifically so the scheduler keeps working through an outage. Fetching per run
+makes every encrypted backup depend on the server, which would silently reverse
+that commitment — and it is the same failure already rejected when
+`restrict_unmanaged_backups` was given a permissive default: a restrictive
+default that *stops backups*.
+
+`KeyStorage` replaces the old `(storedKeyID, error)` pair, because "can I write
+a file" was never the question — it is whether a key written there is protected
+by something a stolen disk cannot defeat, which is how `secrets.go` already
+ranks its protectors. Storage-*unreadable* stays distinct from storage-*weak*:
+unreadable means we cannot tell what is sitting there, so we can neither trust
+it nor safely skip persisting.
+
+Ephemeral reports `ok`, not `unavailable` — it is not a fault, and colouring a
+fleet view red for machines working as designed trains operators to ignore it.
+
 **STILL MISSING — nothing works end to end yet:**
 
-- **Storage.** The key must go through the EXISTING `gui/secrets.go` DEK and
-  protector chain (§6 — extend it, never add a second secret store). But
-  `encryptSecret` FALLS BACK TO STORING PLAINTEXT when the DEK is unavailable,
-  and `decryptSecret` returns `""` on failure. Those semantics are right for a
-  PBS token, which is re-enterable, and WRONG for a backup key: silently
-  writing it in the clear defeats the point of encrypting at all, and an empty
-  string returned to a caller that reads it as "no key" is exactly the collapse
-  the gate exists to prevent. Same DEK, same protectors, DIFFERENT failure
-  behaviour — fail loudly, never degrade.
+- **The RAM handling itself.** Fetch, hold for the run, drop. Note that "RAM
+  only" is weaker in Go on Windows than it sounds: the GC copies, there is no
+  reliable zeroing, and the pagefile, crash dumps and hibernation all touch
+  process memory. It is a real defence against a stolen disk and a stolen
+  machine; it is not one against an attacker with live access to a running box.
+  Worth being precise about in anything customer-facing.
+- **Durable storage** via the EXISTING `gui/secrets.go` DEK and protector chain
+  (§6 — extend it, never add a second secret store). `encryptSecret` FALLS BACK
+  TO STORING PLAINTEXT when the DEK is unavailable and `decryptSecret` returns
+  `""` on failure; both are right for a re-enterable PBS token and wrong for a
+  backup key. The ephemeral branch means that fallback is no longer *needed* —
+  a machine with no protector takes the ephemeral path instead — but the
+  durable path must still fail loudly rather than degrade.
 - Calling the gate from the backup path, and reporting via `/key-status`.
 - Writing `escrow_blob` to PBS as `rsa-encrypted.key.blob`, which is what makes
   the server-side org recovery bundle redundant rather than load-bearing.

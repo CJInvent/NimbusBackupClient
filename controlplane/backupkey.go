@@ -96,8 +96,19 @@ const (
 	// BackupKeyFetch: encryption is on and we do not hold the right key.
 	// Fetch it, then decide again.
 	BackupKeyFetch
-	// BackupKeyRefuse: encryption is on, we cannot obtain or store the key,
-	// and a backup MUST NOT START.
+	// BackupKeyFetchEphemeral: encryption is on and this machine has no
+	// trustworthy place to keep a key. Fetch it for THIS RUN, hold it in
+	// memory, never write it down.
+	//
+	// The third option that makes the other two honest. Without it, a machine
+	// whose only DEK protector is `plaintext` forces a choice between writing
+	// the key that decrypts every backup next to the config it protects, and
+	// refusing to encrypt at all. Both are bad answers to a question that has
+	// a good one: the key never touches this disk, and the cost is that
+	// backups on such a machine need the control plane reachable.
+	BackupKeyFetchEphemeral
+	// BackupKeyRefuse: encryption is on, we cannot obtain the key, and a
+	// backup MUST NOT START.
 	BackupKeyRefuse
 )
 
@@ -109,10 +120,31 @@ func (a BackupKeyAction) String() string {
 		return "proceed-encrypted"
 	case BackupKeyFetch:
 		return "fetch-key"
+	case BackupKeyFetchEphemeral:
+		return "fetch-key-ephemeral"
 	case BackupKeyRefuse:
 		return "refuse"
 	}
 	return "unknown"
+}
+
+// KeyStorage describes what this machine can be trusted to keep.
+//
+// Not a bool, because "can I write a file" is not the question. The question is
+// whether a key written there is protected by something a stolen disk cannot
+// defeat — DPAPI or a TPM — and gui/secrets.go already ranks its protectors
+// exactly that way.
+type KeyStorage struct {
+	// Durable is true when the DEK is wrapped by a real protector (dpapi,
+	// tpm). False for the `plaintext` fallback, where the wrapping key sits
+	// beside the thing it wraps and protects it from nobody.
+	Durable bool
+	// Err is non-nil when storage could not be consulted at all — a different
+	// state from "consulted, and it is weak".
+	Err error
+	// StoredKeyID is the key_id currently held, or "" for nothing. Always ""
+	// when Durable is false, because nothing is ever written there.
+	StoredKeyID string
 }
 
 // BackupKeyDecision is the verification gate (V4-SPEC §11).
@@ -123,61 +155,77 @@ func (a BackupKeyAction) String() string {
 // every dashboard it looks identical to a customer who chose not to encrypt.
 // Nobody finds out until someone reads a snapshot they assumed was protected.
 //
-// So the refusal is deliberate and it is the SAFE direction here, which is not
-// true everywhere in this codebase: restrict_unmanaged_backups defaults
-// permissive precisely because a restrictive default silently STOPS backups.
-// The difference is that a refusal is loud — it reports a status, surfaces a
-// detail string and shows up as a failed run — whereas a silent downgrade is
-// not observable at all.
+// The decision has three branches rather than two, and the middle one is what
+// makes the other two defensible:
 //
-//   - ad == nil                     -> proceed unencrypted (configured state)
-//   - storage failed                -> REFUSE (we cannot prove what we hold)
-//   - nothing stored, or wrong key  -> fetch
-//   - stored key matches            -> proceed encrypted
+//   - ad == nil                  -> proceed unencrypted (a configured state)
+//   - durable storage            -> store the key; fetch only on a mismatch
+//   - NO durable storage         -> fetch per run, hold in RAM, never persist
+//   - storage unreadable, or a
+//     fetch already failed       -> REFUSE
 //
-// storedKeyID is what our secure storage reports holding ("" for nothing).
-// storageErr is non-nil when storage itself could not be consulted — which is
-// NOT the same as holding nothing, and is why they are separate parameters
-// rather than one string.
+// WHY NOT EPHEMERAL EVERYWHERE. Because gui/managed_jobs.go persists the job
+// set specifically so the scheduler keeps working through a control-plane
+// outage, and fetching per run makes every encrypted backup depend on the
+// server being reachable. Making that the only mode would silently reverse a
+// deliberate commitment — and it is the same failure the codebase already
+// rejected when restrict_unmanaged_backups was given a permissive default: a
+// restrictive default that STOPS BACKUPS.
+//
+// So durable storage keeps the key and survives outages; a machine that cannot
+// store it safely trades outage tolerance for never writing the key down. Each
+// machine gets the best property it can actually support, and neither gets a
+// silent downgrade.
 //
 // alreadyFetched says a fetch was already attempted in this cycle. Without it
 // the caller can loop: fetch, still mismatch, fetch again. A second failure to
 // arrive at the right key is a refusal, not another attempt.
-func BackupKeyDecision(ad *BackupKeyAd, storedKeyID string, storageErr error, alreadyFetched bool) (BackupKeyAction, string) {
+func BackupKeyDecision(ad *BackupKeyAd, st KeyStorage, alreadyFetched bool) (BackupKeyAction, string) {
 	if ad == nil {
-		// Encryption is off for this org. Note that a storage error is NOT
-		// consulted here: if the org does not encrypt, a broken key store is
-		// not a reason to stop backing it up.
+		// Encryption is off for this org. Storage state is NOT consulted: if
+		// the org does not encrypt, a broken key store is not a reason to stop
+		// backing it up.
 		return BackupKeyProceedPlain, "encryption is not enabled for this organization"
 	}
 
 	if strings.TrimSpace(ad.KeyID) == "" {
-		// The server advertised a key block with no identifier. Refuse rather
-		// than guess: we cannot verify anything we store against it, so
-		// "encrypted" would be a claim we cannot check.
+		// A key block with no identifier. Refuse rather than guess: nothing we
+		// stored could be verified against it, so "encrypted" would be a claim
+		// we cannot check.
 		return BackupKeyRefuse, "the server advertised a backup key with no key_id"
 	}
 
-	if storageErr != nil {
+	if st.Err != nil {
+		// Storage could not be CONSULTED. Distinct from weak storage: we
+		// cannot tell whether a key is already sitting there, so we can
+		// neither trust nor replace it.
 		return BackupKeyRefuse, fmt.Sprintf(
-			"encrypted backup is required but this machine's secure key storage is unavailable: %v", storageErr)
+			"encrypted backup is required but this machine's secure key storage could not be read: %v", st.Err)
 	}
 
-	if storedKeyID == ad.KeyID {
+	if !st.Durable {
+		// No protector worth the name. The key is never written here.
+		if alreadyFetched {
+			return BackupKeyRefuse, "encrypted backup is required, this machine cannot store a key safely, " +
+				"and the key could not be obtained from the control server for this run"
+		}
+		return BackupKeyFetchEphemeral, ""
+	}
+
+	if st.StoredKeyID == ad.KeyID {
 		return BackupKeyProceedEncrypted, ""
 	}
 
 	if alreadyFetched {
-		// We asked and still do not have it. Distinguish the two reasons,
-		// because they send an operator to different places: nothing stored
+		// Asked and still wrong. Distinguish the two reasons: nothing stored
 		// means the fetch or the write failed, while a different key stored
 		// means the rotation did not take.
-		if storedKeyID == "" {
+		if st.StoredKeyID == "" {
 			return BackupKeyRefuse, "encrypted backup is required but the backup key could not be obtained from the server"
 		}
 		return BackupKeyRefuse, fmt.Sprintf(
 			"encrypted backup is required but this machine holds key %s while the server assigned %s",
-			shortKeyID(storedKeyID), shortKeyID(ad.KeyID))
+			shortKeyID(st.StoredKeyID), shortKeyID(ad.KeyID))
 	}
 
 	return BackupKeyFetch, ""
@@ -190,26 +238,47 @@ func BackupKeyDecision(ad *BackupKeyAd, storedKeyID string, storageErr error, al
 // fiction. What the server does with it is compare key_id and record it — it
 // cannot recompute any of this, because DPAPI, the TPM and the disk are facts
 // only this machine has.
-func KeyStatusFor(ad *BackupKeyAd, storedKeyID string, storageErr error) KeyStatusReport {
+func KeyStatusFor(ad *BackupKeyAd, st KeyStorage) KeyStatusReport {
 	switch {
-	case storageErr != nil:
+	case st.Err != nil:
 		return KeyStatusReport{
 			Status: KeyStorageUnavailable,
-			// No key_id: we do not know what we hold. Sending the last one we
-			// remember would report a key we cannot actually produce.
-			Detail: truncateDetail(storageErr.Error()),
+			// No key_id: we do not know what we hold. Reporting a remembered
+			// value would claim a key we cannot actually produce.
+			Detail: truncateDetail(st.Err.Error()),
 		}
-	case storedKeyID == "":
+	case !st.Durable:
+		// EPHEMERAL IS NOT A FAULT, and reporting it as one would fill a fleet
+		// view with red for machines that are working exactly as designed. It
+		// is reported as `ok` with the reason in `detail`, so an operator can
+		// still find these machines — they are the ones that stop backing up
+		// during an outage, which is worth knowing before the outage.
+		return KeyStatusReport{
+			Status: KeyStorageOK,
+			KeyID:  ad.keyIDOrEmpty(),
+			Detail: "no durable key storage on this machine; the key is fetched per run and never written to disk",
+		}
+	case st.StoredKeyID == "":
 		return KeyStatusReport{Status: KeyStorageAbsent}
-	case ad != nil && storedKeyID != ad.KeyID:
+	case ad != nil && st.StoredKeyID != ad.KeyID:
 		return KeyStatusReport{
 			Status: KeyStorageMismatch,
-			KeyID:  storedKeyID,
+			KeyID:  st.StoredKeyID,
 			Detail: "stored key does not match the key assigned by the server",
 		}
 	default:
-		return KeyStatusReport{Status: KeyStorageOK, KeyID: storedKeyID}
+		return KeyStatusReport{Status: KeyStorageOK, KeyID: st.StoredKeyID}
 	}
+}
+
+// keyIDOrEmpty is nil-safe so an ephemeral report can name the key it will
+// fetch without the caller having to nil-check an advertisement it already
+// knows is present.
+func (a *BackupKeyAd) keyIDOrEmpty() string {
+	if a == nil {
+		return ""
+	}
+	return a.KeyID
 }
 
 // VerifyKeyMaterial checks that delivered bytes are the key they claim to be.
