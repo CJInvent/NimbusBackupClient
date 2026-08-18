@@ -930,11 +930,36 @@ func (pbs *PBSClient) CloseDynamicIndex(writerid uint64, checksum string, totals
 	return nil
 }
 
-// ManifestBlobName is PBS's own name for the manifest, and the ONE blob that
-// is never encrypted. Named as a constant because that exemption is a rule,
-// not a coincidence, and a string literal compared in two places eventually
-// becomes two different rules.
+// ManifestBlobName is PBS's own name for the manifest.
 const ManifestBlobName = "index.json.blob"
+
+// EncryptedKeyBlobName is PBS's ENCRYPTED_KEY_BLOB_NAME
+// (pbs-api-types/src/datastore.rs): the backup key, RSA-encrypted to the org's
+// master public key, stored beside the snapshot.
+//
+// THIS IS THE RECOVERY PATH. A customer holding their exported private master
+// key can decrypt this blob with stock proxmox-backup-client and get the key
+// that reads the snapshot — with no Nimbus server, no database and no vault
+// code in the path. Until this file is written, that recovery depends on our
+// server still existing, which is exactly the dependency it exists to remove.
+const EncryptedKeyBlobName = "rsa-encrypted.key.blob"
+
+// blobExemptFromEncryption reports whether a blob is stored WITHOUT AES
+// encryption even on a client that encrypts everything else.
+//
+// Two exemptions, for the same underlying reason and with different
+// consequences below:
+//
+//   - the MANIFEST must be parseable without a key, or a datastore cannot list
+//     what a snapshot contains. Its integrity comes from its signature.
+//   - the ENCRYPTED KEY BLOB is the thing that GIVES you the key. Encrypting it
+//     under that key would be circular and would destroy the only recovery path
+//     that survives losing this server. Upstream's restore confirms the intent:
+//     it downloads this blob with no crypt config at all, explicitly skipping
+//     the manifest fingerprint check.
+func blobExemptFromEncryption(name string) bool {
+	return name == ManifestBlobName || name == EncryptedKeyBlobName
+}
 
 // encodeBlob renders a blob as PBS stores it, and reports the crypt-mode that
 // honestly describes the result.
@@ -947,11 +972,27 @@ const ManifestBlobName = "index.json.blob"
 // compressed blobs, and the encrypted path must not until the
 // encrypted-and-compressed magic is implemented (see UploadChunk).
 func (pbs *PBSClient) encodeBlob(name string, data []byte) ([]byte, string, error) {
-	if pbs.crypt == nil || name == ManifestBlobName {
+	if pbs.crypt == nil || blobExemptFromEncryption(name) {
 		out := make([]byte, 0, 12+len(data))
 		out = append(out, blobUncompressedMagic...)
 		out = binary.LittleEndian.AppendUint32(out, crc32.ChecksumIEEE(data))
 		out = append(out, data...)
+
+		// THE KEY BLOB IS THE ONE PLACE crypt-mode DOES NOT DESCRIBE THE BYTES,
+		// and it is upstream's choice rather than ours: main.rs uploads it with
+		// `encrypt: false` and then records it in the manifest with
+		// `crypto.mode` — the mode of the BACKUP, not of this file.
+		//
+		// It reads as a contradiction and is defensible: the blob's contents
+		// really are encrypted, just with RSA to the master key rather than
+		// with the AES key. Matching upstream matters more than matching our
+		// own rule here, because a manifest that disagrees with what stock
+		// proxmox-backup-client writes is a manifest their tooling gets to be
+		// surprised by — during a recovery, which is the worst moment to
+		// discover a cosmetic divergence.
+		if pbs.crypt != nil && name == EncryptedKeyBlobName {
+			return out, pbs.indexCryptMode(), nil
+		}
 		return out, "none", nil
 	}
 
@@ -1084,6 +1125,41 @@ func (pbs *PBSClient) EncodeManifest() ([]byte, error) {
 	audit("manifest SIGNED (not encrypted, by design) under key %s, %d files listed",
 		signed.Unprotected.KeyFingerprint, len(signed.Files))
 	return json.Marshal(signed)
+}
+
+// UploadEscrowBlob writes the RSA-escrowed backup key beside this snapshot.
+//
+// CALL THIS BEFORE UploadManifest, like every other blob: the manifest records
+// each file it has seen, so a blob uploaded after it is absent from the
+// manifest that /finish validates.
+//
+// The bytes are produced by the SERVER at key-issue time and delivered with the
+// key — this client never performs the RSA operation and never holds a master
+// key. That is deliberate: computing the escrow here would make every
+// snapshot's recoverability depend on every agent having done that step
+// correctly, a dependency nobody can verify until the day it matters.
+//
+// Uploaded uncompressed and unencrypted, matching upstream
+// (`compress: false, encrypt: false`). Compression would be pointless on ~512
+// bytes of ciphertext, and encryption would be circular — see
+// blobExemptFromEncryption.
+func (pbs *PBSClient) UploadEscrowBlob(escrow []byte) error {
+	if len(escrow) == 0 {
+		// Refuse rather than write an empty blob. A zero-length
+		// rsa-encrypted.key.blob is worse than no blob at all: it looks like a
+		// recovery path is present right up until someone needs it.
+		return errors.New("escrow blob is empty: refusing to write a recovery path that does not work")
+	}
+	if pbs.crypt == nil {
+		// An escrow blob on an unencrypted snapshot describes a key nothing
+		// used. Silently skipping would hide a caller bug, so say so.
+		return errors.New("refusing to write an escrow blob for an unencrypted backup")
+	}
+	if err := pbs.UploadBlob(EncryptedKeyBlobName, escrow); err != nil {
+		return fmt.Errorf("uploading %s: %w", EncryptedKeyBlobName, err)
+	}
+	audit("escrow blob written (%d bytes) — this snapshot is recoverable from the org master private key alone", len(escrow))
+	return nil
 }
 
 func (pbs *PBSClient) UploadManifest() error {

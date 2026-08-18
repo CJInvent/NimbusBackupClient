@@ -299,8 +299,19 @@ wrong".
   a machine with no protector takes the ephemeral path instead — but the
   durable path must still fail loudly rather than degrade.
 - Calling the gate from the backup path, and reporting via `/key-status`.
-- Writing `escrow_blob` to PBS as `rsa-encrypted.key.blob`, which is what makes
-  the server-side org recovery bundle redundant rather than load-bearing.
+- **DONE:** writing `escrow_blob` to PBS as `rsa-encrypted.key.blob`
+  (`PBSClient.UploadEscrowBlob`). This is what makes the server-side org
+  recovery bundle redundant rather than load-bearing. Two things about it are
+  counterintuitive and are pinned by tests:
+  - It is **exempt from AES encryption**, like the manifest but for a different
+    reason: it is the thing that *gives* you the key, so encrypting it under
+    that key is circular and would destroy the recovery path that works without
+    our server. Upstream's restore confirms the intent — it downloads this blob
+    with no crypt config at all.
+  - Its manifest `crypt-mode` is the **backup's** mode (`encrypt`), not this
+    file's. That contradicts our own "crypt-mode describes the bytes" rule and
+    matches upstream, which records `crypto.mode` here. Matching stock PBS
+    matters more than internal consistency at a spot a recovery depends on.
 
 ## Building and testing
 
