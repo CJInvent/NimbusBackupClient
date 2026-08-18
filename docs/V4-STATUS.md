@@ -264,6 +264,25 @@ it nor safely skip persisting.
 Ephemeral reports `ok`, not `unavailable` — it is not a fault, and colouring a
 fleet view red for machines working as designed trains operators to ignore it.
 
+**Go is pinned to 1.26.6, not 1.26.5.** The Dependency Audit job caught two
+standard-library vulnerabilities — `GO-2026-6090` (crypto/tls) and
+`GO-2026-5972` (encoding/asn1) — both reported reachable from this code:
+`compressLogFile` → `io.Copy` → `tls.Conn.Read`, and `signal.Notify` →
+`asn1.Unmarshal`. Both are fixed in go1.26.6.
+
+Worth recording how this presented, because it looked like a code failure and
+was not: CI went red on a commit that added no dependencies, and re-running the
+previously-green `378f222` **unchanged** reproduced the same failure. A live
+vulnerability database makes a passing build a statement about a moment, not
+about a commit. That is correct and should not be "fixed" — a CVE published
+yesterday *should* fail today's build.
+
+`govulncheck` itself is now pinned (`GOVULNCHECK_VERSION`), like every other
+tool in that workflow. The database stays live on purpose; the tool does not,
+because a tool release can change output or exit codes independently of any
+finding, and then red means "something changed" rather than "something is
+wrong".
+
 **STILL MISSING — nothing works end to end yet:**
 
 - **The RAM handling itself.** Fetch, hold for the run, drop. Note that "RAM

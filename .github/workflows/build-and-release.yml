@@ -45,7 +45,10 @@ env:
   # Pinned to an exact patch, not '1.26': setup-go resolves a bare minor to
   # whatever it feels like, which is precisely the silent-fallback the v4 spec
   # forbids. The toolchain job below asserts what actually got installed.
-  GO_VERSION: '1.26.5'
+  GO_VERSION: '1.26.6'
+  # Pinned deliberately — see the govulncheck step for why the TOOL is pinned
+  # while the vulnerability database is intentionally not.
+  GOVULNCHECK_VERSION: 'v1.7.0'
   NODE_VERSION: '20'
 
 jobs:
@@ -539,7 +542,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # PINNED, like every other tool in this file.
+          #
+          # @latest made this job's result depend on two moving targets: the
+          # tool AND the live vulnerability database. That is defensible for
+          # the database — a CVE published yesterday SHOULD fail today's build,
+          # and this job caught GO-2026-6090/GO-2026-5972 exactly that way. It
+          # is not defensible for the tool, because a govulncheck release can
+          # change output, exit codes or analysis independently of any finding,
+          # and then a red build means "something changed" rather than
+          # "something is wrong".
+          #
+          # Keep the version current deliberately; do not let it drift silently.
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Resolved dependency versions
         env:
