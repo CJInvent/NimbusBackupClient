@@ -28,3 +28,4 @@ func isolateConfigDir(t *testing.T) string {
 	t.Cleanup(resetDEKCache)
 	return dir
 }
+
