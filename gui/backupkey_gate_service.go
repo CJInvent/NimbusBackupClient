@@ -6,11 +6,15 @@ package main
 //
 // WHY THIS IS A SEPARATE FILE AND NOT THE REST OF backupkey_gate.go: everything
 // here is reachable only from runBackupPipeline, which is itself `service`-only.
-// Left untagged, these five symbols have no caller in the default (GUI) build,
-// and the default golangci-lint pass — the one that still runs `unused`, see
+// Left untagged, these symbols have no caller in the default (GUI) build, and
+// the default golangci-lint pass — the one that still runs `unused`, see
 // .github/workflows/build-and-release.yml — reports every one of them. Tagging
 // them to match their single caller keeps that check meaningful in both passes
 // instead of teaching people to ignore it.
+//
+// fetchKeyMaterial is the exception that proves the rule and now lives in
+// backupkey_gate.go, untagged: restore needs it too (phase G), and restore is
+// in both builds.
 
 import (
 	"controlplane"
@@ -88,7 +92,7 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 			return raw, blob, nil
 
 		case controlplane.BackupKeyFetch:
-			m, ferr := a.fetchBackupKey(controlplane.KeyModeDurable, runUUID)
+			m, ferr := fetchKeyMaterial(controlplane.KeyModeDurable, runUUID)
 			if ferr != nil {
 				// Do NOT return here. The next pass through the decision, with
 				// fetched=true, turns this into the correctly-worded refusal —
@@ -102,7 +106,7 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 			st = backupKeyStorage()
 
 		case controlplane.BackupKeyFetchEphemeral:
-			m, ferr := a.fetchBackupKey(controlplane.KeyModeEphemeral, runUUID)
+			m, ferr := fetchKeyMaterial(controlplane.KeyModeEphemeral, runUUID)
 			if ferr != nil {
 				fetched = true
 				writeWarnLog(fmt.Sprintf("[BackupKey] fetching the ephemeral backup key failed: %v", ferr))
@@ -132,25 +136,6 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 	reportKeyStatus(ad, st)
 	return nil, nil, errors.New(
 		"encrypted backup is required but this machine could not settle on a key to use")
-}
-
-// fetchBackupKey calls the control plane for material and verifies it before it
-// goes anywhere.
-func (a *App) fetchBackupKey(mode, runUUID string) (*controlplane.BackupKeyMaterial, error) {
-	cpMu.Lock()
-	c := cpClient
-	cpMu.Unlock()
-	if c == nil {
-		return nil, errors.New("no control server is configured on this machine")
-	}
-	m, err := c.FetchBackupKey(controlplane.BackupKeyRequest{Mode: mode, RunUUID: runUUID})
-	if err != nil {
-		return nil, err
-	}
-	if m == nil || m.KeyID == "" {
-		return nil, errors.New("the control server returned no backup key")
-	}
-	return m, nil
 }
 
 // reportKeyStatus tells the server what this machine found. Best-effort and

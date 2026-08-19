@@ -174,6 +174,11 @@ func withSnapshotReader(opts RestoreOptions, archiveName, logTag string, progres
 	client.Connect(true, "host")
 	defer client.Close()
 
+	if err := attachRestoreKey(client, logTag); err != nil {
+		writeBackupLog(fmt.Sprintf("%s: %v", logTag, err))
+		return err
+	}
+
 	ra, size, err := client.NewDIDXReaderAt(archiveName, 64, func(fetched, total int) {
 		if fetched == total || fetched%32 == 0 {
 			writeBackupLog(fmt.Sprintf("%s: fetched %d/%d chunks of %s", logTag, fetched, total, archiveName))
@@ -220,6 +225,17 @@ func listSnapshotViaCatalog(opts RestoreOptions, cancel func() bool) (entries []
 	}
 	client.Connect(true, "host")
 	defer client.Close()
+
+	if err := attachRestoreKey(client, "catalog"); err != nil {
+		// Fall back to the data-archive walk, which goes through
+		// withSnapshotReader and will surface the SAME key failure with the
+		// restore's own log tag. Returning ok=false here rather than an error
+		// keeps this function's one contract — "no usable catalog" — instead of
+		// giving it a second way to fail that its caller does not expect.
+		writeBackupLog(fmt.Sprintf("Catalog key unavailable for %s@%d (%v), falling back to data-archive walk",
+			opts.BackupID, opts.SnapshotTime.Unix(), err))
+		return nil, nil, false
+	}
 
 	ra, size, err := client.NewDIDXReaderAt("catalog.pcat1.didx", 64, nil)
 	if err != nil {
