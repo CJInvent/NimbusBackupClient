@@ -191,6 +191,16 @@ func joinOriginPath(meta *BackupMeta, archivePath string) string {
 // listings are searched for free; uncached snapshots are assembled only when
 // AssembleMissing is set. Results are newest-snapshot-first.
 func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
+	// THE WORST OF THE THREE MISSING GATES. Search does not go through the
+	// gated lister — it calls assembleSnapshotTree directly (below), so with
+	// file restore disabled a console could still enumerate names, paths,
+	// sizes and mtimes across every snapshot in range. That is the file
+	// index of the whole machine, which is most of what the restore browser
+	// was disabled to withhold.
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
+
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
 		return nil, errors.New(errPBSParamsRequired)
 	}
