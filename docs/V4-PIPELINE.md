@@ -117,12 +117,12 @@ cause — the GUI was the original backup engine and still behaves like one.
 ```
   NimbusControl ──check-in──┐
                             ▼
-                    ┌───────────────────────────────┐
+                    ┌──────────────────────────────┐
                     │  SERVICE (LocalSystem)        │
                     │   scheduler ─┐                │
                     │   portal cmd ├─► RunRegistry ─┼─► engine
                     │   local API ─┘   (one entry)  │   (machine|directory)
-                    └───────────┬───────────────────┘
+                    └───────────┬─────────────────────┘
                                 │ local HTTP, token-authed
                     ┌───────────▼───────────────────┐
                     │  GUI (user session)           │
@@ -205,6 +205,31 @@ a full-machine restore, which is not behind that gate at all.
 The bottom two rows are why this cannot simply be "no hatch". The project is
 public GPL-3 and works without NimbusControl; an install with no control
 plane configured is a supported product, not a bypass.
+
+### 3.1a The gate lives in the pipeline, between reporting and execution
+
+`runBackupPipeline` gained one step (2026-08-18), and the ORDER of it is the
+whole point:
+
+```
+resolve request → assemble options → attach reporters → GATE → execute
+```
+
+**After the reporters, before the engine.** After, because a refusal has to be
+a reported FAILED run: a machine that stops backing up must be visible in the
+portal, and from a dashboard silence and success are the same picture — which
+is the entire reason the gate exists. Before, because refusing after the engine
+has uploaded data refuses nothing.
+
+`a.resolveBackupKeyForRun(runUUID)` returns key material, or an error that stops
+the backup. `attachControlPlaneHooks` now also returns the run uuid, so a key
+fetch can name the run it is for; the server's release audit matches releases
+against the runs that followed them, and a release with no run behind it is what
+a stolen agent token looks like.
+
+This is the ONLY place the gate runs. A gate with two callers is a gate with one
+caller somebody will forget — the same reason the CLI binaries bypassing all
+policy (§7) is a known hole rather than an accepted design.
 
 ### 3.2 `ModeStandalone` is split
 
