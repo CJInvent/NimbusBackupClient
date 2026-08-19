@@ -58,6 +58,18 @@ type Agent struct {
 	// the callback, not this loop.
 	OnPBSPollSchedule func(intervalSeconds, offsetSeconds int)
 
+	// OnBackupKey is invoked whenever a check-in delivers the `backup_key`
+	// block — which is every cycle, INCLUDING the cycles where it is null.
+	//
+	// The null case is the one that matters and the reason this is a push
+	// callback rather than a getter the backup path polls: null means the org
+	// has turned encryption OFF, and somebody has to write that down. An agent
+	// that only reacted to non-null advertisements would keep an obsolete key,
+	// and — worse — could not later tell "encryption is off" apart from "I have
+	// never heard from the server", which are opposite instructions at backup
+	// time.
+	OnBackupKey func(*BackupKeyAd)
+
 	// OnManagedJobs is invoked whenever a check-in delivers the
 	// server-defined job set (i.e. every cycle). Same push shape as
 	// OnPolicy, same reason: whoever owns the reacting behaviour owns the
@@ -86,7 +98,13 @@ type Agent struct {
 
 	policy   atomic.Value // Policy
 	policyAt atomic.Value // time.Time — when policy was last confirmed
-	interval atomic.Int64 // seconds, server-driven
+	// backupKey holds the last delivered advertisement, WRAPPED, because a
+	// nil *BackupKeyAd is a meaningful value here ("encryption is off") and
+	// atomic.Value cannot distinguish a stored nil pointer from nothing
+	// stored. The wrapper is what makes "the server said no key" and "the
+	// server has never been reached" different answers.
+	backupKey atomic.Value // backupKeyBox
+	interval  atomic.Int64 // seconds, server-driven
 	// checkinOffset is this agent's assigned slot in the check-in grid
 	// (see NextAligned). Defaults to 0 (aligned to the epoch itself) until
 	// the first check-in response assigns a real value — an agent that has
@@ -142,6 +160,33 @@ func (a *Agent) CurrentPolicy() Policy {
 		}
 	}
 	return p
+}
+
+// backupKeyBox wraps the advertisement so a stored nil pointer is
+// distinguishable from an empty atomic.Value. See the field comment.
+type backupKeyBox struct{ ad *BackupKeyAd }
+
+// CurrentBackupKey returns the last advertised backup key and whether the
+// server has ever told us anything at all.
+//
+// THE SECOND RETURN IS NOT A CONVENIENCE. (nil, true) means the org does not
+// encrypt — back up in the clear. (nil, false) means this agent has never
+// completed a check-in, so it does not know whether the org encrypts, and
+// treating that as "encryption off" is precisely the silent downgrade the whole
+// gate exists to prevent. The caller must resolve `false` from somewhere else
+// (persisted state) or refuse.
+//
+// Unlike CurrentPolicy this does NOT expire with PolicyMaxAge. A machine with a
+// stored key is meant to keep backing up through a control-plane outage — that
+// is the entire difference between durable and ephemeral mode — so ageing the
+// advertisement out would quietly convert every durable machine into one that
+// stops backing up when the server is unreachable.
+func (a *Agent) CurrentBackupKey() (*BackupKeyAd, bool) {
+	box, ok := a.backupKey.Load().(backupKeyBox)
+	if !ok {
+		return nil, false
+	}
+	return box.ad, true
 }
 
 // PolicyIsStale reports whether the in-force policy has been downgraded to the
@@ -217,6 +262,14 @@ func (a *Agent) CheckinNow() {
 	a.policyAt.Store(time.Now())
 	if a.OnPolicy != nil {
 		a.OnPolicy(resp.Policy)
+	}
+	// The backup key advertisement lands with policy and before commands, for
+	// the same reason: a run_backup command delivered in this response must be
+	// gated by the key state that shipped alongside it, not by the previous
+	// cycle's.
+	a.backupKey.Store(backupKeyBox{ad: resp.BackupKey})
+	if a.OnBackupKey != nil {
+		a.OnBackupKey(resp.BackupKey)
 	}
 	// Managed jobs land with policy, before commands, for the same reason:
 	// a run_backup command naming a managed job must find that job already
