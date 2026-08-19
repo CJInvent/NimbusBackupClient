@@ -117,12 +117,12 @@ cause — the GUI was the original backup engine and still behaves like one.
 ```
   NimbusControl ──check-in──┐
                             ▼
-                    ┌──────────────────────────────┐
+                    ┌───────────────────────────────┐
                     │  SERVICE (LocalSystem)        │
                     │   scheduler ─┐                │
                     │   portal cmd ├─► RunRegistry ─┼─► engine
                     │   local API ─┘   (one entry)  │   (machine|directory)
-                    └───────────┬─────────────────────┘
+                    └───────────┼───────────────────┘
                                 │ local HTTP, token-authed
                     ┌───────────▼───────────────────┐
                     │  GUI (user session)           │
