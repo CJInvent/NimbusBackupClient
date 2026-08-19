@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 // Tests for restore-side key resolution (phase G).

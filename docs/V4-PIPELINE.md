@@ -148,6 +148,14 @@ the GUI gets no engine.** This is the version that makes the rest of the
 design cheap rather than the version that keeps an engine in the GUI behind
 a flag.
 
+**Extended to restore (CJ, 2026-08-19).** The same rule always applied to the
+restore side; it had simply not been done. Browse, search, metadata, file
+restore, download and image extraction executed in the console until phase G
+tripped over it — see docs/V4-RESTORE.md, "The rewire". The build-time
+assertion covers both engines now, and it is a FILE-SET check (which files
+each build compiles) rather than only a symbol grep, because the linker prunes
+what nothing reaches and an unreached engine leaves no symbol to find.
+
 What it means concretely:
 
 - The GUI build does not link `RunMachineBackup`, `RunBackupInline` or any

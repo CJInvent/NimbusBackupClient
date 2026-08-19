@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 import (
@@ -12,21 +15,6 @@ import (
 	"time"
 
 	"pbscommon"
-)
-
-// RestoreMode picks where extracted files land on disk.
-//
-// Original restores back to the original filesystem location captured in the
-// backup metadata sidecar (requires hostname + OS to match). The two Alternate
-// modes write under opts.DestPath: Abs preserves the archive's full directory
-// layout, Flat strips the longest common prefix of the user's selection so a
-// single file lands at dest/<basename>.
-type RestoreMode string
-
-const (
-	RestoreModeOriginal      RestoreMode = "original"
-	RestoreModeAlternateAbs  RestoreMode = "alternate_abs"
-	RestoreModeAlternateFlat RestoreMode = "alternate_flat"
 )
 
 // RestoreOptions contains all parameters for a restore operation.
@@ -66,24 +54,6 @@ type RestoreOptions struct {
 	RestoreTimestamps bool // mtime is always restored; flag kept for symmetry
 
 	OnProgress func(percent float64, message string)
-}
-
-// SnapshotInfo contains information about a backup snapshot.
-type SnapshotInfo struct {
-	BackupType string
-	BackupID   string
-	BackupTime time.Time
-	Size       int64
-	Files      []string
-}
-
-// SnapshotEntry is a single file or directory inside a snapshot, suitable for
-// driving a tree view in the GUI.
-type SnapshotEntry struct {
-	Path    string `json:"path"`
-	IsDir   bool   `json:"is_dir"`
-	Size    uint64 `json:"size"`
-	ModTime int64  `json:"mtime"`
 }
 
 // ListSnapshotsInline lists available snapshots from PBS.

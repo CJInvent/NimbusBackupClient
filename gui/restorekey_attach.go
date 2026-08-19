@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 // Attaching the right key to a restore-side PBS client (V4-SPEC §18, phase G).

@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 // Which key opens THIS snapshot (V4-SPEC §18, phase G).

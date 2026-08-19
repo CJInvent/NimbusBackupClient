@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 import (
@@ -20,22 +23,6 @@ const maxSearchHits = 5000
 // between snapshots. A single global is enough: the GUI only runs one search
 // at a time.
 var searchCancelled atomic.Bool
-
-// SearchMatchMode selects how Query is interpreted.
-type SearchMatchMode string
-
-const (
-	// SearchModeName matches a case-insensitive substring against the file's
-	// base name (the last path segment). The intuitive default.
-	SearchModeName SearchMatchMode = "name"
-	// SearchModeRegex matches a Go regular expression against the base name.
-	// Case-insensitive by default (to match Windows expectations); add (?-i) in
-	// the pattern to force case-sensitive matching.
-	SearchModeRegex SearchMatchMode = "regex"
-	// SearchModePath matches a case-insensitive substring against the whole
-	// archive-relative path (directories included).
-	SearchModePath SearchMatchMode = "path"
-)
 
 // SearchOptions parameterizes a cross-snapshot file search.
 //
@@ -65,30 +52,6 @@ type SearchOptions struct {
 	AssembleMissing bool
 
 	OnProgress func(percent float64, message string)
-}
-
-// SearchHit is a single matching entry found in a snapshot.
-type SearchHit struct {
-	BackupID     string `json:"backup_id"`
-	SnapshotTime int64  `json:"snapshot_time"` // unix seconds
-	Path         string `json:"path"`          // archive-relative, forward slashes
-	OriginPath   string `json:"origin_path"`   // reconstructed absolute origin, "" if no meta
-	IsDir        bool   `json:"is_dir"`
-	Size         uint64 `json:"size"`
-	ModTime      int64  `json:"mtime"`
-	FromCache    bool   `json:"from_cache"`
-}
-
-// SearchResult bundles the matches with a summary of what was (and wasn't)
-// scanned, so the UI can warn when results may be incomplete.
-type SearchResult struct {
-	Hits               []SearchHit `json:"hits"`
-	SnapshotsInRange   int         `json:"snapshots_in_range"` // snapshots within the From/To period; 0 => widen the dates
-	SnapshotsSearched  int         `json:"snapshots_searched"`
-	SnapshotsSkipped   int         `json:"snapshots_skipped"` // uncached and AssembleMissing=false, or failed to assemble
-	SnapshotsAssembled int         `json:"snapshots_assembled"`
-	Truncated          bool        `json:"truncated"` // hit maxSearchHits
-	Cancelled          bool        `json:"cancelled"`
 }
 
 // CancelFileSearch requests the running search to stop at the next snapshot

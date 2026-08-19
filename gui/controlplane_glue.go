@@ -311,6 +311,15 @@ func cpCheckPBSReachability(cfg *Config) *bool {
 	return &reachable
 }
 
+// cpErr is the shape a failed command reports back to the portal.
+//
+// Untagged, unlike the browse handlers it mostly serves: the run-log handler
+// is compiled into both builds and uses it too, and one helper with two
+// tagged copies is a worse answer than one helper.
+func cpErr(msg string) controlplane.CommandResult {
+	return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": msg}}
+}
+
 // cpHandleCommand executes server commands. Idempotence: run_backup rides
 // on the runningJobs de-dup in executeScheduledJob, so a re-delivered
 // command while the job runs is a clean no-op.

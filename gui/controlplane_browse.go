@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 // controlplane_browse.go — the agent side of PORTAL-DELEGATED image browsing.
@@ -264,8 +267,4 @@ func cpEncodeEntries(entries []SnapshotEntry) ([]map[string]interface{}, bool) {
 		})
 	}
 	return out, truncated
-}
-
-func cpErr(msg string) controlplane.CommandResult {
-	return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": msg}}
 }

@@ -66,6 +66,13 @@ func (s *NimbusService) run() {
 		writeErrorLog(fmt.Sprintf("VSS cleanup at startup reported error: %v", err))
 	}
 
+	// Trim stale restore listing caches in the background (best-effort).
+	// Moved here from the GUI's startup with the restore engine: the service
+	// writes this cache, so the service ages it out.
+	go func() {
+		trimSnapshotTreeCache(30 * 24 * time.Hour)
+	}()
+
 	// Recalculate stale nextRun values (e.g. after service restart or missed window)
 	s.app.RecalculateNextRuns()
 
@@ -103,6 +110,27 @@ func (s *NimbusService) run() {
 	// here is the service-side evaluation, so it already has break-glass
 	// folded in and does not need a round trip.
 	s.apiServer.SetLockedFunc(func() bool { return ControlPolicy().GUIReadOnly })
+
+	// The restore control. Same shape and the same reasoning as the lockdown
+	// predicate above, for the capability that decides whether this machine
+	// may restore at all.
+	//
+	// THIS IS THE GATE. Before the restore rewire the console evaluated
+	// `file_restore` itself, in the process the policy exists to restrain;
+	// now it asks the service to restore and the service decides. The api
+	// package refuses when no predicate is installed, so a future edit that
+	// drops this line fails closed — restore stops working, loudly, instead
+	// of quietly becoming ungated.
+	s.apiServer.SetRestoreAllowedFunc(func(right string) bool {
+		switch right {
+		case api.RightFileRestore:
+			return ControlPolicy().FileRestore
+		}
+		// An op declaring a right this build has never heard of is a version
+		// skew, and the safe reading of "I do not know what you are asking
+		// for" is no.
+		return false
+	})
 
 	// The panel's connection tiles. The provider serves from a cache that a
 	// background sweep refreshes, so a console left open cannot generate

@@ -60,6 +60,9 @@ Every reader entry point calls `attachRestoreKey` immediately after
 | `listSnapshotViaCatalog` | `gui/restore_inline.go` | the fast catalog listing |
 | `openImageReader` | `gui/imagebrowse_core.go` | image browse, download, restore — including the ones NimbusControl drives remotely |
 
+All three are `service`-only since the rewire below: they are the engine, and
+the console no longer compiles it.
+
 `attachRestoreKey` does four things, in this order:
 
 1. Reads `index.json.blob` through the reader session and parses it.
@@ -176,36 +179,108 @@ appears.
 
 ---
 
-## Open — needs a decision
+## The rewire: restore moved into the service
 
-**A GUI on Windows may not be able to read the key file.** Phase F gave
-`backup-key.json` a deliberately narrow ACL (`gui/keyacl_windows.go`): SYSTEM
-and Administrators only, *no* `S-1-5-4` INTERACTIVE, on the reasoning that "the
-GUI links no backup engine, so a console user has no business reading it".
+Phase G left a question open — a GUI on Windows cannot read the key file,
+because phase F gave `backup-key.json` an ACL of SYSTEM and Administrators
+only. Three ways out were written down here: relax the ACL, serve the key to
+the console over the local API, or **delegate the whole restore to the
+service**.
 
-That reasoning was incomplete. The GUI links no *backup* engine — CI asserts
-it — but it does link the **restore** engine, and restore now needs the key.
-A non-elevated interactive user therefore gets a permissions error rather than
-a restore. The DEK itself is not the obstacle: DPAPI is machine-scope
-specifically so the service and a user-context GUI share it.
+CJ chose the third, and named why the question existed at all: earlier work was
+left open. The architecture rule predates this phase — *the service owns all
+the active pieces of the client software; the GUI is a client that talks only
+to the service; every API call is gated on whether the caller is permitted by
+the server to make it*. Backup was rewired that way in phase D. Restore was
+not, and phase G's key problem was the first thing to trip over it.
 
-Three ways out, and this is a product decision rather than a code one:
+So this is not a workaround for an ACL. The ACL was right; the console was in
+the wrong place.
 
-1. **Relax the ACL** to include INTERACTIVE. Simple; undoes a deliberate
-   hardening.
-2. **Serve the key to the GUI over the local API.** The GUI↔service seam
-   already exists, is token-authenticated and has a lockdown allowlist. The key
-   still ends up in the GUI process, so the ACL becomes "token-holders only"
-   rather than "not interactive users".
-3. **Delegate the whole restore to the service** via a new local-API route, so
-   the key never leaves the service at all. Architecturally the most
-   consistent with "one pipeline in the service" — and the largest piece of
-   work, because restore is long-running, cancellable and has a browse UI.
+### What moved
 
-Until this is settled, the failure is at least *legible*: the key store's own
-permission error is carried verbatim into the refusal.
+Everything that reads a datastore. The console keeps its bindings — same
+names, same arguments, same events, so the front end did not change — and each
+one now says the same thing to the service over the local API:
 
----
+| console binding | op | service |
+|---|---|---|
+| `ListSnapshots` | `snapshots` | `ListSnapshotsInline` |
+| `ListSnapshotContents` | `contents` | `ListSnapshotContentsInline` |
+| `GetSnapshotMeta` | `meta` | `ReadSnapshotMetaInline` |
+| `RestoreSnapshot` | `restore` | `RestoreSnapshotInline` |
+| `DownloadSelection` | `download` | `downloadSelection` |
+| `SearchFiles` / `CancelSearch` | `search` / `cancel-search` | `SearchFilesInline` |
+| `ListImagePartitions` | `image-partitions` | `ListImagePartitions` |
+| `ListImageContents` | `image-contents` | `ListImageContents` |
+| `ListImageDirectory` | `image-directory` | `ListImageDirectory` |
+| `DownloadImageSelection` | `image-download` | `DownloadImageSelection` |
+| `RestoreImageSelection` / `CancelImageRestore` | `image-restore` / `cancel-image` | `RestoreImageSelection` |
+
+Three routes carry all of it — `/restore/query`, `/restore/job`,
+`/restore/control`, plus `GET /restore/job/<id>` to watch one — because a route
+per operation would put the gate in a dozen places, and a gate in a dozen
+places is how three entry points came to have no gate at all.
+
+### The gate
+
+`gui/api/restore.go` holds ONE table naming every operation the console may ask
+for and the permission each requires. The check runs before dispatch, on the
+far side of an authenticated socket, against a predicate the service installs
+from `ControlPolicy().FileRestore`.
+
+Three properties are deliberate:
+
+- **An undeclared op is refused.** Adding a handler case grants nothing; the
+  declaration is where the permission is written down.
+- **No predicate means no restore.** The api package refuses when none is
+  installed, so an edit that drops the wiring in `service.go` breaks restore
+  loudly rather than quietly ungating it.
+- **The check repeats on collection.** A job permitted at 09:00 and still
+  running at 09:05 stops being collectable the moment the org revokes restore.
+
+Restore is *not* in the read-only allowlist: a locked console is a status page,
+and browsing a backup is not a status.
+
+### What this fixes beyond the key
+
+- **The key never enters the console process.** The ACL stays as phase F wrote
+  it, and the open question is closed rather than traded away.
+- **PBS credentials never enter it either.** The console names a server by its
+  configured id; base URL, auth id and secret are resolved in the service, by
+  the process that owns `config.json`.
+- **The policy check is no longer inside the process it restrains.** That is
+  what made the August 2026 gap possible to have.
+- **Space enforcement is done by the writer.** The console keeps its warning
+  dialog; the block lives in `download_service.go`, running as the account that
+  writes the bytes.
+
+### How it is enforced
+
+CI asserts the console **compiles** no engine, by asking the toolchain for each
+build's file list and checking every engine file is in the service's set and
+none of the console's. That check cannot be vacuous: it fails if a file is
+missing from the service side too, so a rename or a deletion breaks it rather
+than satisfying it.
+
+The `go tool nm` probe is kept as a second opinion and is documented as the
+weaker one. The linker drops what nothing reaches, so an engine that is
+compiled in but currently uncalled can leave no symbol behind — "no symbol" is
+evidence, "not compiled" is proof.
+
+### What is worse than before, honestly
+
+- **A restore is polled, not streamed.** The console asks every 500ms and
+  translates each state into the event the front end already listened for. It
+  is a loopback request on the same machine, and it matches how backup runs are
+  already observed, but it is a poll.
+- **Two cancels exist conceptually** — the job's context and the engine's own
+  cancellation. Only the engine's is used, because it stops at a boundary it
+  chooses (a snapshot for search, a file for an image restore) and so leaves
+  nothing half-written. The context is carried unused and says so.
+- **One image operation at a time.** The engine already had a single cancel
+  slot, so this was always true; it is now stated and refused explicitly
+  instead of silently clobbering.
 
 ## What is not done in phase G
 
@@ -244,7 +319,20 @@ DPAPI protector or control plane is needed.
 
 `gui/restorekey_wiring_test.go` — source-level pins on the three reader entry
 points, in the same spirit and with the same honest limitation as
-`gui/backupkey_wiring_test.go`.
+`gui/backupkey_wiring_test.go`. `service`-tagged since the rewire, like the
+code it pins.
+
+`gui/api/restore_test.go` — the gate, swept over the declared op table: every
+op refused when `file_restore` is off (403, and the engine never reached),
+every op reaching the engine when it is on, an unconfigured server refusing,
+an undeclared op refused before dispatch, and the routes refused under
+lockdown. It replaces `gui/restore_policy_test.go`, which swept the same
+property one layer up while the gate still lived in the console.
+
+`gui/restore_ops_test.go` — the three places an op name is written down (the
+console's constants, the gate's table, the service's dispatch) must agree.
+Drift between them fails on a customer's machine and fails quietly: a console
+asking for an undeclared op gets a 400 that reads like a broken restore.
 
 Five sabotages were run and all five were caught by the intended test:
 accepting whatever a source offers; letting an encrypted blob through the plain

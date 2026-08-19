@@ -89,31 +89,3 @@ func adFromPersistedState() (*controlplane.BackupKeyAd, error) {
 		return nil, ErrBackupKeyUnknown
 	}
 }
-
-// fetchKeyMaterial calls the control plane for key material and checks it is
-// material at all before it goes anywhere.
-//
-// UNTAGGED, unlike the rest of the gate's run-time half, because RESTORE needs
-// it too and restore lives in both builds. It was a method on *App and did not
-// use the receiver — the control-plane client is package state — so nothing was
-// lost by making it a function, and keeping it as a method would have meant a
-// second copy for the restore path to call.
-//
-// `mode` decides how the server rate-limits and what the release audit records;
-// see controlplane.KeyMode* for what each one means.
-func fetchKeyMaterial(mode, runUUID string) (*controlplane.BackupKeyMaterial, error) {
-	cpMu.Lock()
-	c := cpClient
-	cpMu.Unlock()
-	if c == nil {
-		return nil, errors.New("no control server is configured on this machine")
-	}
-	m, err := c.FetchBackupKey(controlplane.BackupKeyRequest{Mode: mode, RunUUID: runUUID})
-	if err != nil {
-		return nil, err
-	}
-	if m == nil || m.KeyID == "" {
-		return nil, errors.New("the control server returned no backup key")
-	}
-	return m, nil
-}

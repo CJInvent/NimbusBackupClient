@@ -318,6 +318,17 @@ jobs:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # EXPLICIT, not inherited. On a pull_request run gitleaks-action calls
+    # GET /repos/{o}/{r}/pulls/{n}/commits to scan the PR's commits, and a
+    # job that narrows permissions to `contents: read` gets a 403 there --
+    # the action dies before scanning a byte while the branch still looks
+    # green. That is exactly what happened in NimbusControl (runs 32249306107
+    # and 32249335893, fixed at 37f93d1); this job passes today only because
+    # it inherits the repository default, which an org-wide settings change
+    # can take away without touching this file.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -760,14 +771,71 @@ jobs:
           GOWORK: off
         run: wails build -clean -platform windows/amd64 -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
 
-      # The GUI must contain NO backup engine.
+      # The GUI must contain NO ENGINE AT ALL -- backup or restore.
+      #
+      # This is the FILE-SET assertion, and it is the primary one. It asks the
+      # Go toolchain which files it would compile into each build and checks
+      # that every engine file is in the service's set and in none of the
+      # console's. That cannot be vacuous: the file list is exactly what the
+      # compiler uses, and the check fails if a file is missing from the
+      # SERVICE side too -- so deleting or renaming an engine file breaks the
+      # assertion instead of silently satisfying it.
+      #
+      # The symbol probe below is kept as a second opinion, but it is the
+      # weaker of the two: the linker prunes aggressively, and an engine that
+      # is present-but-unreached can leave no symbol behind. "No symbol" is
+      # evidence; "not compiled" is proof.
+      - name: Assert the GUI compiles no engine
+        working-directory: gui
+        shell: pwsh
+        env:
+          GOWORK: off
+        run: |
+          $engine = @(
+            'backup_pipeline.go',      # the backup engine (docs/V4-PIPELINE.md 3.1)
+            'restore_inline.go',       # archive restore, listing, metadata
+            'restore_search.go',       # cross-snapshot search
+            'restore_cache.go',        # the listing cache the engine writes
+            'imagebrowse_core.go',     # volume-image browse, download, restore
+            'zipstream_core.go',       # streaming zip packaging for extractions
+            'download_service.go',     # the Browse tab's download, service side
+            'restorekey.go',           # which key opens a snapshot
+            'restorekey_attach.go',    # attaching it to a reader
+            'restore_service.go'       # the local API's restore dispatch
+          )
+
+          function FileSet($tags) {
+            $out = & go list -tags $tags -f '{{join .GoFiles "`n"}}' .
+            if ($LASTEXITCODE -ne 0) { throw "go list failed for tags '$tags'" }
+            return $out
+          }
+
+          $gui = FileSet ''
+          $svc = FileSet 'service'
+          if ($gui.Count -lt 10 -or $svc.Count -lt 10) {
+            throw "file lists look empty ($($gui.Count)/$($svc.Count)); an absence would prove nothing"
+          }
+
+          $bad = @()
+          foreach ($f in $engine) {
+            if ($svc -notcontains $f) {
+              $bad += "$f is not in the SERVICE build at all -- renamed or deleted? update this list"
+            }
+            if ($gui -contains $f) {
+              $bad += "$f is compiled into the GUI; the console must link no engine"
+            }
+          }
+          if ($bad) {
+            $bad | ForEach-Object { Write-Host "  $_" }
+            throw "The GUI must not compile an engine (docs/V4-PIPELINE.md 3.1, docs/V4-RESTORE.md)"
+          }
+          Write-Host "OK: $($engine.Count) engine files, all service-only"
+
+      # A second opinion on the same property, from the linked binary.
       #
       # CJ's decision (2026-08-05, docs/V4-PIPELINE.md 3.1): the front end
       # links no engine at all -- absent, not gated -- so a modified GUI has
       # nothing to call and the escape hatch lives in the service instead.
-      # That property is enforced by ONE build tag on backup_pipeline.go, and
-      # a build tag is exactly the kind of thing a later refactor removes
-      # without noticing.
       #
       # It is asserted against a PROBE binary rather than the shipped one.
       # `wails build` strips symbols, so `go tool nm` on build/bin exits 1
@@ -776,7 +844,11 @@ jobs:
       # with the same tags and is not stripped, so the symbol table is real.
       # The main.main guard below is what stops an empty table being read as
       # a clean result.
-      - name: Assert GUI links no backup engine
+      #
+      # Note its LIMIT, which is why the file-set check above is the primary
+      # one: the linker drops what nothing reaches, so this step can pass for
+      # an engine that is compiled in but currently uncalled.
+      - name: Assert GUI links no engine symbols
         working-directory: gui
         shell: pwsh
         env:
@@ -790,13 +862,13 @@ jobs:
             if (-not ($syms | Select-String -Pattern 'main\.main')) {
               throw "probe has no symbol table; an absence of engine symbols would prove nothing"
             }
-            $engine = $syms | Select-String -Pattern 'RunBackupInline|RunMachineBackup|runBackupPipeline'
+            $engine = $syms | Select-String -Pattern 'RunBackupInline|RunMachineBackup|runBackupPipeline|RestoreSnapshotInline|SearchFilesInline|ListSnapshotsInline|openImageReader|attachRestoreKey'
             if ($engine) {
-              Write-Host "GUI build contains backup engine symbols:"
+              Write-Host "GUI build contains engine symbols:"
               $engine | ForEach-Object { Write-Host "  $_" }
-              throw "The GUI must not link a backup engine (docs/V4-PIPELINE.md 3.1)"
+              throw "The GUI must not link an engine (docs/V4-PIPELINE.md 3.1, docs/V4-RESTORE.md)"
             }
-            Write-Host "OK: no backup engine symbols in the GUI build"
+            Write-Host "OK: no engine symbols in the GUI build"
           } finally {
             Remove-Item -Force -ErrorAction SilentlyContinue nm-probe.exe
           }

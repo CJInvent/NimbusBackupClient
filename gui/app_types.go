@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"sync"
 
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
@@ -16,11 +15,13 @@ type App struct {
 	mode             api.ExecutionMode
 	isServiceProcess bool // True if running as Windows Service (never re-detect mode)
 
-	lastImageTruncated bool               // legacy: kept for the LastImageListTruncated binding (always false now)
-	lastImageKey       string             // cache key of the most recent partition scan
-	ibRestoreMu        sync.Mutex         // guards ibRestoreCancel
-	ibRestoreCancel    context.CancelFunc // set while an image restore runs; nil otherwise
-
+	// lastImageTruncated is the console's memory of whether the SERVICE's
+	// last partition scan hit its entry cap, so LastImageListTruncated can
+	// answer without a second round trip. The scan itself, its cache key and
+	// its cancellation live in the service (imagebrowse_core.go) — they are
+	// engine state, and the console holding a copy of them was an artifact of
+	// the two once being one process.
+	lastImageTruncated bool
 }
 
 // NewApp creates a new App application struct

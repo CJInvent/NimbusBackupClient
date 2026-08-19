@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 // imagebrowse_core.go — VOLUME (machine/image) backup browsing, shared by
@@ -82,24 +85,18 @@ func normalizeImageBackupType(bt string) string {
 	}
 }
 
-// ImagePartition is the JSON shape behind the Browse tab's partition picker.
-// Allocated is the partition's size from the partition table; Used comes from
-// the filesystem itself ($Bitmap / FAT / exFAT allocation bitmap) and is only
-// meaningful when UsedKnown is true — we show "—" rather than guess.
-type ImagePartition struct {
-	Index          int    `json:"index"`
-	Name           string `json:"name"`         // GPT partition name
-	Type           string `json:"type"`         // "Windows data", "EFI system", ...
-	Filesystem     string `json:"filesystem"`   // ntfs | fat32 | exfat | refs | bitlocker | none
-	VolumeLabel    string `json:"volume_label"` // from the filesystem, when it has one
-	AllocatedBytes int64  `json:"allocated_bytes"`
-	UsedBytes      int64  `json:"used_bytes"`
-	UsedKnown      bool   `json:"used_known"`
-	FileTableBytes int64  `json:"file_table_bytes"` // $MFT size on NTFS — the download cost of Browse
-	FileTableFrags int    `json:"file_table_frags"` // how many on-disk fragments it is in
-	Browsable      bool   `json:"browsable"`
-	Reason         string `json:"reason"` // why it is not browsable, in plain words
-}
+// Image-operation state, package-level rather than fields on App.
+//
+// One App exists per process, so package scope is equivalent — and it keeps
+// the untagged App struct free of fields only this file uses, which the
+// default lint pass would (correctly) report as unused in the console build.
+// gui/ibemit_service.go's lastIbEmitStep is the same trade for the same
+// reason.
+var (
+	lastImageKey    string             // cache key of the most recent partition scan
+	ibRestoreMu     sync.Mutex         // guards ibRestoreCancel
+	ibRestoreCancel context.CancelFunc // set while an image restore runs; nil otherwise
+)
 
 // imageTreeCache avoids re-walking a partition the user already opened this
 // session. Snapshots are immutable, so the only invalidation is process exit.
@@ -352,8 +349,8 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	if !forceRefresh {
 		if c, ok := imageTreeCache[key]; ok {
 			imageTreeMu.Unlock()
-			a.lastImageKey = key
-			a.lastImageTruncated = false
+			lastImageKey = key
+
 			return c.children("/"), nil
 		}
 	}
@@ -414,8 +411,8 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	imageTreeMu.Lock()
 	imageTreeCache[key] = result
 	imageTreeMu.Unlock()
-	a.lastImageKey = key
-	a.lastImageTruncated = false
+	lastImageKey = key
+
 	writeBackupLog(fmt.Sprintf("ImageBrowse: cached %d entries from %s partition %d",
 		len(result.entries), diskArchive, partIndex))
 	return result.children("/"), nil
@@ -438,11 +435,6 @@ func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskAr
 	}
 	return c.children(dir), nil
 }
-
-// LastImageListTruncated reports whether the last ListImageContents hit the
-// entry cap. Separate accessor so ListImageContents keeps the exact return
-// shape of the (known-good) directory lister.
-func (a *App) LastImageListTruncated() bool { return a.lastImageTruncated }
 
 // DownloadImageSelection packages the selection as a ZIP, STREAMED in one
 // pass to destPath: PBS chunks -> NTFS parser -> zip entry -> disk, nothing
@@ -491,13 +483,13 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 	// Cancellable, same registration the restore path uses — the one Cancel
 	// button covers both.
 	ctx, cancel := context.WithCancel(context.Background())
-	a.ibRestoreMu.Lock()
-	a.ibRestoreCancel = cancel
-	a.ibRestoreMu.Unlock()
+	ibRestoreMu.Lock()
+	ibRestoreCancel = cancel
+	ibRestoreMu.Unlock()
 	defer func() {
-		a.ibRestoreMu.Lock()
-		a.ibRestoreCancel = nil
-		a.ibRestoreMu.Unlock()
+		ibRestoreMu.Lock()
+		ibRestoreCancel = nil
+		ibRestoreMu.Unlock()
 		cancel()
 	}()
 	cancelled := func() bool {
@@ -589,13 +581,13 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	// Register this restore as cancellable. The frontend Cancel button calls
 	// CancelImageRestore, which fires this context.
 	ctx, cancel := context.WithCancel(context.Background())
-	a.ibRestoreMu.Lock()
-	a.ibRestoreCancel = cancel
-	a.ibRestoreMu.Unlock()
+	ibRestoreMu.Lock()
+	ibRestoreCancel = cancel
+	ibRestoreMu.Unlock()
 	defer func() {
-		a.ibRestoreMu.Lock()
-		a.ibRestoreCancel = nil
-		a.ibRestoreMu.Unlock()
+		ibRestoreMu.Lock()
+		ibRestoreCancel = nil
+		ibRestoreMu.Unlock()
 		cancel()
 	}()
 	cancelled := func() bool {
@@ -804,9 +796,9 @@ var errImageRestoreCancelled = errors.New("[NB-3429] restore cancelled by user")
 // The restore loop checks between files, so cancellation takes effect at the
 // next file boundary (a large file in flight finishes its current write).
 func (a *App) CancelImageRestore() {
-	a.ibRestoreMu.Lock()
-	cancel := a.ibRestoreCancel
-	a.ibRestoreMu.Unlock()
+	ibRestoreMu.Lock()
+	cancel := ibRestoreCancel
+	ibRestoreMu.Unlock()
 	if cancel != nil {
 		cancel()
 		writeBackupLog("ImageBrowse: cancel requested for in-progress restore")

@@ -22,6 +22,12 @@ type Server struct {
 
 	// lockedState carries the read-only predicate (readonly.go).
 	lockedState
+	// restoreAllowedState carries the `file_restore` predicate (restore.go).
+	restoreAllowedState
+
+	// restoreJobs holds long-running restore work started by the console.
+	// Separate from `runs` on purpose — see restore_jobs.go.
+	restoreJobs *restoreJobRegistry
 	// connectionsState carries the panel's data provider (connections.go).
 	connectionsState
 
@@ -62,6 +68,8 @@ func NewServer(addr string, handler BackupHandler, token string) *Server {
 		token: token,
 		mux:   http.NewServeMux(),
 		runs:  NewRunRegistry(),
+
+		restoreJobs: newRestoreJobRegistry(),
 	}
 
 	s.setupRoutes()
@@ -96,6 +104,13 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/config/save", s.handleSaveConfig)
 	s.mux.HandleFunc("/controlplane/status", s.handleControlPlaneStatus)
 	s.mux.HandleFunc("/controlplane/save", s.handleControlPlaneSave)
+
+	// Restore lives behind the service, like backup. Three routes and one
+	// declared op table — see restore.go for why it is shaped that way.
+	s.mux.HandleFunc("/restore/query", s.handleRestoreQuery)
+	s.mux.HandleFunc("/restore/job", s.handleRestoreJobStart)
+	s.mux.HandleFunc("/restore/job/", s.handleRestoreJobState)
+	s.mux.HandleFunc("/restore/control", s.handleRestoreControl)
 }
 
 // Start starts the HTTP server

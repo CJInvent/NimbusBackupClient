@@ -1,3 +1,6 @@
+//go:build service
+// +build service
+
 package main
 
 // zipstream_core.go — STREAMING zip packaging for image-backup selections.
@@ -13,9 +16,10 @@ package main
 // deflate would burn a core to shave little, and Store keeps throughput at
 // I/O speed AND makes the progress/ETA math honest (bytes in == bytes out).
 //
-// Used by BOTH processes: the GUI's "Package as ZIP" writes straight to the
-// user's chosen .zip; the service's portal-delegated image_extract streams
-// into its artifact upload. One implementation, mirrored behaviour.
+// SERVICE-ONLY, since the restore rewire. Both callers live there now: a
+// console "Package as ZIP" arrives over the local API as an image-download
+// job, and the portal's delegated image_extract streams into its artifact
+// upload. One implementation, two callers, neither of them in the GUI.
 
 import (
 	"archive/zip"
