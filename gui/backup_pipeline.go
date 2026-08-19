@@ -261,8 +261,31 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 	// RunMachineBackup never emits OnResult, so without them an image backup
 	// is never reported as finished at all — to the portal or to the local
 	// status panel.
-	cpFinish := attachControlPlaneHooks(&opts)
+	cpFinish, runUUID := attachControlPlaneHooks(&opts)
 	runFinish := attachRunRegistry(&opts)
+
+	// --- Gate ------------------------------------------------------------
+	//
+	// THE VERIFICATION GATE (V4-SPEC §11). Between reporting and execution,
+	// and this is the only place it runs.
+	//
+	// AFTER the reporters are attached, so a refusal is a reported FAILED run
+	// rather than a backup that quietly never happened — a machine that stops
+	// backing up must be visible in the portal, and the whole reason the gate
+	// exists is that silence and success look identical from a dashboard.
+	// BEFORE the engine, because refusing after data has been uploaded refuses
+	// nothing.
+	//
+	// The run uuid is passed to the server on a key fetch so the release audit
+	// has a run to match this release against.
+	key, escrow, keyErr := a.resolveBackupKeyForRun(runUUID)
+	if keyErr != nil {
+		writeBackupLog(fmt.Sprintf("[Pipeline] REFUSING to start: %v", keyErr))
+		cpFinish(keyErr)
+		runFinish(keyErr)
+		return keyErr
+	}
+	opts.BackupKey, opts.EscrowBlob = key, escrow
 
 	// --- Execute ---------------------------------------------------------
 
