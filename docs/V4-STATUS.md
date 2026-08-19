@@ -209,7 +209,7 @@ The `UploadChunk` wrapper collapse (audit CLIENT-3) is still outstanding and
 is now more attractive: `putChunk` has been extracted, so the shared tail
 already exists.
 
-### 5. Key delivery and the verification gate (spec phase F) — **STARTED**
+### 5. Key delivery and the verification gate (spec phase F) — **CLIENT HALF DONE**
 
 `controlplane/backupkey.go` holds the wire types and **the gate decision as a
 pure function**, in the same style as `breakglass.go` and `unmanaged.go`, so
@@ -283,35 +283,112 @@ because a tool release can change output or exit codes independently of any
 finding, and then red means "something changed" rather than "something is
 wrong".
 
-**STILL MISSING — nothing works end to end yet:**
+**WHAT WAS BUILT TO FINISH THE CLIENT HALF (2026-08-18)**
 
-- **The RAM handling itself.** Fetch, hold for the run, drop. Note that "RAM
-  only" is weaker in Go on Windows than it sounds: the GC copies, there is no
-  reliable zeroing, and the pagefile, crash dumps and hibernation all touch
-  process memory. It is a real defence against a stolen disk and a stolen
-  machine; it is not one against an attacker with live access to a running box.
-  Worth being precise about in anything customer-facing.
-- **Durable storage** via the EXISTING `gui/secrets.go` DEK and protector chain
-  (§6 — extend it, never add a second secret store). `encryptSecret` FALLS BACK
-  TO STORING PLAINTEXT when the DEK is unavailable and `decryptSecret` returns
-  `""` on failure; both are right for a re-enterable PBS token and wrong for a
-  backup key. The ephemeral branch means that fallback is no longer *needed* —
-  a machine with no protector takes the ephemeral path instead — but the
-  durable path must still fail loudly rather than degrade.
-- Calling the gate from the backup path, and reporting via `/key-status`.
-- **DONE:** writing `escrow_blob` to PBS as `rsa-encrypted.key.blob`
-  (`PBSClient.UploadEscrowBlob`). This is what makes the server-side org
-  recovery bundle redundant rather than load-bearing. Two things about it are
-  counterintuitive and are pinned by tests:
-  - It is **exempt from AES encryption**, like the manifest but for a different
-    reason: it is the thing that *gives* you the key, so encrypting it under
-    that key is circular and would destroy the recovery path that works without
-    our server. Upstream's restore confirms the intent — it downloads this blob
-    with no crypt config at all.
-  - Its manifest `crypt-mode` is the **backup's** mode (`encrypt`), not this
-    file's. That contradicts our own "crypt-mode describes the bytes" rule and
-    matches upstream, which records `crypto.mode` here. Matching stock PBS
-    matters more than internal consistency at a spot a recovery depends on.
+Four pieces, in dependency order — the list this document carried as "still
+missing" the day before.
+
+**1. Durable key storage — `gui/backupkey_store.go`.** The same DEK and the
+same protector chain as `gui/secrets.go`, per §6: extend that store, never
+stand up a second one. What is deliberately NOT shared is the failure
+behaviour, and that is the whole reason the file exists rather than a call to
+`encryptSecret`. `encryptSecret` falls back to *storing plaintext* when the DEK
+is unavailable; `decryptSecret` returns `""` on any failure so the caller cannot
+tell "nothing stored" from "there is something there and we could not open it".
+Both are right for a re-enterable PBS token and catastrophic for a backup key —
+the first writes the value that decrypts every snapshot in the clear beside the
+config, and the second makes "fetch" and "REFUSE" look identical. Every path
+here fails loudly, and a machine whose only protector is `plaintext` is refused
+a durable store outright rather than degraded into one.
+
+The escrow blob is stored **alongside** the key. It arrives only in the fetch
+response, and a durable agent fetches roughly twice in a machine's lifetime —
+so an agent that kept only the key would have nothing to write as
+`rsa-encrypted.key.blob` on any of the thousands of snapshots in between, and
+the recovery path would be missing from almost every backup it protects.
+
+The file's ACL is **narrower than the local-API token's**: LocalSystem and
+local Administrators, without `S-1-5-4` INTERACTIVE. The GUI links no backup
+engine, so a console user has no reason to be able to read the key that
+decrypts every snapshot.
+
+**2. The ephemeral holder — `gui/backupkey_ephemeral.go`.** There is no holder
+object, and that is the design. A package-level "current ephemeral key" with a
+drop-it-when-the-run-ends hook is a key that outlives its run every time the
+hook does not fire — a panic, a cancelled context, an engine returning down a
+path nobody updated. The lifetime is the pipeline's local variable instead: the
+key exists as an argument to one backup and becomes unreachable when that call
+returns, with nothing to remember to clean up. It also does **not** perform a
+theatrical wipe, because in Go on Windows there is nothing honest to wipe — see
+the file's own note on the GC, the pagefile, crash dumps and hibernation.
+
+**3. The gate, driven — `gui/backupkey_gate.go`, called from
+`runBackupPipeline`.** One entry point, one caller. It runs AFTER the reporters
+are attached and BEFORE the engine: a refusal has to be a reported FAILED run,
+because a machine that quietly stops backing up looks exactly like one that is
+fine, and refusing after the engine has uploaded data refuses nothing. The run
+uuid is threaded through so a key fetch names the run it is for — the release
+audit matches releases against the runs that followed, and omitting the uuid is
+the evasion the server deliberately flags.
+
+**THE STATE THAT IS NOT ON THE WIRE — the subtlest thing in this phase.** The
+obvious implementation reads the last check-in advertisement and treats "no
+advertisement" as "no encryption". That is wrong in a way that takes years to
+surface: an agent that has never reached the server, or a service that
+restarted during an outage, has no advertisement either — and backing up in the
+clear because nobody has told us otherwise is precisely the silent downgrade
+the three-state design exists to prevent. So:
+
+- `Agent.CurrentBackupKey()` returns the advertisement **and a `known` flag**.
+  `(nil, true)` is "this org does not encrypt"; `(nil, false)` is "we have not
+  been told". They are opposite instructions and must never collapse into one
+  nil pointer.
+- The org's answer is **persisted** (`encryption: on|off` in
+  `backup-key.json`), written on every check-in that delivers `backup_key:
+  null` — which is why `OnBackupKey` fires on the null case at all.
+- A machine that genuinely cannot tell — enrolled, never once reached the
+  server, nothing recorded — **refuses**, with a message saying it will work
+  once the server has been reached once. This is narrow and self-healing, and
+  it is the one place in this phase where a restrictive default stops a backup.
+  **Flagged for CJ as a judgement call**, not presented as settled: the
+  alternative is to back up in the clear on a machine whose org may mandate
+  encryption.
+- The advertisement deliberately does **not** expire with `PolicyMaxAge`.
+  Durable mode's entire promise is that an encrypted machine keeps backing up
+  through a control-plane outage; ageing it out would quietly convert every
+  such machine into one that stops.
+
+**4. `UploadEscrowBlob`, wired — before `UploadManifest` in both engines.**
+Via `PBSClient.SetEscrowBlob` / `UploadEscrowBlobIfEncrypted`, so the escrow
+bytes travel with the key they escrow rather than as another parameter threaded
+down through `backupDirectory`/`backupReal`/`uploadWorker`, which is how the
+two come to disagree. Unlike the ACL and status sidecars beside it, a failure
+here **fails the backup**: an encrypted snapshot with no escrow blob is
+recoverable only through our control plane, the single dependency the escrow
+design exists to remove.
+
+**HOW THE WIRING IS PINNED, honestly.** The decision, the store, the holder and
+the wire contract are all pinned by behaviour — a sweep over the decision's
+whole input space, sabotage-tested failure modes on the store, a fake server for
+the wire. The four *call sites* are not: they live inside `runBackupPipeline`
+and two Windows-only engines, which need an App, a live PBS and a physical disk
+to execute, and there is no harness here that reaches them. So
+`gui/backupkey_wiring_test.go` reads the source and asserts the gate is called
+before the engine, that its result reaches `BackupOptions`, that a refusal is
+finalized through both reporters, and that the escrow blob precedes the
+manifest in both engines. That is weaker than executing it and says so — a pin
+in the same spirit as the `nm` assertion that the GUI links no backup engine.
+It exists because this codebase has already been bitten by exactly the gap it
+covers: reverting `UploadChunk` to encrypt-only failed nothing, because every
+test exercised the helper directly. **It should be replaced by an end-to-end run
+against a real PBS**, which is also what phase E's outstanding caveat asks for.
+
+**STILL MISSING:**
+
+- **An end-to-end run against a live PBS with encryption on.** Nothing in
+  phases E or F has done this. It is phase E's stated caveat and it is now the
+  next task: every piece exists, none of them have met each other outside a
+  test.
 
 ## Building and testing
 
