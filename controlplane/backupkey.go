@@ -38,6 +38,35 @@ type BackupKeyAd struct {
 	MasterVersion     int    `json:"master_version"`
 }
 
+// BackupKeyRequest is the body of POST /api/agent/v1/backup-key.
+//
+// BOTH FIELDS EXIST FOR THE AUDIT, NOT FOR THE SERVER'S DECISION. The server
+// hands back the same material either way.
+//
+//   - Mode picks which rate limit applies (durable 3/hour, ephemeral 30/hour).
+//     It is CLIENT-ASSERTED and the server says so: an attacker with a stolen
+//     token can claim "ephemeral" for the looser limit. That is tolerable
+//     because the limit was never the control — the release audit is, and it
+//     does not need the client to be truthful.
+//   - RunUUID is what the release audit matches against. A release with no
+//     backup run behind it is what a stolen agent token looks like: an attacker
+//     can request at an ordinary rate but cannot produce the run that follows.
+//     OMITTING IT IS THE TRIVIAL EVASION, so the server flags a NULL run_uuid
+//     too — which means an honest agent must send it or its own legitimate
+//     fetches show up in the report.
+type BackupKeyRequest struct {
+	Mode    string `json:"mode"`               // "durable" | "ephemeral"
+	RunUUID string `json:"run_uuid,omitempty"` // the run this fetch is for
+}
+
+const (
+	// KeyModeDurable: the key will be stored under a real protector.
+	KeyModeDurable = "durable"
+	// KeyModeEphemeral: the key is held in memory for one run and never
+	// written down.
+	KeyModeEphemeral = "ephemeral"
+)
+
 // BackupKeyMaterial is the response from POST /api/agent/v1/backup-key.
 //
 // KeyB64 is base64 because JSON has no byte-string type and a raw AES key
