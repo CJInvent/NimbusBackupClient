@@ -203,6 +203,11 @@ func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchi
 	}
 	client.Connect(true, normalizeImageBackupType(backupType))
 
+	if err := attachRestoreKey(client, "image-browse"); err != nil {
+		client.Close()
+		return nil, 0, nil, ibFail(fmt.Errorf("[NB-3416] %v", err))
+	}
+
 	ra, size, err := client.NewFIDXReaderAt(diskArchive, 64, nil)
 	if err != nil {
 		client.Close()
