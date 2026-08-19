@@ -106,7 +106,37 @@ outage tolerance durable storage was chosen for in phase F, and reversing it
 here would undo that decision on the one path where it matters most.
 
 Adding the server's historical-key endpoint, or an operator-supplied recovery
-bundle, is **a new entry in that list and no change to any caller**.
+bundle, is **a new entry in that list and no change to any caller**. The first
+of those has since been built, and it cost exactly that: one source swapped,
+no caller touched.
+
+### The server source asks by name now
+
+The original remote source fetched whatever key the server currently ISSUES
+and compared it to what the snapshot wanted. That worked for the newest
+snapshot and silently failed for every older one — and it was the wrong
+request besides: it asked for the key to encrypt with in order to answer a
+question about decrypting.
+
+`POST /api/agent/v1/backup-key/for-fingerprint` answers the right question and
+**can return a RETIRED key**, which is the whole point: every other server read
+path filters `status = 'active'`, correctly, because serving a retired key for
+a BACKUP would let a machine keep writing under a key an operator rotated away
+from. A restore of a snapshot older than the rotation needs exactly that key.
+
+A `404` is `ok=false`, not an error — the snapshot may belong to another tenant
+or predate this server, and the search continues. Everything else IS an error,
+because an unreachable server must not read as a missing key: an operator told
+"no source could supply the key" during an outage goes hunting for something
+that is sitting in the vault.
+
+The fingerprint derivation now exists in two languages, so it is pinned in two
+repos against one shared vector (`pbscommon/crypt_test.go` and NimbusControl's
+`tests/key_delivery.php`). Each side is self-consistent, which is the hazard: a
+shared mistake passes every test either side writes about itself and shows up
+only as a restore that cannot find a key the machine is holding. Sabotaging the
+server's derivation confirmed it — every fetch in the suite still worked, and
+only the two vector assertions noticed.
 
 ### A wrong key is refused before it is used
 
@@ -284,10 +314,10 @@ evidence, "not compiled" is proof.
 
 ## What is not done in phase G
 
-- **Historical-key restore.** Every server read path filters
-  `status = 'active' LIMIT 1`, and the agent stores one key. The data to do
-  better already exists (`backup_keys.key_id`, `master_key_id`, `status`,
-  `retired_at`) and the client's source list is shaped to take it.
+- ~~**Historical-key restore.**~~ **Done** — see "The server source asks by
+  name now" above. The agent still stores one key; what changed is that it can
+  ask the server for another one by name, and the server will serve a retired
+  one for a restore while continuing to refuse to issue one for a backup.
 - **Recovery-bundle restore.** `Vault::exportMasterKey` +
   `escrowedKeysFor` produce a bundle that recovers a key with no server in the
   path, verified by `tests/key_recovery.php` — but nothing *in the product*

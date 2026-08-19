@@ -65,7 +65,7 @@ type keySource struct {
 // matters most.
 var keySources = []keySource{
 	{name: "this machine's key store", get: storedKeyForFingerprint},
-	{name: "the management server", get: activeKeyForFingerprint},
+	{name: "the management server", get: serverKeyForFingerprint},
 }
 
 // keyForFingerprint finds the raw key material a snapshot needs.
@@ -168,32 +168,64 @@ func storedKeyForFingerprint(fingerprint string) ([]byte, bool, error) {
 	return raw, true, nil
 }
 
-// activeKeyForFingerprint asks the management server for the key it currently
-// issues, and accepts it only if it is the one this snapshot needs.
+// serverKeyForFingerprint asks the management server for the key this snapshot
+// names, and accepts it only if that is what came back.
 //
-// THIS IS THE CURRENT KEY, NOT AN ARBITRARY ONE. The agent API serves the
-// active key and nothing else, which is right for backup and only half of what
-// restore needs. Asking for a historical key is a server change (an endpoint
-// that will serve a RETIRED key for restore while still refusing to issue one
-// for backup) and belongs in the same list as this, not inside it.
+// IT CAN RETURN A RETIRED KEY, which is the whole reason the endpoint exists.
+// Every other server read path filters `status = 'active'` — correctly, since
+// serving a retired key for a BACKUP would let a machine keep writing under a
+// key an operator rotated away from. Restore is the opposite case: a snapshot
+// older than the rotation needs exactly that key, and before
+// /backup-key/for-fingerprint there was no way to ask for it. The data was
+// intact, the key was in the vault, and nothing could put the two together.
 //
-// The path matters most for ephemeral machines, which by design hold no key at
-// rest and would otherwise be unable to restore even their own latest backup.
-func activeKeyForFingerprint(fingerprint string) ([]byte, bool, error) {
-	m, err := fetchKeyMaterial(controlplane.KeyModeRestore, "")
-	if err != nil {
-		return nil, false, err
-	}
-	raw, _, err := ephemeralKeyFromMaterial(m)
-	if err != nil {
-		return nil, false, err
-	}
-	cc, err := pbscommon.NewCryptConfig(raw)
-	if err != nil {
-		return nil, false, err
-	}
-	if pbscommon.FingerprintString(cc.Fingerprint()) != fingerprint {
+// This replaced a version that fetched whatever key the server currently
+// ISSUES and compared it to what the snapshot wanted. That worked for the
+// newest snapshot and silently failed for every older one — and it made the
+// wrong request besides: it asked for the key to encrypt with in order to
+// answer a question about decrypting.
+//
+// A 404 IS ok=false, NOT AN ERROR. "This org holds no key with that name" is
+// an ordinary outcome — the snapshot may have been written by another tenant,
+// or under a key that predates this server — and the search should continue to
+// the next source. Anything else IS an error: an unreachable server must not
+// read as a missing key, or an outage sends an operator hunting through the
+// vault for something that is sitting in it.
+func serverKeyForFingerprint(fingerprint string) ([]byte, bool, error) {
+	cpMu.Lock()
+	c := cpClient
+	cpMu.Unlock()
+	if c == nil {
+		// No control server configured. Not a fault: a standalone machine
+		// restoring its own unencrypted snapshots takes this path, and so does
+		// one whose key is already in the local store.
 		return nil, false, nil
 	}
+
+	m, err := c.FetchBackupKeyByFingerprint(fingerprint)
+	if err != nil {
+		if errors.Is(err, controlplane.ErrNoSuchKey) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	raw, _, err := ephemeralKeyFromMaterial(&m.BackupKeyMaterial)
+	if err != nil {
+		return nil, false, err
+	}
+	if m.Status == "retired" {
+		// Worth a line. An operator reading a restore log should be able to
+		// tell "this reached back past a rotation, as designed" from "this
+		// machine has fallen behind and nobody noticed".
+		writeBackupLog(fmt.Sprintf(
+			"[Restore] the management server supplied a RETIRED key for snapshot %s — this snapshot predates a key rotation",
+			fingerprint))
+	}
+
+	// The material still has to derive to what was asked for. The server
+	// searched by this fingerprint, so a mismatch would be a server bug rather
+	// than a rotation — and keyForFingerprint refuses it outright rather than
+	// moving on, which is the correct treatment for a source that answers a
+	// question it was not asked.
 	return raw, true, nil
 }

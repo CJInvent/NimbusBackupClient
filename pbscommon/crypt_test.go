@@ -172,6 +172,36 @@ func TestFingerprintMatchesUpstreamInput(t *testing.T) {
 	}
 }
 
+// THE SAME KEY FINGERPRINTS THE SAME WAY ON THE SERVER.
+//
+// A restore asks NimbusControl for a key BY FINGERPRINT (the value it reads
+// out of the snapshot manifest), so the server has to derive it too — in PHP,
+// from the same formula, in `Vault\BackupKeys::pbsFingerprint`. Each side is
+// self-consistent, which is exactly the problem: a shared mistake in the
+// derivation passes every test either side writes about itself, and shows up
+// only as "no source could supply the key" on a machine that is holding it.
+//
+// So this vector is pinned in BOTH repos, for the same key, as a literal.
+// NimbusControl's tests/key_delivery.php asserts the identical string. Changing
+// either derivation breaks a test on both sides rather than quietly splitting
+// them apart.
+//
+// The key is 32 bytes of 0x2b, chosen only because it is trivial to write down
+// in either language.
+func TestFingerprintMatchesTheServersDerivation(t *testing.T) {
+	const shared = "39:8d:47:8a:4e:9d:88:1c:6e:79:43:86:c7:7e:e6:36:c7:d0:c7:4a:bd:c5:d3:64:62:6c:78:7a:8f:25:f6:f9"
+
+	c, err := NewCryptConfig(bytes.Repeat([]byte{0x2b}, KeySize))
+	if err != nil {
+		t.Fatalf("NewCryptConfig: %v", err)
+	}
+	if got := FingerprintString(c.Fingerprint()); got != shared {
+		t.Errorf("fingerprint = %s\nwant         %s\n"+
+			"(NimbusControl derives this in PHP for the restore-by-fingerprint endpoint; "+
+			"a disagreement here means a machine cannot fetch the key for its own snapshot)", got, shared)
+	}
+}
+
 func TestEncryptedBlobLayout(t *testing.T) {
 	c, _ := NewCryptConfig(bytes.Repeat([]byte{0x33}, KeySize))
 	plaintext := []byte("chunk contents")
