@@ -344,7 +344,7 @@ func ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 	for _, v := range vols {
 		diskNum := int(v.DiskNumber)
 		for _, letter := range v.Letters {
-			// Extract just the drive letter (e.g., "C:" from "C:\\")
+			// Extract just the drive letter (e.g., "C:" from "C:\")
 			letter = strings.TrimRight(letter, "\\")
 			if !contains(diskLetters[diskNum], letter) {
 				diskLetters[diskNum] = append(diskLetters[diskNum], letter)
