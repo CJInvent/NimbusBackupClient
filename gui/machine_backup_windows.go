@@ -993,6 +993,20 @@ func RunMachineBackup(opts BackupOptions) error {
 		},
 	}
 
+	// Encryption, if the gate resolved a key. Same rule as the directory
+	// engine: a failure here fails the backup rather than falling through to
+	// an unencrypted run.
+	if len(opts.BackupKey) > 0 {
+		fp, err := client.SetCryptKey(opts.BackupKey)
+		if err != nil {
+			return fail(fmt.Sprintf("Enabling backup encryption failed: %v", err))
+		}
+		if err := client.SetEscrowBlob(opts.EscrowBlob); err != nil {
+			return fail(fmt.Sprintf("Recording the backup key escrow blob failed: %v", err))
+		}
+		writeBackupLog(fmt.Sprintf("[Encryption] enabled, key fingerprint %s", pbscommon.FingerprintString(fp)))
+	}
+
 	// Throttle chunk-level lines in the debug log: a 931GB disk is ~240k
 	// chunks and two log lines per chunk would write millions of lines. Log
 	// non-chunk messages always, chunk messages only when overall progress
@@ -1050,6 +1064,13 @@ func RunMachineBackup(opts BackupOptions) error {
 	}
 
 	progress(0.95, "Finalizing backup...")
+
+	// BEFORE the manifest — the manifest records the files it has seen, so a
+	// blob written after it is absent from what /finish validates.
+	if err := client.UploadEscrowBlobIfEncrypted(); err != nil {
+		return fail(fmt.Sprintf("Failed to write the backup key escrow blob: %v", err))
+	}
+
 	err := client.UploadManifest()
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to upload manifest: %v", err))

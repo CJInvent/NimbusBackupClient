@@ -43,6 +43,19 @@ type BackupOptions struct {
 	DisableSplit    bool     // When true, never auto-split regardless of size
 	SplitSizeBytes  uint64   // Auto-split threshold and per-bin target; 0 = default (SplitThreshold)
 	UploadLimitMbps float64  // Upload bandwidth cap in megabits/s (0 = unlimited)
+	// BackupKey is the raw 32-byte org backup key, or nil to back up in the
+	// clear. NIL MEANS "THIS ORG DOES NOT ENCRYPT" AND NOTHING ELSE — the
+	// engines take it at face value, because every other answer (key
+	// unavailable, storage unreadable, org unknown) has already been turned
+	// into a refusal by the gate before options are assembled. An engine that
+	// second-guessed this would be a second place that decides whether a
+	// customer's data is encrypted.
+	BackupKey []byte
+	// EscrowBlob is the server-produced rsa-encrypted.key.blob for BackupKey.
+	// Written beside the snapshot so it can be recovered from the org's master
+	// private key alone, with stock proxmox-backup-client and none of our
+	// software. Required whenever BackupKey is set.
+	EscrowBlob []byte
 	// Ctx stops the backup mid-stream. When it is cancelled the engine's reader
 	// loop aborts BEFORE the index is committed (PBS then discards the incomplete
 	// backup) and the deferred VSS Release removes the shadow copy and its
@@ -760,6 +773,21 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		},
 	}
 
+	// Encryption, if the gate resolved a key. Failing here FAILS THE BACKUP:
+	// the gate has already established that this org requires encryption, so
+	// falling through to an unencrypted run would be the silent downgrade the
+	// whole of §11 exists to prevent.
+	if len(opts.BackupKey) > 0 {
+		fp, err := client.SetCryptKey(opts.BackupKey)
+		if err != nil {
+			return fmt.Errorf("enabling backup encryption failed: %w", err)
+		}
+		if err := client.SetEscrowBlob(opts.EscrowBlob); err != nil {
+			return fmt.Errorf("recording the backup key escrow blob failed: %w", err)
+		}
+		writeBackupLog(fmt.Sprintf("[Encryption] enabled, key fingerprint %s", pbscommon.FingerprintString(fp)))
+	}
+
 	writeBackupLog("[DEBUG] PBS client created, starting directory backup loop")
 
 	// Backup each directory
@@ -1224,6 +1252,18 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 		writeBackupLog(fmt.Sprintf("WARNING: failed to serialize status sidecar: %v", sErr))
 	} else if upErr := client.UploadBlob(BackupStatusFilename, sidecarBytes); upErr != nil {
 		writeBackupLog(fmt.Sprintf("WARNING: failed to upload status sidecar: %v", upErr))
+	}
+
+	// The recovery path, written BEFORE the manifest. The manifest records the
+	// files it has seen, so a blob uploaded after it is absent from what
+	// /finish validates — the blob would sit in the snapshot and no restore
+	// tool would look for it.
+	//
+	// NOT best-effort, unlike the two sidecars above: an encrypted snapshot
+	// without its escrow blob is recoverable only through our control plane,
+	// which is the single dependency this file exists to remove.
+	if err := client.UploadEscrowBlobIfEncrypted(); err != nil {
+		return fmt.Errorf("failed to write the backup key escrow blob: %w", err)
 	}
 
 	// Upload manifest with retry

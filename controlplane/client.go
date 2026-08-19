@@ -124,8 +124,6 @@ func (c *Client) Checkin(req CheckinRequest) (*CheckinResponse, error) {
 	return &resp, nil
 }
 
-// ReportRun posts a phase change. Safe to retry: the server upserts by
-// RunUUID and its state machine is forward-only.
 // FetchBackupKey retrieves this agent's backup key material.
 //
 // CALL ONLY ON A MISMATCH. The server rate limits this to 3/hour per agent, and
@@ -135,9 +133,17 @@ func (c *Client) Checkin(req CheckinRequest) (*CheckinResponse, error) {
 //
 // A 404 means no key is assigned — distinct from an error, and distinct again
 // from an empty body, which is why the server never returns one.
-func (c *Client) FetchBackupKey() (*BackupKeyMaterial, error) {
+//
+// The request carries the mode and the run this fetch is for. Sending an empty
+// body would still return the key — the server defaults mode to durable and
+// accepts a missing run_uuid — but a fetch with no run behind it is exactly the
+// shape a stolen agent token produces, so an honest agent names its run.
+func (c *Client) FetchBackupKey(req BackupKeyRequest) (*BackupKeyMaterial, error) {
+	if req.Mode == "" {
+		req.Mode = KeyModeDurable
+	}
 	var out BackupKeyMaterial
-	if err := c.post("/api/agent/v1/backup-key", struct{}{}, &out, true); err != nil {
+	if err := c.post("/api/agent/v1/backup-key", req, &out, true); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -157,6 +163,8 @@ func (c *Client) ReportKeyStatus(rep KeyStatusReport) (*KeyStatusResponse, error
 	return &out, nil
 }
 
+// ReportRun posts a phase change. Safe to retry: the server upserts by
+// RunUUID and its state machine is forward-only.
 func (c *Client) ReportRun(r RunReport) error {
 	return c.post("/api/agent/v1/runs", r, nil, true)
 }

@@ -53,9 +53,14 @@ func takeRunReporter(backupID, backupType string) *controlplane.RunReporter {
 // and result reporting, and returns a FINALIZER the caller must invoke with
 // the engine's error return:
 //
-//	finish := attachControlPlaneHooks(&opts)
+//	finish, runUUID := attachControlPlaneHooks(&opts)
 //	err := RunMachineBackup(opts)
 //	finish(err)
+//
+// The run uuid is returned because the backup-key gate needs it: a key release
+// is audited against the run that followed it, and a fetch that names no run is
+// what a stolen agent token looks like. Empty when no control plane is
+// configured, which is also when there is no key to fetch.
 //
 // It wraps (not replaces) OnResult and installs OnPhase, so every existing
 // consumer keeps firing untouched.
@@ -80,14 +85,14 @@ func takeRunReporter(backupID, backupType string) *controlplane.RunReporter {
 // That makes it impossible for ANY engine, present or future, to leave a
 // run dangling in a non-terminal state -- the failure mode here was silence,
 // and silence is exactly what a monitoring product must never produce.
-func attachControlPlaneHooks(opts *BackupOptions) func(error) {
+func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 	kind := "directory"
 	if opts.BackupType == "vm" {
 		kind = "machine"
 	}
 	rep := takeRunReporter(opts.BackupID, kind)
 	if rep == nil {
-		return func(error) {} // control plane not configured
+		return func(error) {}, "" // control plane not configured
 	}
 	rep.SetPBSTarget(opts.BaseURL, opts.Datastore, opts.Namespace)
 
@@ -176,7 +181,7 @@ func attachControlPlaneHooks(opts *BackupOptions) func(error) {
 		// "preparing" forever, and closing that metadata gap is exactly
 		// what end-to-end backup-job correlation is for.
 		rep.Success(opts.BackupType, opts.BackupID, time.Now().Unix(), 0, 0, "")
-	}
+	}, rep.RunUUID()
 }
 
 func anyDirFailed(dirs []DirResult) bool {

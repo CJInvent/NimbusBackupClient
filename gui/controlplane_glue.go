@@ -102,6 +102,7 @@ func (a *App) StartControlPlane() {
 		BuildInventory: a.cpBuildInventory,
 		HandleCommand:  a.cpHandleCommand,
 		OnManagedJobs:  applyManagedJobsFromCheckin,
+		OnBackupKey:    applyBackupKeyFromCheckin,
 		OnPolicy: func(p controlplane.Policy) {
 			writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
 		},

@@ -132,3 +132,68 @@ func TestUploadEscrowBlobRefusesUselessInput(t *testing.T) {
 		t.Fatal("an escrow blob was accepted for an unencrypted backup")
 	}
 }
+
+// --- the client-held escrow blob ------------------------------------------
+//
+// UploadEscrowBlobIfEncrypted is what the two backup engines actually call, and
+// it is the piece that decides whether a snapshot ships with a recovery path.
+// The function it wraps was already tested; the wrapper is where the DECISION
+// lives, and a decision nobody exercises is the failure mode this codebase has
+// hit before (a unit-tested helper passing while its caller was reverted).
+
+func TestEscrowBlobIsNotHeldByAnUnencryptedClient(t *testing.T) {
+	pbs := &PBSClient{}
+	if err := pbs.SetEscrowBlob([]byte("something")); err == nil {
+		t.Fatal("an unencrypted client accepted an escrow blob; it describes a key nothing used")
+	}
+	// And the upload is a clean no-op there, not an error: an unencrypted
+	// backup is a legitimate configured state, not a fault.
+	if err := pbs.UploadEscrowBlobIfEncrypted(); err != nil {
+		t.Fatalf("an unencrypted backup was refused: %v", err)
+	}
+}
+
+// AN ENCRYPTED SNAPSHOT WITH NO ESCROW BLOB IS RECOVERABLE ONLY FROM OUR
+// CONTROL PLANE — the single dependency the escrow design exists to remove. It
+// must fail, not warn: a warning in a log nobody reads produces a fleet of
+// snapshots that look fine until the day the server is gone.
+func TestEncryptedClientWithNoEscrowBlobRefuses(t *testing.T) {
+	pbs := &PBSClient{}
+	if _, err := pbs.SetCryptKey(upstreamTestKey(t)); err != nil {
+		t.Fatalf("SetCryptKey: %v", err)
+	}
+	err := pbs.UploadEscrowBlobIfEncrypted()
+	if err == nil {
+		t.Fatal("an encrypted backup was allowed to proceed with no escrow blob")
+	}
+	if !strings.Contains(err.Error(), "unrecoverable") {
+		t.Errorf("error = %v; it must say what is actually at stake", err)
+	}
+}
+
+func TestEscrowBlobIsCopiedNotAliased(t *testing.T) {
+	pbs := &PBSClient{}
+	if _, err := pbs.SetCryptKey(upstreamTestKey(t)); err != nil {
+		t.Fatalf("SetCryptKey: %v", err)
+	}
+	blob := []byte("escrowed-key-bytes")
+	if err := pbs.SetEscrowBlob(blob); err != nil {
+		t.Fatalf("SetEscrowBlob: %v", err)
+	}
+	// The caller's slice is a decoded buffer it may reuse. Aliasing it would
+	// make the recovery path depend on what the caller did next.
+	blob[0] = 'X'
+	if pbs.EscrowBlob()[0] == 'X' {
+		t.Error("the client aliased the caller's escrow buffer")
+	}
+}
+
+func TestEmptyEscrowBlobIsRefusedAtTheSetter(t *testing.T) {
+	pbs := &PBSClient{}
+	if _, err := pbs.SetCryptKey(upstreamTestKey(t)); err != nil {
+		t.Fatalf("SetCryptKey: %v", err)
+	}
+	if err := pbs.SetEscrowBlob(nil); err == nil {
+		t.Fatal("an empty escrow blob was accepted; it looks like a recovery path until someone needs it")
+	}
+}

@@ -101,6 +101,16 @@ type CryptConfig struct {
 	encKey [KeySize]byte
 	idKey  [KeySize]byte
 	aead   cipher.AEAD
+
+	// escrowBlob is this key, RSA-wrapped to the org's master public key by
+	// the server — the bytes PBS stores as rsa-encrypted.key.blob.
+	//
+	// It lives HERE, on the key, rather than on PBSClient, because that is
+	// what it is: the same secret in another envelope. Holding it beside the
+	// key makes it impossible to have one without the other, and keeps the
+	// widely-constructed PBSClient struct free of a field that is meaningless
+	// unless `crypt` is set. See escrow.go for the accessors.
+	escrowBlob []byte
 }
 
 // NewCryptConfig derives everything from a 32-byte backup key.
