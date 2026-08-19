@@ -90,6 +90,19 @@ type SnapshotEntry struct {
 // SECURITY: Only lists snapshots from the specified PBS server/datastore/namespace
 // to prevent cross-server snapshot access.
 func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFingerprint, backupID string) ([]SnapshotInfo, error) {
+	// GATED, and it was not until 2026-08-19. Which snapshots exist, and
+	// when, is the first screen of the restore browser — an org that turned
+	// file restore off has said this machine's console does not get that.
+	//
+	// The wire contract is unambiguous (controlplane/types.go): "FileRestore
+	// =false: the GUI must hide/disable its restore browser and the local API
+	// must refuse restore operations on this machine." Three entry points
+	// never got the check, so the refusal was enforced on the two that did
+	// and simply absent here.
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
+
 	writeBackupLog(fmt.Sprintf("Listing snapshots for backup ID: %s on %s/%s/%s", backupID, baseURL, datastore, namespace))
 
 	client := &pbscommon.PBSClient{
@@ -437,6 +450,14 @@ func tryReadBackupMeta(reader *pbscommon.PXARReader) *BackupMeta {
 // snapshot, the meta is already there and no download is performed. Otherwise
 // the archive is downloaded + assembled (same cost as a listing).
 func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta, error) {
+	// Same gate, same reason, and this one is not merely metadata: on a cache
+	// miss it downloads and walks the archive to find the sidecar. Ungated it
+	// was a way to make a machine fetch snapshot content with file restore
+	// switched off.
+	if !ControlPolicy().FileRestore {
+		return nil, ErrRestoreDisabled
+	}
+
 	if opts.BaseURL == "" || opts.AuthID == "" || opts.Secret == "" {
 		return nil, fmt.Errorf("PBS connection parameters required")
 	}
