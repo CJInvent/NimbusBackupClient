@@ -804,17 +804,23 @@ jobs:
             'restore_service.go'       # the local API's restore dispatch
           )
 
-          function FileSet($tags) {
-            $out = & go list -tags $tags -f '{{join .GoFiles "`n"}}' .
-            if ($LASTEXITCODE -ne 0) { throw "go list failed for tags '$tags'" }
-            return $out
-          }
+          # Space-separated, and NO backtick in the template. A "`n" separator
+          # is a literal backtick+n inside a single-quoted PowerShell string,
+          # so `go list` emits one run-on line and every membership test below
+          # silently answers "not present" -- an assertion that passes by
+          # finding nothing. The count guard caught exactly that on the first
+          # run of this step; the template is now the plain one.
+          $tmpl = '{{range .GoFiles}}{{.}} {{end}}'
 
-          $gui = FileSet ''
-          $svc = FileSet 'service'
+          $gui = @((& go list -f $tmpl .) -split '\s+' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "go list failed for the GUI build" }
+          $svc = @((& go list -tags service -f $tmpl .) -split '\s+' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "go list failed for the service build" }
+
           if ($gui.Count -lt 10 -or $svc.Count -lt 10) {
             throw "file lists look empty ($($gui.Count)/$($svc.Count)); an absence would prove nothing"
           }
+          Write-Host "file sets: GUI $($gui.Count), service $($svc.Count)"
 
           $bad = @()
           foreach ($f in $engine) {
