@@ -122,7 +122,7 @@ cause — the GUI was the original backup engine and still behaves like one.
                     │   scheduler ─┐                │
                     │   portal cmd ├─► RunRegistry ─┼─► engine
                     │   local API ─┘   (one entry)  │   (machine|directory)
-                    └───────────┼───────────────────┘
+                    └───────────┬───────────────────┘
                                 │ local HTTP, token-authed
                     ┌───────────▼───────────────────┐
                     │  GUI (user session)           │
