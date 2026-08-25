@@ -16,7 +16,7 @@ package main
 // Command contract (payload -> result, all JSON):
 //
 //	image_partitions {pbs_server, backup_id, backup_time, backup_type}
-//	    -> {disks: [{disk, partitions: [ImagePartition]}]}
+//	    -> {disks: [{disk, partitions: [VolumePartition]}]}
 //	image_scan       {..., disk, part}
 //	    -> {total, entries: [...root children...]}   (also warms the tree cache)
 //	image_dir        {..., disk, part, dir}
@@ -85,7 +85,7 @@ func (a *App) cpHandleBrowseCommand(cmd controlplane.Command) (controlplane.Comm
 		if err != nil {
 			return cpErr(err.Error()), true
 		}
-		entries, lerr := a.ListImageContents(pbsID, backupID, snapshotID, backupType, disk, part, false)
+		entries, lerr := a.ListVolumeFiles(pbsID, backupID, snapshotID, backupType, disk, part, false)
 		if lerr != nil {
 			return cpErr(lerr.Error()), true
 		}
@@ -103,13 +103,13 @@ func (a *App) cpHandleBrowseCommand(cmd controlplane.Command) (controlplane.Comm
 		if dir == "" {
 			dir = "/"
 		}
-		entries, lerr := a.ListImageDirectory(pbsID, backupID, snapshotID, backupType, disk, part, dir)
+		entries, lerr := a.ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, disk, part, dir)
 		if lerr != nil {
 			// A cold cache (service restarted between scan and browse) is
 			// recoverable: rescan and retry once, transparently.
 			if strings.Contains(lerr.Error(), "NB-3428") {
-				if _, serr := a.ListImageContents(pbsID, backupID, snapshotID, backupType, disk, part, false); serr == nil {
-					entries, lerr = a.ListImageDirectory(pbsID, backupID, snapshotID, backupType, disk, part, dir)
+				if _, serr := a.ListVolumeFiles(pbsID, backupID, snapshotID, backupType, disk, part, false); serr == nil {
+					entries, lerr = a.ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, disk, part, dir)
 				}
 			}
 			if lerr != nil {
@@ -170,7 +170,7 @@ func (a *App) cpImagePartitions(pbsID, backupID, snapshotID, backupType string) 
 	}
 	out := make([]map[string]interface{}, 0, len(disks))
 	for _, d := range disks {
-		parts, perr := a.ListImagePartitions(pbsID, backupID, snapshotID, backupType, d)
+		parts, perr := a.ListVolumePartitions(pbsID, backupID, snapshotID, backupType, d)
 		entry := map[string]interface{}{"disk": d}
 		if perr != nil {
 			entry["error"] = perr.Error()
@@ -187,8 +187,8 @@ func (a *App) cpImagePartitions(pbsID, backupID, snapshotID, backupType string) 
 // and deletes the temp. Interim storage is exactly the zip's size — the old
 // extract-tree-then-zip needed it twice. The zip carries file DATA only: no
 // NTFS permissions, no ADS — by design for browser downloads; full-fidelity
-// restore is a local-GUI operation. Mirrors the GUI's DownloadImageSelection
-// via the same streamImageZip core, so the two paths cannot drift.
+// restore is a local-GUI operation. Mirrors the GUI's DownloadFilesFromVolume
+// via the same streamVolumeZip core, so the two paths cannot drift.
 func (a *App) cpImageExtract(cmdID int64, pbsID, backupID, snapshotID, backupType, disk string, part int, paths []string) controlplane.CommandResult {
 	if cpClient == nil {
 		return cpErr("control server client not initialised")
@@ -208,7 +208,7 @@ func (a *App) cpImageExtract(cmdID int64, pbsID, backupID, snapshotID, backupTyp
 			if perr != nil {
 				return perr
 			}
-			nFiles, nBytes, perr = streamImageZip(fs, files, total, tmp, a.ibEmitTask, nil)
+			nFiles, nBytes, perr = streamVolumeZip(fs, files, total, tmp, a.ibEmitTask, nil)
 			if perr != nil {
 				_ = tmp.Close()
 				return perr

@@ -3,6 +3,26 @@
 
 package main
 
+// NAMING, BECAUSE THIS IS WHERE THE CONFUSION LIVED (CJ, 2026-08-25).
+//
+// A volume backup stores a raw DISK IMAGE. This file reads FILES out of one.
+// Those are two different things and the old names conflated them:
+// "RestoreImageSelection" reads as "restore an image", which is the one thing
+// it does not do and the client must never do. The client cannot write a
+// partition back, and should not be able to.
+//
+// The rule now:
+//
+//   - NOUNS may say "image" when they name the stored disk image itself — the
+//     `imagebrowse` package parses one; `ImagePartition` was renamed to
+//     `VolumePartition` only because its binding is ListVolumePartitions.
+//   - VERBS say what actually happens to FILES: ListVolumePartitions,
+//     ListVolumeFiles, ListVolumeDirectory, DownloadFilesFromVolume,
+//     RestoreFilesFromVolume, CancelVolumeFileRestore.
+//   - "Full-image restore" / "machine-image restore" means the `nbd` path —
+//     mapping an image and booting it. That is a real, separate capability and
+//     the phrase is reserved for it. Do not use it for anything in this file.
+//
 // imagebrowse_core.go — VOLUME (machine/image) backup browsing, shared by
 // BOTH processes: the GUI's Browse tab AND the service's control-plane
 // delegation (the NimbusControl portal browses image backups by sending
@@ -35,16 +55,16 @@ import (
 	"security"
 )
 
-// imageWalkCap bounds a full-tree listing: memory AND the number of image
+// volumeWalkCap bounds a full-tree listing: memory AND the number of image
 // blocks pulled from PBS. Beyond it the tree is truncated with an honest
 // banner rather than silently partial.
-const imageWalkCap = 250000
+const volumeWalkCap = 250000
 
-// imageScanWorkers is how many chunk requests the $MFT plan keeps in flight.
+// volumeScanWorkers is how many chunk requests the $MFT plan keeps in flight.
 // They multiplex over one HTTP/2 connection to PBS, so this can be well above
 // the old value of 6 without opening connections; it is bounded inside
 // PlanPrefetch to a safe ceiling.
-const imageScanWorkers = 32
+const volumeScanWorkers = 32
 
 // resolveRestorePBS picks the PBS server to restore from. When pbsID is empty
 // the default PBS server is used. Falls back to legacy single-server fields
@@ -93,21 +113,21 @@ func normalizeImageBackupType(bt string) string {
 // gui/ibemit_service.go's lastIbEmitStep is the same trade for the same
 // reason.
 var (
-	lastImageKey    string             // cache key of the most recent partition scan
+	lastVolumeKey   string             // cache key of the most recent partition scan
 	ibRestoreMu     sync.Mutex         // guards ibRestoreCancel
-	ibRestoreCancel context.CancelFunc // set while an image restore runs; nil otherwise
+	ibRestoreCancel context.CancelFunc // set while a volume-file restore runs; nil otherwise
 )
 
-// imageTreeCache avoids re-walking a partition the user already opened this
+// volumeTreeCache avoids re-walking a partition the user already opened this
 // session. Snapshots are immutable, so the only invalidation is process exit.
 var (
-	imageTreeMu    sync.Mutex
-	imageTreeCache = map[string]*imageTree{}
+	volumeTreeMu    sync.Mutex
+	volumeTreeCache = map[string]*volumeTree{}
 )
 
-// imageTree is the Go-side cache of one partition scan: every entry, plus a
+// volumeTree is the Go-side cache of one partition scan: every entry, plus a
 // per-directory child index and rolled-up directory sizes, built once.
-type imageTree struct {
+type volumeTree struct {
 	entries  []SnapshotEntry
 	byDir    map[string][]int  // parent dir -> indices of children
 	dirSize  map[string]uint64 // dir path -> sum of all file bytes beneath
@@ -122,8 +142,8 @@ func imgParentDir(p string) string {
 	return p[:i]
 }
 
-func newImageTree(entries []SnapshotEntry) *imageTree {
-	t := &imageTree{
+func newVolumeTree(entries []SnapshotEntry) *volumeTree {
+	t := &volumeTree{
 		entries:  entries,
 		byDir:    make(map[string][]int, len(entries)/8+1),
 		dirSize:  make(map[string]uint64),
@@ -148,7 +168,7 @@ func newImageTree(entries []SnapshotEntry) *imageTree {
 
 // children returns dir's immediate children; directories carry their
 // rolled-up size so the size column is meaningful at every level.
-func (t *imageTree) children(dir string) []SnapshotEntry {
+func (t *volumeTree) children(dir string) []SnapshotEntry {
 	dir = strings.TrimSuffix(dir, "/")
 	if dir == "" {
 		dir = "/"
@@ -165,13 +185,13 @@ func (t *imageTree) children(dir string) []SnapshotEntry {
 	return out
 }
 
-// openImageReader opens a PBS reader session and returns a lazy io.ReaderAt
+// openVolumeReader opens a PBS reader session and returns a lazy io.ReaderAt
 // over one disk image, plus its size and a closer for the session.
 // lookahead=true enables image-linear read-ahead (right for extraction of
 // mostly-contiguous files); the $MFT scan passes false and uses an exact
 // PlanPrefetch from the run list instead — on a fragmented volume, linear
 // read-ahead between fragments drags in gigabytes of unrelated disk.
-func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive string, lookahead bool) (*pbscommon.FIDXReaderAt, int64, func(), error) {
+func (a *App) openVolumeReader(pbsID, backupID, snapshotID, backupType, diskArchive string, lookahead bool) (*pbscommon.FIDXReaderAt, int64, func(), error) {
 	cfg, err := a.resolveRestorePBS(pbsID)
 	if err != nil {
 		return nil, 0, nil, err
@@ -224,7 +244,7 @@ func (a *App) openImageReader(pbsID, backupID, snapshotID, backupType, diskArchi
 }
 
 // withPartition opens one partition's filesystem and hands it to fn.
-// partIndex is the 1-based index from ListImagePartitions — there is NO
+// partIndex is the 1-based index from ListVolumePartitions — there is NO
 // auto-selection: picking a partition for the user landed them inside the
 // WinRE recovery volume and looked like a bug, because it was one.
 func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int, lookahead bool,
@@ -233,7 +253,7 @@ func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive
 	if partIndex < 1 {
 		return ibFail(errors.New("[NB-3415] no partition selected — choose a partition to browse"))
 	}
-	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive, lookahead)
+	ra, size, closer, err := a.openVolumeReader(pbsID, backupID, snapshotID, backupType, diskArchive, lookahead)
 	if err != nil {
 		return err
 	}
@@ -263,14 +283,14 @@ func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive
 	return fn(fs, *chosen, ra)
 }
 
-// ListImagePartitions enumerates every partition on a disk image — regardless
+// ListVolumePartitions enumerates every partition on a disk image — regardless
 // of whether we can browse it — with its filesystem, allocated size, and used
 // size. The user chooses; we never choose for them.
-func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]ImagePartition, error) {
+func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]VolumePartition, error) {
 	if !ControlPolicy().FileRestore {
 		return nil, ErrRestoreDisabled
 	}
-	ra, size, closer, err := a.openImageReader(pbsID, backupID, snapshotID, backupType, diskArchive, false)
+	ra, size, closer, err := a.openVolumeReader(pbsID, backupID, snapshotID, backupType, diskArchive, false)
 	if err != nil {
 		return nil, err
 	}
@@ -281,9 +301,9 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskA
 		return nil, ibFail(fmt.Errorf("[NB-3414] read partition table of %s: %v", diskArchive, err))
 	}
 
-	out := make([]ImagePartition, 0, len(parts))
+	out := make([]VolumePartition, 0, len(parts))
 	for _, p := range parts {
-		ip := ImagePartition{
+		ip := VolumePartition{
 			Index:          p.Index,
 			Name:           p.Name,
 			Type:           p.Type,
@@ -333,33 +353,33 @@ func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskA
 	return out, nil
 }
 
-// ListImageContents scans one partition's file table and returns the ROOT
+// ListVolumeFiles scans one partition's file table and returns the ROOT
 // directory listing. The full tree stays in the Go-side session cache —
 // shipping 1.2M entries of JSON into the webview is what forced the old
-// 250k-entry truncation; per-directory listing (ListImageDirectory) has no
+// 250k-entry truncation; per-directory listing (ListVolumeDirectory) has no
 // such limit. Directory entries carry rolled-up sizes.
-func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArchive string,
+func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
 	if !ControlPolicy().FileRestore {
 		return nil, ErrRestoreDisabled
 	}
 
 	key := strings.Join([]string{pbsID, backupID, snapshotID, backupType, diskArchive, fmt.Sprint(partIndex)}, "|")
-	imageTreeMu.Lock()
+	volumeTreeMu.Lock()
 	if !forceRefresh {
-		if c, ok := imageTreeCache[key]; ok {
-			imageTreeMu.Unlock()
-			lastImageKey = key
+		if c, ok := volumeTreeCache[key]; ok {
+			volumeTreeMu.Unlock()
+			lastVolumeKey = key
 
 			return c.children("/"), nil
 		}
 	}
-	imageTreeMu.Unlock()
+	volumeTreeMu.Unlock()
 
 	emit := a.ibEmit
 	emit(2, "Opening disk image…")
 
-	var result *imageTree
+	var result *volumeTree
 	err := a.withPartition(pbsID, backupID, snapshotID, backupType, diskArchive, partIndex, false,
 		func(fs imagebrowse.Filesystem, p imagebrowse.Partition, ra *pbscommon.FIDXReaderAt) error {
 			// Fetch EXACTLY the file table's on-disk extents, concurrently —
@@ -377,7 +397,7 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 					// pipe mostly idle between round trips. 32 keeps enough
 					// streams in flight to hide latency without tripping the
 					// server's default MaxConcurrentStreams (~100).
-					stopPlan := ra.PlanPrefetch(abs, imageScanWorkers)
+					stopPlan := ra.PlanPrefetch(abs, volumeScanWorkers)
 					defer stopPlan()
 					emit(6, fmt.Sprintf("Downloading file table: %s in %d fragment(s)…",
 						formatBytesGo(uint64(mftSize)), len(extents)))
@@ -400,7 +420,7 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 					Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime,
 				})
 			}
-			result = newImageTree(converted)
+			result = newVolumeTree(converted)
 			emit(100, fmt.Sprintf("Listed %d entries", len(converted)))
 			return nil
 		})
@@ -408,48 +428,48 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 		return nil, err
 	}
 
-	imageTreeMu.Lock()
-	imageTreeCache[key] = result
-	imageTreeMu.Unlock()
-	lastImageKey = key
+	volumeTreeMu.Lock()
+	volumeTreeCache[key] = result
+	volumeTreeMu.Unlock()
+	lastVolumeKey = key
 
 	writeBackupLog(fmt.Sprintf("ImageBrowse: cached %d entries from %s partition %d",
 		len(result.entries), diskArchive, partIndex))
 	return result.children("/"), nil
 }
 
-// ListImageDirectory returns the immediate children of dir from the cached
+// ListVolumeDirectory returns the immediate children of dir from the cached
 // scan — the whole point of keeping the tree in Go: the webview only ever
 // holds one directory's worth of rows, so nothing needs truncating.
-func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
+func (a *App) ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, dir string) ([]SnapshotEntry, error) {
 	if !ControlPolicy().FileRestore {
 		return nil, ErrRestoreDisabled
 	}
 	key := strings.Join([]string{pbsID, backupID, snapshotID, backupType, diskArchive, fmt.Sprint(partIndex)}, "|")
-	imageTreeMu.Lock()
-	c, ok := imageTreeCache[key]
-	imageTreeMu.Unlock()
+	volumeTreeMu.Lock()
+	c, ok := volumeTreeCache[key]
+	volumeTreeMu.Unlock()
 	if !ok {
 		return nil, ibFail(errors.New("[NB-3428] no scan cached for this partition — open it with Browse files first"))
 	}
 	return c.children(dir), nil
 }
 
-// DownloadImageSelection packages the selection as a ZIP, STREAMED in one
+// DownloadFilesFromVolume packages the selection as a ZIP, STREAMED in one
 // pass to destPath: PBS chunks -> NTFS parser -> zip entry -> disk, nothing
 // staged anywhere. The zip is packaging, not compression (Store method), so
 // throughput is I/O-bound and the progress bar's byte math is exact. The
 // old single-file "direct" mode is gone: the caller only invokes this when
 // the user explicitly ticked Package as ZIP, and one file in a zip is what
 // they asked for.
-func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 	if !ControlPolicy().FileRestore {
 		return ErrRestoreDisabled
 	}
 
-	writeDebugLog(fmt.Sprintf("DownloadImageSelection(disk=%s part=%d includes=%d dest=%s needed=%d)",
+	writeDebugLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
 		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
 	_ = asZip // retained in the signature for frontend compatibility; always zip now
 
@@ -514,7 +534,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 			if cerr != nil {
 				return ibFail(fmt.Errorf("[NB-3421] create %s: %v", destPath, cerr))
 			}
-			nFiles, nBytes, perr = streamImageZip(fs, files, total, out, a.ibEmitTask, cancelled)
+			nFiles, nBytes, perr = streamVolumeZip(fs, files, total, out, a.ibEmitTask, cancelled)
 			if perr != nil {
 				_ = out.Close()
 				_ = os.Remove(destPath) // never leave a corrupt half-zip
@@ -522,7 +542,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 			}
 			return out.Close()
 		})
-	if errors.Is(err, errImageRestoreCancelled) {
+	if errors.Is(err, errVolumeRestoreCancelled) {
 		a.ibEmit(100, "Download cancelled")
 		return err
 	}
@@ -536,7 +556,7 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 	return nil
 }
 
-// RestoreImageSelection restores selected files from a volume backup INTO a
+// RestoreFilesFromVolume restores selected files from a volume backup INTO a
 // destination folder (not a zip). This is what the Restore button does for an
 // image backup: the old path tried to open backup.pxar.didx as a "host" backup
 // and PBS 400'd, because a volume snapshot has neither.
@@ -544,14 +564,14 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 // the SOURCE stores them (NTFS) — the frontend greys them out otherwise, and
 // the backend treats them as best-effort per file: metadata failures warn in
 // the backup log, the file's data is already safely in place.
-func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destDir string, keepStructure, overwrite bool,
 	restoreMtimes, restoreACLs, restoreADS bool, neededBytes int64) error {
 	if !ControlPolicy().FileRestore {
 		return ErrRestoreDisabled
 	}
 
-	writeDebugLog(fmt.Sprintf("RestoreImageSelection(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
+	writeDebugLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
 		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
 
 	if destDir == "" {
@@ -579,7 +599,7 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	emit := a.ibEmit
 
 	// Register this restore as cancellable. The frontend Cancel button calls
-	// CancelImageRestore, which fires this context.
+	// CancelVolumeFileRestore, which fires this context.
 	ctx, cancel := context.WithCancel(context.Background())
 	ibRestoreMu.Lock()
 	ibRestoreCancel = cancel
@@ -621,7 +641,7 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 
 			for i, f := range files {
 				if cancelled() {
-					return errImageRestoreCancelled
+					return errVolumeRestoreCancelled
 				}
 				prog.label = fmt.Sprintf("Restoring %d/%d: %s", i+1, len(files), filepath.Base(f))
 
@@ -725,10 +745,10 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 			return nil
 		})
 
-	if errors.Is(err, errImageRestoreCancelled) {
+	if errors.Is(err, errVolumeRestoreCancelled) {
 		emit(100, "Restore cancelled")
 		writeBackupLog(fmt.Sprintf("ImageBrowse: restore CANCELLED after %d file(s) to %s", count, destDir))
-		return errImageRestoreCancelled
+		return errVolumeRestoreCancelled
 	}
 	if err != nil {
 		emit(100, "Restore failed")
@@ -754,10 +774,10 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	return nil
 }
 
-// expandImageSelection resolves a selection to concrete files: files pass
+// expandVolumeSelection resolves a selection to concrete files: files pass
 // through, directories expand to every file beneath them. An over-cap folder
 // errors rather than silently downloading a partial tree.
-func expandImageSelection(fs imagebrowse.Filesystem, selections []string) ([]string, error) {
+func expandVolumeSelection(fs imagebrowse.Filesystem, selections []string) ([]string, error) {
 	var files []string
 	for _, sel := range selections {
 		st, err := fs.Stat(sel)
@@ -768,7 +788,7 @@ func expandImageSelection(fs imagebrowse.Filesystem, selections []string) ([]str
 			files = append(files, st.Path)
 			continue
 		}
-		entries, werr := imagebrowse.Walk(fs, sel, imageWalkCap, nil)
+		entries, werr := imagebrowse.Walk(fs, sel, volumeWalkCap, nil)
 		if errors.Is(werr, imagebrowse.ErrTooManyEntries) {
 			return nil, ibFail(fmt.Errorf("[NB-3426] the folder %s holds too many files for one operation — select subfolders instead", sel))
 		}
@@ -787,15 +807,16 @@ func expandImageSelection(fs imagebrowse.Filesystem, selections []string) ([]str
 // interface assertion: keeps the io import honest if extraction is refactored.
 var _ io.Writer = (*os.File)(nil)
 
-// errImageRestoreCancelled is returned when the user cancels an in-flight
-// image restore. Surfaced to the frontend so it can show "cancelled" rather
+// errVolumeRestoreCancelled is returned when the user cancels an in-flight
+// volume-file restore. Surfaced to the frontend so it can show "cancelled" rather
 // than a scary error.
-var errImageRestoreCancelled = errors.New("[NB-3429] restore cancelled by user")
+var errVolumeRestoreCancelled = errors.New("[NB-3429] restore cancelled by user")
 
-// CancelImageRestore aborts an in-progress image restore, if one is running.
+// CancelVolumeFileRestore aborts an in-progress volume-file restore, if one is
+// running.
 // The restore loop checks between files, so cancellation takes effect at the
 // next file boundary (a large file in flight finishes its current write).
-func (a *App) CancelImageRestore() {
+func (a *App) CancelVolumeFileRestore() {
 	ibRestoreMu.Lock()
 	cancel := ibRestoreCancel
 	ibRestoreMu.Unlock()

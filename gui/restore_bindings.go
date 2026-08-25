@@ -376,28 +376,28 @@ func (a *App) DownloadSelection(pbsID, backupID, snapshotID string,
 
 // ==================== BROWSE (volume backups) ====================
 
-// ListImagePartitions enumerates every partition on a disk image — regardless
+// ListVolumePartitions enumerates every partition on a disk image — regardless
 // of whether it can be browsed — with its filesystem, allocated size, and used
 // size. The user chooses; we never choose for them.
-func (a *App) ListImagePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]ImagePartition, error) {
-	var parts []ImagePartition
-	err := a.restoreQuery(opImagePartitions, ImageRef{
+func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]VolumePartition, error) {
+	var parts []VolumePartition
+	err := a.restoreQuery(opVolumePartitions, VolumeRef{
 		PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 		BackupType: backupType, DiskArchive: diskArchive,
 	}, &parts)
 	return parts, err
 }
 
-// ListImageContents scans one partition's file table and returns the ROOT
+// ListVolumeFiles scans one partition's file table and returns the ROOT
 // directory listing. The full tree stays in the SERVICE's session cache —
 // shipping a million entries of JSON into the webview is what forced the old
-// truncation; per-directory listing (ListImageDirectory) has no such limit.
-func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArchive string,
+// truncation; per-directory listing (ListVolumeDirectory) has no such limit.
+func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
 
-	var out ImageContentsResult
-	err := a.restoreQuery(opImageContents, ImageContentsParams{
-		ImageRef: ImageRef{
+	var out VolumeFilesResult
+	err := a.restoreQuery(opVolumeFiles, VolumeFilesParams{
+		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
 		},
@@ -406,19 +406,19 @@ func (a *App) ListImageContents(pbsID, backupID, snapshotID, backupType, diskArc
 	if err != nil {
 		return nil, err
 	}
-	a.lastImageTruncated = out.Truncated
+	a.lastVolumeTruncated = out.Truncated
 	return out.Entries, nil
 }
 
-// ListImageDirectory returns the immediate children of dir from the scan the
+// ListVolumeDirectory returns the immediate children of dir from the scan the
 // service is holding — the whole point of keeping the tree there: the webview
 // only ever holds one directory's worth of rows, so nothing needs truncating.
-func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
+func (a *App) ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, dir string) ([]SnapshotEntry, error) {
 
 	var entries []SnapshotEntry
-	err := a.restoreQuery(opImageDirectory, ImageDirectoryParams{
-		ImageRef: ImageRef{
+	err := a.restoreQuery(opVolumeDirectory, VolumeDirectoryParams{
+		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
 		},
@@ -427,21 +427,21 @@ func (a *App) ListImageDirectory(pbsID, backupID, snapshotID, backupType, diskAr
 	return entries, err
 }
 
-// LastImageListTruncated reports whether the last ListImageContents hit the
+// LastVolumeListTruncated reports whether the last ListVolumeFiles hit the
 // service's entry cap.
-func (a *App) LastImageListTruncated() bool { return a.lastImageTruncated }
+func (a *App) LastVolumeListTruncated() bool { return a.lastVolumeTruncated }
 
-// DownloadImageSelection packages the selection as a ZIP at destPath, streamed
+// DownloadFilesFromVolume packages the selection as a ZIP at destPath, streamed
 // in one pass by the service: PBS chunks -> filesystem parser -> zip entry ->
 // disk, nothing staged anywhere.
-func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("DownloadImageSelection(disk=%s part=%d includes=%d dest=%s needed=%d)",
+	writeDebugLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
 		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
 
-	_, err := a.awaitRestoreJob(opImageDownload, ImageDownloadParams{
-		ImageRef: ImageRef{
+	_, err := a.awaitRestoreJob(opVolumeDownload, VolumeDownloadParams{
+		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
 		},
@@ -453,19 +453,19 @@ func (a *App) DownloadImageSelection(pbsID, backupID, snapshotID, backupType, di
 	return err
 }
 
-// RestoreImageSelection restores selected files from a volume backup INTO a
+// RestoreFilesFromVolume restores selected files from a volume backup INTO a
 // destination folder (not a zip). The restoreMtimes / restoreACLs / restoreADS
 // options only have meaning when the SOURCE stores them (NTFS); the service
 // treats them as best-effort per file.
-func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destDir string, keepStructure, overwrite bool,
 	restoreMtimes, restoreACLs, restoreADS bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("RestoreImageSelection(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
+	writeDebugLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
 		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
 
-	_, err := a.awaitRestoreJob(opImageRestore, ImageRestoreParams{
-		ImageRef: ImageRef{
+	_, err := a.awaitRestoreJob(opVolumeFileRestore, VolumeFileRestoreParams{
+		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
 		},
@@ -481,14 +481,15 @@ func (a *App) RestoreImageSelection(pbsID, backupID, snapshotID, backupType, dis
 	return err
 }
 
-// CancelImageRestore aborts an in-progress image download or restore. The
+// CancelVolumeFileRestore aborts an in-progress volume-file download or
+// restore. The
 // service's loop checks between files, so cancellation takes effect at the
 // next file boundary (a large file in flight finishes its current write).
-func (a *App) CancelImageRestore() {
+func (a *App) CancelVolumeFileRestore() {
 	if err := a.requireService(); err != nil {
 		return
 	}
-	if err := a.apiClient.RestoreControl(opCancelImage, nil); err != nil {
-		writeErrorLog(fmt.Sprintf("CancelImageRestore failed: %v", err))
+	if err := a.apiClient.RestoreControl(opCancelVolumeFileRestore, nil); err != nil {
+		writeErrorLog(fmt.Sprintf("CancelVolumeFileRestore failed: %v", err))
 	}
 }

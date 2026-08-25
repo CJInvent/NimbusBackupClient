@@ -102,7 +102,7 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // progress can be byte-accurate from the first emit. Returns the file list
 // and total. The Stat calls hit the already-cached file table — no I/O.
 func planSelection(fs imagebrowse.Filesystem, includePaths []string) ([]string, int64, error) {
-	files, err := expandImageSelection(fs, includePaths)
+	files, err := expandVolumeSelection(fs, includePaths)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -118,12 +118,12 @@ func planSelection(fs imagebrowse.Filesystem, includePaths []string) ([]string, 
 	return files, total, nil
 }
 
-// streamImageZip writes the selection as a Store-method zip DIRECTLY to w in
+// streamVolumeZip writes the selection as a Store-method zip DIRECTLY to w in
 // one pass. Entry names preserve the in-image relative structure; entry
 // mtimes carry the source file's mtime (that much fidelity a zip CAN hold —
 // NTFS permissions and ADS cannot travel in a zip, which is exactly why the
 // UI greys those options in zip mode).
-func streamImageZip(fs imagebrowse.Filesystem, files []string, totalBytes int64, w io.Writer,
+func streamVolumeZip(fs imagebrowse.Filesystem, files []string, totalBytes int64, w io.Writer,
 	emit func(pct float64, msg string, done, total int64, bps float64, etaSec int),
 	cancelled func() bool) (int, int64, error) {
 
@@ -134,7 +134,7 @@ func streamImageZip(fs imagebrowse.Filesystem, files []string, totalBytes int64,
 	for _, f := range files {
 		if cancelled != nil && cancelled() {
 			_ = zw.Close()
-			return count, prog.done, errImageRestoreCancelled
+			return count, prog.done, errVolumeRestoreCancelled
 		}
 		name := strings.TrimPrefix(path.Clean("/"+f), "/")
 		if name == "" {

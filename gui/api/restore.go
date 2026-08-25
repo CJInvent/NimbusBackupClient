@@ -7,7 +7,7 @@ package api
 // it makes is gated on whether the server permits this machine to make it.
 // Backup already worked that way — gui/backup_pipeline.go is `service`-tagged
 // and the console POSTs /backup. Restore did not: browse, search, metadata,
-// file restore, image browse and download all executed IN THE GUI PROCESS,
+// file restore, volume browse and download all executed IN THE GUI PROCESS,
 // with the policy check evaluated there too. This is the seam that closes it.
 //
 // WHY THAT MATTERED, CONCRETELY:
@@ -58,8 +58,9 @@ const (
 //
 // EVERY FIELD IS A PERMISSION STATEMENT. `Right` is what the control server
 // must grant for this call to be made at all; there is one right today
-// (`file_restore`) and the field exists so a second one — image restore split
-// from file restore, say — is a line in this table rather than a new gate.
+// (`file_restore`) and the field exists so a second one — `volume_browse`,
+// say, gating whole-disk backups separately from directory ones — is a line in
+// this table rather than a new gate.
 type RestoreOp struct {
 	Name  string
 	Kind  RestoreOpKind
@@ -85,13 +86,13 @@ var restoreOps = []RestoreOp{
 	{"search", OpJob, RightFileRestore, "search file names and paths across snapshots"},
 	{"cancel-search", OpControl, RightFileRestore, "stop an in-flight search"},
 
-	// --- image (volume backup) ---
-	{"image-partitions", OpQuery, RightFileRestore, "enumerate the partitions of a disk image"},
-	{"image-contents", OpQuery, RightFileRestore, "scan a partition's file table and list its root"},
-	{"image-directory", OpQuery, RightFileRestore, "list one directory from a scanned partition"},
-	{"image-download", OpJob, RightFileRestore, "package a selection out of a partition as a zip"},
-	{"image-restore", OpJob, RightFileRestore, "restore a selection out of a partition to a folder"},
-	{"cancel-image", OpControl, RightFileRestore, "stop an in-flight image download or restore"},
+	// --- volume backup: FILES out of a stored disk image ---
+	{"volume-partitions", OpQuery, RightFileRestore, "enumerate the partitions of a stored disk image"},
+	{"volume-files", OpQuery, RightFileRestore, "scan a partition's file table and list its root"},
+	{"volume-directory", OpQuery, RightFileRestore, "list one directory from a scanned partition"},
+	{"volume-download", OpJob, RightFileRestore, "package a selection out of a partition as a zip"},
+	{"volume-file-restore", OpJob, RightFileRestore, "restore a selection out of a partition to a folder"},
+	{"cancel-volume-file-restore", OpControl, RightFileRestore, "stop an in-flight volume-file download or restore"},
 }
 
 // lookupRestoreOp finds a declared op by name.

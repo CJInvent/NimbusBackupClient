@@ -66,7 +66,7 @@ func TestCatalogReaderAttachesTheKey(t *testing.T) {
 func TestImageReaderAttachesTheKey(t *testing.T) {
 	src := sourceOf(t, "imagebrowse_core.go")
 	mustContain(t, src, "imagebrowse_core.go", `attachRestoreKey(client, "image-browse")`,
-		"openImageReader is the single door to every image browse and restore, including the ones "+
+		"openVolumeReader is the single door to every volume browse and file extraction, including the ones "+
 			"NimbusControl drives remotely, where nobody is watching a screen for a warning")
 	mustPrecede(t, src, "imagebrowse_core.go",
 		`attachRestoreKey(client, "image-browse")`, "client.NewFIDXReaderAt(diskArchive",

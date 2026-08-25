@@ -11,7 +11,7 @@ package main
 // off one of them should be one line that is obviously present or obviously
 // absent, not a policy each caller re-implements. There are three such sites —
 // withSnapshotReader (archive), listSnapshotViaCatalog (catalog) and
-// openImageReader (image, including the browses NimbusControl drives remotely)
+// openVolumeReader (image, including the browses NimbusControl drives remotely)
 // — and gui/restorekey_wiring_test.go pins each one.
 //
 // IT IS ALSO THE ONLY PLACE THAT DECIDES A SNAPSHOT IS UNENCRYPTED, and it

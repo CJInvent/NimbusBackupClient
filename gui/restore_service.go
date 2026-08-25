@@ -124,39 +124,39 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 		}
 		return ReadSnapshotMetaInline(opts, false)
 
-	case opImagePartitions:
-		p, err := decodeParams[ImageRef](op, raw)
+	case opVolumePartitions:
+		p, err := decodeParams[VolumeRef](op, raw)
 		if err != nil {
 			return nil, err
 		}
-		return a.ListImagePartitions(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType, p.DiskArchive)
+		return a.ListVolumePartitions(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType, p.DiskArchive)
 
-	case opImageContents:
-		p, err := decodeParams[ImageContentsParams](op, raw)
+	case opVolumeFiles:
+		p, err := decodeParams[VolumeFilesParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
-		entries, err := a.ListImageContents(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
+		entries, err := a.ListVolumeFiles(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
 			p.DiskArchive, p.PartIndex, p.ForceRefresh)
 		if err != nil {
 			return nil, err
 		}
-		// The truncation flag rides WITH the answer — see ImageContentsResult.
+		// The truncation flag rides WITH the answer — see VolumeFilesResult.
 		//
 		// It is false, and has been since per-directory listing replaced the
 		// flat one: the whole tree stays here and the console fetches a
 		// directory at a time, so nothing is truncated on the way out. The
 		// field is carried rather than dropped because the walk itself still
-		// has a cap (imageWalkCap), and the day a scan hits it this is where
+		// has a cap (volumeWalkCap), and the day a scan hits it this is where
 		// the answer belongs.
-		return ImageContentsResult{Entries: entries, Truncated: false}, nil
+		return VolumeFilesResult{Entries: entries, Truncated: false}, nil
 
-	case opImageDirectory:
-		p, err := decodeParams[ImageDirectoryParams](op, raw)
+	case opVolumeDirectory:
+		p, err := decodeParams[VolumeDirectoryParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
-		return a.ListImageDirectory(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
+		return a.ListVolumeDirectory(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
 			p.DiskArchive, p.PartIndex, p.Dir)
 	}
 	return nil, fmt.Errorf("restore query %q is declared but not implemented", op)
@@ -247,23 +247,23 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 			OnProgress: func(pct float64, msg string) { progress(pct, msg, 0, 0, 0, -1) },
 		})
 
-	case opImageDownload:
-		p, err := decodeParams[ImageDownloadParams](op, raw)
+	case opVolumeDownload:
+		p, err := decodeParams[VolumeDownloadParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
 		return nil, withImageProgress(progress, func() error {
-			return a.DownloadImageSelection(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
+			return a.DownloadFilesFromVolume(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
 				p.DiskArchive, p.PartIndex, p.IncludePaths, p.DestPath, p.AsZip, p.NeededBytes)
 		})
 
-	case opImageRestore:
-		p, err := decodeParams[ImageRestoreParams](op, raw)
+	case opVolumeFileRestore:
+		p, err := decodeParams[VolumeFileRestoreParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
 		return nil, withImageProgress(progress, func() error {
-			return a.RestoreImageSelection(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
+			return a.RestoreFilesFromVolume(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
 				p.DiskArchive, p.PartIndex, p.IncludePaths, p.DestDir, p.KeepStructure,
 				p.Overwrite, p.RestoreMtimes, p.RestoreACLs, p.RestoreADS, p.NeededBytes)
 		})
@@ -275,15 +275,15 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 //
 // Both cancels reach the engine's OWN cancellation, not the job's context. The
 // engine unwinds deliberately — a search stops at a snapshot boundary, an
-// image restore at a file boundary — and killing its context instead would
+// volume-file restore at a file boundary — and killing its context instead would
 // leave a half-written file where the product's contract says "cancelled".
 func (a *App) RestoreControl(op string, _ json.RawMessage) error {
 	switch op {
 	case opCancelSearch:
 		CancelFileSearch()
 		return nil
-	case opCancelImage:
-		a.CancelImageRestore()
+	case opCancelVolumeFileRestore:
+		a.CancelVolumeFileRestore()
 		return nil
 	}
 	return fmt.Errorf("restore control %q is declared but not implemented", op)

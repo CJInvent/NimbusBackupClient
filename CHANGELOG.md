@@ -1,5 +1,15 @@
 # Changelog
 
+> **Naming note (2026-08-25).** Entries below this line use the old
+> volume-backup operation names — `RestoreImageSelection`,
+> `ListImageContents`, `CancelImageRestore`, `streamImageZip` and friends.
+> Those were renamed to say what they actually do (`RestoreFilesFromVolume`,
+> `ListVolumeFiles`, `CancelVolumeFileRestore`, `streamVolumeZip`) because
+> "image restore" reads as "restore an image", which the client does not and
+> must not do — it extracts FILES from a stored disk image. Historical entries
+> are left as they shipped; see `gui/imagebrowse_core.go` for the naming rule.
+
+
 All notable changes to Nimbus Backup (GUI) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

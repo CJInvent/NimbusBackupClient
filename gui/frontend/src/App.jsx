@@ -6,7 +6,7 @@ import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, StopBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListImageContents, DownloadImageSelection, LastImageListTruncated, ListImagePartitions, RestoreImageSelection, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListImageDirectory, CancelImageRestore
+let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, StopBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListVolumeFiles, DownloadFilesFromVolume, LastVolumeListTruncated, ListVolumePartitions, RestoreFilesFromVolume, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListVolumeDirectory, CancelVolumeFileRestore
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Run registry: the service's record of what is running, whatever started it
 let GetActiveRuns, GetRecentRuns
@@ -22,17 +22,17 @@ if (window.go) {
   SetTrayLanguage = window.go.main.App.SetTrayLanguage
   CheckDownloadSpace = window.go.main.App.CheckDownloadSpace
   DownloadSelection = window.go.main.App.DownloadSelection
-  ListImageContents = window.go.main.App.ListImageContents
-  LastImageListTruncated = window.go.main.App.LastImageListTruncated
-  ListImagePartitions = window.go.main.App.ListImagePartitions
-  RestoreImageSelection = window.go.main.App.RestoreImageSelection
+  ListVolumeFiles = window.go.main.App.ListVolumeFiles
+  LastVolumeListTruncated = window.go.main.App.LastVolumeListTruncated
+  ListVolumePartitions = window.go.main.App.ListVolumePartitions
+  RestoreFilesFromVolume = window.go.main.App.RestoreFilesFromVolume
   ListDrives = window.go.main.App.ListDrives
   ListFolders = window.go.main.App.ListFolders
   CreateFolder = window.go.main.App.CreateFolder
   DefaultSaveDir = window.go.main.App.DefaultSaveDir
-  ListImageDirectory = window.go.main.App.ListImageDirectory
-  CancelImageRestore = window.go.main.App.CancelImageRestore
-  DownloadImageSelection = window.go.main.App.DownloadImageSelection
+  ListVolumeDirectory = window.go.main.App.ListVolumeDirectory
+  CancelVolumeFileRestore = window.go.main.App.CancelVolumeFileRestore
+  DownloadFilesFromVolume = window.go.main.App.DownloadFilesFromVolume
   SaveConfig = window.go.main.App.SaveConfig
   TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
@@ -1356,7 +1356,7 @@ function App() {
         // Volume backup: restore the selected files OUT of the disk image.
         // The pxar path cannot serve this — a vm snapshot has no
         // backup.pxar.didx, which is why the old code 400'd at PBS.
-        await RestoreImageSelection(
+        await RestoreFilesFromVolume(
           restorePBSID || '',
           selectedSnapshot.backup_id || restoreBackupId,
           selectedSnapshot.id,
@@ -1527,7 +1527,7 @@ function App() {
   // the user dropped them inside the WinRE recovery volume, which looked like
   // a bug because it was one.
   const handleListPartitions = async (disk) => {
-    if (!ListImagePartitions || !selectedSnapshot) return
+    if (!ListVolumePartitions || !selectedSnapshot) return
     setLoadingParts(true)
     setImagePartitions(null)
     setImagePartIndex(0)
@@ -1536,7 +1536,7 @@ function App() {
     setImageDisk(null)
     showStatus(`💿 ${t('volumeReadingParts')}`, 'info')
     try {
-      const parts = await ListImagePartitions(
+      const parts = await ListVolumePartitions(
         restorePBSID || '',
         selectedSnapshot.backup_id || restoreBackupId,
         selectedSnapshot.id,
@@ -1560,7 +1560,7 @@ function App() {
       showStatus('❌ ' + t('errNoSnapshotSelected'), 'error')
       return
     }
-    if (!ListImageContents) {
+    if (!ListVolumeFiles) {
       // The Go binding isn't present — surface it unmistakably rather than
       // silently doing nothing (this is what "the button does nothing" looked
       // like: an early return with no feedback).
@@ -1577,7 +1577,7 @@ function App() {
     setBrowsingImage(true)
     showStatus(`💿 ${t('volumeReadingTree')}`, 'info')
     try {
-      const res = await ListImageContents(
+      const res = await ListVolumeFiles(
         restorePBSID || '',
         selectedSnapshot.backup_id || restoreBackupId,
         selectedSnapshot.id,
@@ -1593,7 +1593,7 @@ function App() {
       setImageCwd('/')
       setSelectedInfo(new Map())
       let truncated = false
-      if (LastImageListTruncated) { try { truncated = await LastImageListTruncated() } catch (e) { /* ignore */ } }
+      if (LastVolumeListTruncated) { try { truncated = await LastVolumeListTruncated() } catch (e) { /* ignore */ } }
       setImageTruncated(truncated)
       if (entries.length === 0) {
         // Succeeded but empty — say so explicitly instead of snapping back to
@@ -1654,7 +1654,7 @@ function App() {
   }, [imageDisk, imagePartitions, imagePartIndex, packageAsZip])
 
   // Cancel an in-flight restore. Image restores are cancellable mid-run on the
-  // Go side (CancelImageRestore); the button appears only while one is active.
+  // Go side (CancelVolumeFileRestore); the button appears only while one is active.
   const fmtRate = (bps) => {
     if (!bps || bps < 1) return ''
     const mbps = bps / 1e6
@@ -1669,15 +1669,15 @@ function App() {
 
   const handleCancelRestore = async () => {
     try {
-      if (CancelImageRestore) await CancelImageRestore()
+      if (CancelVolumeFileRestore) await CancelVolumeFileRestore()
     } catch (e) { /* best-effort */ }
     showStatus('✖ ' + t('restoreCancelled'), 'info')
   }
 
   const handleImageNavigate = async (dir) => {
-    if (!ListImageDirectory || !selectedSnapshot || !imageDisk) return
+    if (!ListVolumeDirectory || !selectedSnapshot || !imageDisk) return
     try {
-      const rows = await ListImageDirectory(
+      const rows = await ListVolumeDirectory(
         restorePBSID || '',
         selectedSnapshot.backup_id || restoreBackupId,
         selectedSnapshot.id,
@@ -1742,7 +1742,7 @@ function App() {
     setDownloading(true)
     try {
       if (imageDisk) {
-        await DownloadImageSelection(
+        await DownloadFilesFromVolume(
           restorePBSID || '',
           selectedSnapshot.backup_id || restoreBackupId,
           selectedSnapshot.id,

@@ -29,7 +29,7 @@ import (
 // themselves rather than retyped — a copy would be one more thing to drift.
 var consoleOps = []string{
 	opSnapshots, opContents, opMeta, opRestore, opDownload, opSearch, opCancelSearch,
-	opImagePartitions, opImageContents, opImageDirectory, opImageDownload, opImageRestore, opCancelImage,
+	opVolumePartitions, opVolumeFiles, opVolumeDirectory, opVolumeDownload, opVolumeFileRestore, opCancelVolumeFileRestore,
 }
 
 func TestEveryOpTheConsoleCanAskForIsDeclaredInTheGate(t *testing.T) {
@@ -98,18 +98,18 @@ func constNameFor(op string) string {
 		return "opSearch"
 	case opCancelSearch:
 		return "opCancelSearch"
-	case opImagePartitions:
-		return "opImagePartitions"
-	case opImageContents:
-		return "opImageContents"
-	case opImageDirectory:
-		return "opImageDirectory"
-	case opImageDownload:
-		return "opImageDownload"
-	case opImageRestore:
-		return "opImageRestore"
-	case opCancelImage:
-		return "opCancelImage"
+	case opVolumePartitions:
+		return "opVolumePartitions"
+	case opVolumeFiles:
+		return "opVolumeFiles"
+	case opVolumeDirectory:
+		return "opVolumeDirectory"
+	case opVolumeDownload:
+		return "opVolumeDownload"
+	case opVolumeFileRestore:
+		return "opVolumeFileRestore"
+	case opCancelVolumeFileRestore:
+		return "opCancelVolumeFileRestore"
 	}
 	return "<no constant for " + op + ">"
 }

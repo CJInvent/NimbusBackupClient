@@ -87,11 +87,11 @@ type SearchResult struct {
 	Cancelled          bool        `json:"cancelled"`
 }
 
-// ImagePartition is the JSON shape behind the Browse tab's partition picker.
+// VolumePartition is the JSON shape behind the Browse tab's partition picker.
 // Allocated is the partition's size from the partition table; Used comes from
 // the filesystem itself ($Bitmap / FAT / exFAT allocation bitmap) and is only
 // meaningful when UsedKnown is true — we show "—" rather than guess.
-type ImagePartition struct {
+type VolumePartition struct {
 	Index          int    `json:"index"`
 	Name           string `json:"name"`         // GPT partition name
 	Type           string `json:"type"`         // "Windows data", "EFI system", ...

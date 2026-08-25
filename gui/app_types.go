@@ -15,13 +15,13 @@ type App struct {
 	mode             api.ExecutionMode
 	isServiceProcess bool // True if running as Windows Service (never re-detect mode)
 
-	// lastImageTruncated is the console's memory of whether the SERVICE's
-	// last partition scan hit its entry cap, so LastImageListTruncated can
+	// lastVolumeTruncated is the console's memory of whether the SERVICE's
+	// last partition scan hit its entry cap, so LastVolumeListTruncated can
 	// answer without a second round trip. The scan itself, its cache key and
 	// its cancellation live in the service (imagebrowse_core.go) — they are
 	// engine state, and the console holding a copy of them was an artifact of
 	// the two once being one process.
-	lastImageTruncated bool
+	lastVolumeTruncated bool
 }
 
 // NewApp creates a new App application struct

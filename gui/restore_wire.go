@@ -27,12 +27,12 @@ const (
 	opSearch       = "search"
 	opCancelSearch = "cancel-search"
 
-	opImagePartitions = "image-partitions"
-	opImageContents   = "image-contents"
-	opImageDirectory  = "image-directory"
-	opImageDownload   = "image-download"
-	opImageRestore    = "image-restore"
-	opCancelImage     = "cancel-image"
+	opVolumePartitions        = "volume-partitions"
+	opVolumeFiles             = "volume-files"
+	opVolumeDirectory         = "volume-directory"
+	opVolumeDownload          = "volume-download"
+	opVolumeFileRestore       = "volume-file-restore"
+	opCancelVolumeFileRestore = "cancel-volume-file-restore"
 )
 
 // SnapshotRef names one snapshot of one backup group on one PBS server.
@@ -100,8 +100,8 @@ type SearchParams struct {
 	AssembleMissing bool   `json:"assemble_missing"`
 }
 
-// ImageRef names a partition inside a volume backup's disk image.
-type ImageRef struct {
+// VolumeRef names a partition inside a volume backup's disk image.
+type VolumeRef struct {
 	PBSID       string `json:"pbs_id"`
 	BackupID    string `json:"backup_id"`
 	SnapshotID  string `json:"snapshot_id"`
@@ -110,30 +110,30 @@ type ImageRef struct {
 	PartIndex   int    `json:"part_index"`
 }
 
-// ImageContentsParams — op "image-contents".
-type ImageContentsParams struct {
-	ImageRef
+// VolumeFilesParams — op "volume-files".
+type VolumeFilesParams struct {
+	VolumeRef
 	ForceRefresh bool `json:"force_refresh"`
 }
 
-// ImageDirectoryParams — op "image-directory".
-type ImageDirectoryParams struct {
-	ImageRef
+// VolumeDirectoryParams — op "volume-directory".
+type VolumeDirectoryParams struct {
+	VolumeRef
 	Dir string `json:"dir"`
 }
 
-// ImageDownloadParams — op "image-download".
-type ImageDownloadParams struct {
-	ImageRef
+// VolumeDownloadParams — op "volume-download".
+type VolumeDownloadParams struct {
+	VolumeRef
 	IncludePaths []string `json:"include_paths"`
 	DestPath     string   `json:"dest_path"`
 	AsZip        bool     `json:"as_zip"`
 	NeededBytes  int64    `json:"needed_bytes"`
 }
 
-// ImageRestoreParams — op "image-restore".
-type ImageRestoreParams struct {
-	ImageRef
+// VolumeFileRestoreParams — op "volume-file-restore".
+type VolumeFileRestoreParams struct {
+	VolumeRef
 	IncludePaths  []string `json:"include_paths"`
 	DestDir       string   `json:"dest_dir"`
 	KeepStructure bool     `json:"keep_structure"`
@@ -144,14 +144,14 @@ type ImageRestoreParams struct {
 	NeededBytes   int64    `json:"needed_bytes"`
 }
 
-// ImageContentsResult carries a partition scan's root listing together with
+// VolumeFilesResult carries a partition scan's root listing together with
 // the truncation flag.
 //
 // The flag travels WITH the entries deliberately. In-process it was a separate
-// accessor the console called afterwards (LastImageListTruncated), which works
+// accessor the console called afterwards (LastVolumeListTruncated), which works
 // only while the answer and the question share a process — over a socket, with
 // two consoles or a delegated browse in between, "the last one" names nothing.
-type ImageContentsResult struct {
+type VolumeFilesResult struct {
 	Entries   []SnapshotEntry `json:"entries"`
 	Truncated bool            `json:"truncated"`
 }

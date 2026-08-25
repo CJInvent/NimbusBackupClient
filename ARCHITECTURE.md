@@ -424,7 +424,7 @@ Where a rule has a war story, it is cited — these are not hypotheticals.
     credentials have leaked into logs before; rotation is standing hygiene,
     prevention is the law.
 12. **The user picks the partition — always.** Auto-selecting the first NTFS
-    volume put people inside WinRE. `ListImagePartitions` returns every
+    volume put people inside WinRE. `ListVolumePartitions` returns every
     partition with filesystem + sizes; `partIndex < 1` is an error, never a
     default.
 13. **Space safety before bytes move.** Downloads/restores compute
@@ -610,7 +610,7 @@ code CI had never executed:
 
 A follow-on audit of the paths Phase 1 had just made testable:
 
-* **Image restore could write outside the destination (fixed).** The
+* **Volume-file restore could write outside the destination (fixed).** The
   image-restore path joined filenames taken from the image's own $MFT / FAT
   directory entries straight onto the destination. The PXAR path guards this
   exact class explicitly; the image path did not. The parsers reject a
@@ -654,9 +654,9 @@ A follow-on audit of the paths Phase 1 had just made testable:
   break-glass below.
 * **The policy did not cover the local image browser (fixed).** `file_restore`
   gated PXAR browse/restore and the PORTAL-delegated image path, but the
-  GUI's own image browse and extract methods — `ListImagePartitions`,
-  `ListImageContents`, `ListImageDirectory`, `DownloadImageSelection`,
-  `RestoreImageSelection`, all bound straight to the frontend — checked
+  GUI's own image browse and extract methods — `ListVolumePartitions`,
+  `ListVolumeFiles`, `ListVolumeDirectory`, `DownloadFilesFromVolume`,
+  `RestoreFilesFromVolume`, all bound straight to the frontend — checked
   nothing. An org that switched file restore off still had every one of those
   files reachable from the machine's own UI, which is the same capability on
   the same data. All five now consult `ControlPolicy()`.

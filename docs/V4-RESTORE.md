@@ -58,7 +58,7 @@ Every reader entry point calls `attachRestoreKey` immediately after
 |---|---|---|
 | `withSnapshotReader` | `gui/restore_inline.go` | file restore, content listing, search, metadata |
 | `listSnapshotViaCatalog` | `gui/restore_inline.go` | the fast catalog listing |
-| `openImageReader` | `gui/imagebrowse_core.go` | image browse, download, restore — including the ones NimbusControl drives remotely |
+| `openVolumeReader` | `gui/imagebrowse_core.go` | image browse, download, restore — including the ones NimbusControl drives remotely |
 
 All three are `service`-only since the rewire below: they are the engine, and
 the console no longer compiles it.
@@ -241,11 +241,11 @@ one now says the same thing to the service over the local API:
 | `RestoreSnapshot` | `restore` | `RestoreSnapshotInline` |
 | `DownloadSelection` | `download` | `downloadSelection` |
 | `SearchFiles` / `CancelSearch` | `search` / `cancel-search` | `SearchFilesInline` |
-| `ListImagePartitions` | `image-partitions` | `ListImagePartitions` |
-| `ListImageContents` | `image-contents` | `ListImageContents` |
-| `ListImageDirectory` | `image-directory` | `ListImageDirectory` |
-| `DownloadImageSelection` | `image-download` | `DownloadImageSelection` |
-| `RestoreImageSelection` / `CancelImageRestore` | `image-restore` / `cancel-image` | `RestoreImageSelection` |
+| `ListVolumePartitions` | `image-partitions` | `ListVolumePartitions` |
+| `ListVolumeFiles` | `image-contents` | `ListVolumeFiles` |
+| `ListVolumeDirectory` | `image-directory` | `ListVolumeDirectory` |
+| `DownloadFilesFromVolume` | `image-download` | `DownloadFilesFromVolume` |
+| `RestoreFilesFromVolume` / `CancelVolumeFileRestore` | `image-restore` / `cancel-image` | `RestoreFilesFromVolume` |
 
 Three routes carry all of it — `/restore/query`, `/restore/job`,
 `/restore/control`, plus `GET /restore/job/<id>` to watch one — because a route
@@ -306,7 +306,7 @@ evidence, "not compiled" is proof.
   already observed, but it is a poll.
 - **Two cancels exist conceptually** — the job's context and the engine's own
   cancellation. Only the engine's is used, because it stops at a boundary it
-  chooses (a snapshot for search, a file for an image restore) and so leaves
+  chooses (a snapshot for search, a file for a volume-file restore) and so leaves
   nothing half-written. The context is carried unused and says so.
 - **One image operation at a time.** The engine already had a single cancel
   slot, so this was always true; it is now stated and refused explicitly
