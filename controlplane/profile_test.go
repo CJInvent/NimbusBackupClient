@@ -91,7 +91,9 @@ func TestParseProfileRefusesBadInput(t *testing.T) {
 		}), "directory or machine"},
 		// A field this build does not understand may be load-bearing on the
 		// server side; guessing is how an agent half-applies a policy.
-		{"unknown field", []byte(`{"profile_version":1,"control_server_url":"https://x.example",` +
+		// Current version on purpose: a fixture that is stale AND wrong is
+		// refused even after the defect it names is fixed.
+		{"unknown field", []byte(`{"profile_version":2,"control_server_url":"https://x.example",` +
 			`"enroll_token":"t","require_totp_before_backup":true}`), "not valid JSON"},
 	}
 	for _, c := range cases {
