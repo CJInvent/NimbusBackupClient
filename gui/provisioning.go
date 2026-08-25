@@ -90,12 +90,51 @@ func (a *App) ApplyProvisioningProfile() bool {
 		// Only seed a default the machine has not already chosen for itself.
 		a.config.DefaultBackupMode = profile.DefaultMode
 	}
+	applyProvisionedEncryption(profile.Encryption)
 	if err := a.config.Save(); err != nil {
 		writeWarnLog(fmt.Sprintf("[provisioning] WARNING: profile applied but config save failed: %v", err))
 		return false
 	}
 	writeDebugLog("[provisioning] profile applied; enrollment will run on this start")
 	return true
+}
+
+// applyProvisionedEncryption records the org's encryption answer from the
+// profile, if it gave one and nothing has answered yet.
+//
+// THE PROBLEM IT SOLVES. An enrolled agent that has never completed a check-in
+// cannot tell "this org does not encrypt" from "I have not been told", so it
+// REFUSES to back up (adFromPersistedState → ErrBackupKeyUnknown). That is the
+// right call with no information — guessing off downgrades a customer who
+// believes they are encrypted — but it stops backups on a freshly imaged
+// machine that cannot reach its server yet, which is the worst moment for this
+// product to say no. A preconfigured MSI already knows the answer. This is the
+// answer arriving with it.
+//
+// NOT A FAILURE PATH. A profile that says nothing leaves the machine exactly
+// where it was, refusing until it hears from the server. That is the same
+// behaviour as before this existed and it is correct; the profile can only
+// improve the situation, never worsen it.
+func applyProvisionedEncryption(state string) {
+	if state == "" {
+		return // the profile does not say; the machine waits for the server
+	}
+	seeded, err := seedEncryptionFromProvisioning(state)
+	switch {
+	case err != nil:
+		// Loud, and not fatal to enrollment. The machine ends up in the state
+		// it would have been in without a profile at all, which is survivable;
+		// refusing to enrol over it would not be.
+		writeWarnLog(fmt.Sprintf(
+			"[provisioning] WARNING: could not record the provisioned encryption answer (%s): %v", state, err))
+	case seeded:
+		writeDebugLog(fmt.Sprintf(
+			"[provisioning] encryption=%s recorded from the profile — PROVISIONAL, "+
+				"the first check-in replaces it", state))
+	default:
+		writeDebugLog(
+			"[provisioning] the profile names an encryption answer, but this machine already has one — kept")
+	}
 }
 
 // destroyProvisioningFile overwrites the profile before unlinking it.

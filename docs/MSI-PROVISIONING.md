@@ -30,12 +30,13 @@ The GUI is not involved at any point. Config writes belong to the service
 
 ```json
 {
-  "profile_version": 1,
+  "profile_version": 2,
   "org_name": "Acme Corp",
   "control_server_url": "https://control.example.com",
   "control_cert_fp": "aabbcc…",
   "enroll_token": "one-time-org-enrollment-token",
   "default_backup_mode": "directory",
+  "encryption": "off",
   "issued_at": "2026-07-19T12:00:00Z",
   "issued_by": "nimbuscontrol/0.1.2"
 }
@@ -43,12 +44,13 @@ The GUI is not involved at any point. Config writes belong to the service
 
 | Field | Required | Rules |
 |---|---|---|
-| `profile_version` | yes | Must equal 1. A newer version is **refused**, not best-effort parsed. |
+| `profile_version` | yes | Must equal 2. A newer version is **refused**, not best-effort parsed. |
 | `control_server_url` | yes | Must parse, must be `https`, must have a host. |
 | `enroll_token` | yes | Non-empty. One-time, org-scoped, revocable server-side. |
 | `control_cert_fp` | no | SHA-256 leaf fingerprint, 64 hex chars. Colon grouping and any case accepted; normalized on ingest. Omit when the server uses a publicly trusted certificate. |
 | `org_name` | no | Diagnostics and logs only. Never authoritative. |
 | `default_backup_mode` | no | `directory` or `machine`. Seeds a fresh machine's initial choice; never overrides one already made. |
+| `encryption` | no | `on` or `off` — the org's answer when the profile was generated. **Provisional**; the first check-in replaces it. Any other value refuses the whole profile. See below. |
 | `issued_at` | no | RFC 3339. Logged, so a stale rollout is visible. |
 | `issued_by` | no | Generator identification, for support. |
 | `signature` | no | **Reserved. Not verified.** See *Integrity*. |
@@ -57,6 +59,40 @@ The GUI is not involved at any point. Config writes belong to the service
 may be load-bearing on the server side, and half-applying a security profile
 is worse than refusing it. That means adding a field to this contract is a
 breaking change requiring a version bump — deliberately.
+
+### `encryption`, and why a profile carries it at all (v2)
+
+An enrolled agent that has never completed a check-in cannot tell **"this org
+does not encrypt"** from **"I have not been told"**. Those are opposite
+instructions: guessing *off* silently downgrades a customer who believes their
+backups are encrypted; guessing *on* refuses every backup on an org that never
+encrypts at all. So it refuses — which is correct with no information, and is a
+restrictive default that **stops backups on a freshly imaged machine**, at the
+worst possible moment for this product to say no.
+
+A preconfigured MSI already knows the answer, because the server that generated
+it knew. This field is that answer arriving with the installer.
+
+**What the agent does with it:**
+
+- It is recorded ONLY if nothing has been recorded yet. A profile may fill a
+  void; it may never overrule an answer the machine already has.
+- The record is marked `"encryption_source": "provisioning"`, and the first
+  successful check-in replaces it and clears that mark.
+- `on` seeds **no key material** — a profile carries none and could not be
+  trusted with any. It means "expect to need a key", which makes the machine
+  fetch one or refuse, rather than back up in the clear.
+- If the profile said `off` and the server later says the org **does** encrypt,
+  the agent logs a WARNING naming the gap: backups taken in that window are
+  unencrypted and will stay that way.
+- A value that is neither `on` nor `off` refuses the entire profile. Dropping
+  it silently would leave the machine in exactly the unknown state this field
+  exists to resolve, with nothing to blame.
+
+**It is not authenticated** — nothing here is; see *Integrity*. That is
+acceptable for this specific field because anyone who can plant a profile can
+already point the agent at a control server of their choosing, which is
+strictly worse than lying about this one value.
 
 ## Client behavior, and why
 
@@ -122,7 +158,7 @@ it does today, and the agent starts standalone.
 ## Server-side obligations (NimbusControl Phase 6)
 
 1. Generate profiles per org with a one-time enrollment token.
-2. Emit `profile_version: 1` and nothing outside the table above.
+2. Emit `profile_version: 2` and nothing outside the table above.
 3. Serve `control_cert_fp` when the org's control server uses a private CA or
    a self-signed certificate.
 4. Show download provenance on the org page — who generated a profile and

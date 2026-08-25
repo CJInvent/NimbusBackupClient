@@ -36,7 +36,15 @@ import (
 // version is REFUSED rather than best-effort parsed: a profile is a security
 // boundary, and guessing at a format written by a newer server is how an
 // agent ends up enrolled somewhere unintended.
-const ProfileVersion = 1
+const ProfileVersion = 2
+
+// The two answers a profile may give for Encryption. They match the agent's
+// own persisted vocabulary (gui/backupkey_store.go) deliberately: one word
+// crossing the wire, the disk and the decision means nobody translates.
+const (
+	EncryptionOn  = "on"
+	EncryptionOff = "off"
+)
 
 // Profile is the on-disk provisioning payload. Field names are the frozen
 // wire contract — see docs/MSI-PROVISIONING.md; NimbusControl generates this.
@@ -47,8 +55,31 @@ type Profile struct {
 	CertFingerprint string `json:"control_cert_fp,omitempty"`
 	EnrollToken     string `json:"enroll_token"`
 	DefaultMode     string `json:"default_backup_mode,omitempty"`
-	IssuedAt        string `json:"issued_at,omitempty"`
-	IssuedBy        string `json:"issued_by,omitempty"`
+
+	// Encryption is the org's answer — "on" or "off" — as of the moment the
+	// profile was generated. Empty means the profile does not say.
+	//
+	// WHY A PROFILE CARRIES THIS AT ALL. An enrolled agent that has never
+	// completed a check-in cannot tell "this org does not encrypt" from "I
+	// have not been told", and those are opposite instructions: guessing off
+	// silently downgrades a customer who believes they are encrypted, guessing
+	// on refuses every backup on an org that never encrypts. So it refuses —
+	// which is a restrictive default that STOPS A BACKUP, on a freshly imaged
+	// machine, which is the worst moment for this product to say no.
+	//
+	// The profile closes that window: a preconfigured MSI already knows the
+	// answer, because the server that generated it knew.
+	//
+	// IT IS PROVISIONAL AND IT IS NOT AUTHENTICATED. Nothing verifies this
+	// file (see Signature). The first successful check-in replaces whatever it
+	// seeded, and the agent records that the value came from provisioning so a
+	// later contradiction is visible rather than silent. The exposure is
+	// bounded by the same trust the rest of the profile already assumes:
+	// anyone who can plant one can point the agent at their own control server
+	// outright, which is strictly worse than lying about this field.
+	Encryption string `json:"encryption,omitempty"`
+	IssuedAt   string `json:"issued_at,omitempty"`
+	IssuedBy   string `json:"issued_by,omitempty"`
 
 	// Signature is reserved. It is NOT verified today and must not be relied
 	// on: verifying it needs a trust anchor the agent would have to possess
@@ -114,6 +145,15 @@ func (p *Profile) Validate() error {
 	default:
 		return fmt.Errorf("provisioning profile default_backup_mode must be directory or machine, got %q", p.DefaultMode)
 	}
+	// A value outside the set is REFUSED rather than ignored. Silently
+	// dropping it would leave the machine in the very state this field exists
+	// to resolve, and blame nothing.
+	switch p.Encryption {
+	case "", EncryptionOn, EncryptionOff:
+	default:
+		return fmt.Errorf("provisioning profile encryption must be %q or %q, got %q",
+			EncryptionOn, EncryptionOff, p.Encryption)
+	}
 	return nil
 }
 
@@ -143,8 +183,12 @@ func (p *Profile) Redacted() string {
 	if issued == "" {
 		issued = "(unknown)"
 	}
-	return fmt.Sprintf("org=%s url=%s cert=%s default_mode=%s issued_at=%s issued_by=%s token=[redacted]",
-		org, p.ControlURL, pin, mode, issued, p.IssuedBy)
+	enc := p.Encryption
+	if enc == "" {
+		enc = "(unset)"
+	}
+	return fmt.Sprintf("org=%s url=%s cert=%s default_mode=%s encryption=%s issued_at=%s issued_by=%s token=[redacted]",
+		org, p.ControlURL, pin, mode, enc, issued, p.IssuedBy)
 }
 
 // Age reports how long ago the profile was issued. A profile is a bearer

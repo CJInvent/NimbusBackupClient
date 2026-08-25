@@ -53,12 +53,42 @@ var ErrBackupKeyUnknown = errors.New(
 // down while we can still hear it, or a machine that reboots into an outage
 // cannot distinguish it from having heard nothing at all.
 func applyBackupKeyFromCheckin(ad *controlplane.BackupKeyAd) {
+	warnIfProvisioningWasWrong(ad)
 	if ad != nil {
 		return
 	}
 	if err := recordEncryptionOff(); err != nil {
 		writeWarnLog(fmt.Sprintf("[BackupKey] WARNING: could not record that encryption is disabled: %v", err))
 	}
+}
+
+// warnIfProvisioningWasWrong reports the one case a provisioning-seeded answer
+// can actually cost something: the profile said the org does not encrypt, the
+// machine acted on that, and the server now says it does.
+//
+// Backups taken in that window are in the clear and will stay that way. They
+// are not silently wrong — encryption is per-snapshot and the older ones are
+// readable exactly as written — but a customer who believes they are encrypted
+// has a gap, and somebody has to be able to find out. The reverse direction
+// (profile said "on", org does not encrypt) costs nothing: the machine refused
+// or fetched, and now proceeds.
+//
+// A WARNING RATHER THAN A REFUSAL. By the time this runs the machine has heard
+// from the server, so the next backup is already correct; refusing now would
+// stop backups over something that has just fixed itself.
+func warnIfProvisioningWasWrong(ad *controlplane.BackupKeyAd) {
+	if ad == nil {
+		return // the server agrees there is no key; nothing was downgraded
+	}
+	state, _, source, err := persistedEncryptionWithSource()
+	if err != nil || source != encSourceProvisioning || state != encStateOff {
+		return
+	}
+	writeWarnLog(
+		"[BackupKey] WARNING: this machine was provisioned with encryption=off and has been " +
+			"backing up in the clear, but the control server says this org DOES encrypt. " +
+			"Backups taken before this check-in are unencrypted; new ones will be encrypted. " +
+			"Check the provisioning profile that installed this machine.")
 }
 
 // adFromPersistedState reconstructs an advertisement from what was last written

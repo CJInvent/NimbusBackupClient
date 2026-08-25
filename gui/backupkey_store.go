@@ -67,6 +67,17 @@ type storedBackupKey struct {
 	// instructions, and guessing either way is a silent downgrade or a stopped
 	// backup.
 	Encryption string `json:"encryption"`
+	// EncryptionSource says WHO told us: encSourceCheckin (the control server,
+	// authoritative) or encSourceProvisioning (a preconfigured MSI's profile,
+	// provisional and unauthenticated).
+	//
+	// It decides nothing. It exists so a later contradiction is legible: a
+	// machine that backed up in the clear because its profile said "off", on
+	// an org that turns out to encrypt, has a real if narrow downgrade window,
+	// and an operator reading the log should be able to see that it happened
+	// rather than infer it. Empty means checkin, which is what every record
+	// written before this field existed was.
+	EncryptionSource string `json:"encryption_source,omitempty"`
 	// Protector records which protector was in force when this was written, so
 	// a key sealed under a DEK that has since been re-wrapped is still
 	// explicable in a log line. Not used to decide anything — the DEK is the
@@ -90,6 +101,12 @@ const (
 	encStateUnknown = ""
 	encStateOn      = "on"
 	encStateOff     = "off"
+)
+
+// Where a recorded encryption answer came from. See storedBackupKey.
+const (
+	encSourceCheckin      = "checkin"
+	encSourceProvisioning = "provisioning"
 )
 
 var backupKeyMu sync.Mutex
@@ -203,16 +220,76 @@ func readBackupKeyRecord() (*storedBackupKey, error) {
 // that is the ordinary state of a machine that has not checked in yet, not a
 // storage fault.
 func persistedEncryption() (state string, keyID string, err error) {
+	state, keyID, _, err = persistedEncryptionWithSource()
+	return
+}
+
+// persistedEncryptionWithSource is persistedEncryption plus who said so.
+func persistedEncryptionWithSource() (state string, keyID string, source string, err error) {
 	backupKeyMu.Lock()
 	defer backupKeyMu.Unlock()
 	rec, err := readBackupKeyRecord()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return encStateUnknown, "", nil
+			return encStateUnknown, "", "", nil
 		}
-		return encStateUnknown, "", err
+		return encStateUnknown, "", "", err
 	}
-	return rec.Encryption, rec.KeyID, nil
+	src := rec.EncryptionSource
+	if src == "" {
+		// Records written before the field existed came from a check-in.
+		src = encSourceCheckin
+	}
+	return rec.Encryption, rec.KeyID, src, nil
+}
+
+// seedEncryptionFromProvisioning records the org's encryption answer from a
+// preconfigured MSI's profile, so a machine that has been imaged but has never
+// reached its control server can still decide what to do.
+//
+// IT ONLY EVER FILLS A VOID. If anything has been recorded already — by a
+// check-in or by an earlier profile — this does nothing and says so. A profile
+// is unauthenticated and provisional; it may answer a question nobody has
+// answered yet, and it may never overrule one that has been.
+//
+// state must be encStateOn or encStateOff; anything else is refused rather
+// than written, because a third value here would put the machine back in the
+// unknown state this exists to leave.
+func seedEncryptionFromProvisioning(state string) (seeded bool, err error) {
+	if state != encStateOn && state != encStateOff {
+		return false, fmt.Errorf("refusing to seed an unknown encryption state %q", state)
+	}
+
+	backupKeyMu.Lock()
+	defer backupKeyMu.Unlock()
+
+	if _, err := readBackupKeyRecord(); err == nil {
+		return false, nil // already answered; a profile does not overrule it
+	} else if !errors.Is(err, os.ErrNotExist) {
+		// Unreadable is NOT empty. Overwriting a record we could not parse
+		// would destroy a sealed key, so refuse and let the caller report it.
+		return false, err
+	}
+
+	path, err := backupKeyPath()
+	if err != nil {
+		return false, err
+	}
+	// NO KEY IS SEEDED, EVER, even for "on". The profile carries no material
+	// and could not be trusted with any; "on" here means "expect to need a
+	// key", which makes the machine fetch one — or refuse — rather than back
+	// up in the clear.
+	data, err := json.MarshalIndent(storedBackupKey{
+		Encryption:       state,
+		EncryptionSource: encSourceProvisioning,
+	}, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err := atomicWriteFile(path, data, 0600); err != nil {
+		return false, fmt.Errorf("recording the provisioned encryption answer failed: %w", err)
+	}
+	return true, nil
 }
 
 // recordEncryptionOff writes down that the org does not encrypt, and drops any
@@ -229,10 +306,18 @@ func recordEncryptionOff() error {
 	if err != nil {
 		return err
 	}
-	if rec, err := readBackupKeyRecord(); err == nil && rec.Encryption == encStateOff {
+	if rec, err := readBackupKeyRecord(); err == nil && rec.Encryption == encStateOff &&
+		rec.EncryptionSource != encSourceProvisioning {
 		return nil // already recorded; do not rewrite the file every check-in
 	}
-	data, err := json.MarshalIndent(storedBackupKey{Encryption: encStateOff}, "", "  ")
+	// A provisioning-seeded "off" IS rewritten, once, so the record stops
+	// claiming a provisional source after the server has confirmed it. Without
+	// that, a machine looks permanently un-confirmed and any future report
+	// about provisional answers would be wrong about this one forever.
+	data, err := json.MarshalIndent(storedBackupKey{
+		Encryption:       encStateOff,
+		EncryptionSource: encSourceCheckin,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
