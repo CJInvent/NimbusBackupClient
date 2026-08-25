@@ -43,6 +43,33 @@ monitoring.
 **Fleet (NimbusControl)**
 - Enrollment by one-time token; status, job results and alerting server-side.
 
+## v4 is in progress — read this before changing anything
+
+The `v4_dev` branch is a substantial rewire and is **not** a set of small
+feature additions. Two properties are enforced by CI and are easy to break by
+accident:
+
+- **The GUI links no engine at all** — not backup, not restore. Both live in
+  the service, behind a local authenticated API. A file-set assertion in
+  `build-and-release.yml` fails the build if an engine file reaches the
+  console's compile view.
+- **The client restores files and folders, never a whole partition.** Nouns may
+  say "image" for the stored artifact; verbs say what happens to *files*. See
+  the header of `gui/imagebrowse_core.go`.
+
+| Document | What it is |
+|---|---|
+| `NimbusControl/docs/V4-BRINGUP.md` | **Start here with real hardware.** Order of bring-up, and what will bite |
+| `docs/V4-STATUS.md` | This repository's v4 status |
+| `docs/V4-PIPELINE.md` | The backup pipeline and the GUI lockdown |
+| `docs/V4-RESTORE.md` | The restore seam |
+| `docs/MSI-PROVISIONING.md` | Preconfigured MSI profiles (contract **v2**) |
+| `NimbusControl/docs/V4-SPEC.md` | The program-wide requirements. §9 holds the verified PBS cryptography — do not re-derive it |
+
+**Known gap:** `gui/` has no `go.sum`, so the dependency set of a signed MSI is
+not gated by the repository. `docs/V4-STATUS.md` has the one-line fix; do it
+before the first signed release.
+
 ## Architecture in one paragraph
 
 Two processes from one binary: a **Windows service** (`-tags service`,

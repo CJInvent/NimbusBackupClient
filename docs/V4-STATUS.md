@@ -1,6 +1,6 @@
 # v4 Status — NimbusBackupClient
 
-### Known gap, found 2026-08-05 while building the client locally
+### STILL OPEN: `gui/` has no `go.sum` (found 2026-08-05, unfixed 2026-08-25)
 
 `gui/go.mod` does not require `github.com/getlantern/systray` or
 `github.com/kardianos/service`, both of which `gui/` imports directly, and
@@ -8,10 +8,21 @@
 `go mod tidy` first and resolves the graph from the network at build time.
 That means the dependency set of a shipped, code-signed MSI is not pinned by
 anything in the repository, and `go.sum` does not gate what goes into it.
-Not fixed here — it wants its own commit, and `go mod tidy` output should be
-reviewed rather than taken.
 
-**Last updated:** 2026-08-09. Branch: `v4_dev`.
+**Fix it from a machine with Go 1.26 and a network** — it is thirty seconds,
+and it has stayed open only because the sandbox this was developed in cannot
+reach `proxy.golang.org`:
+
+```sh
+cd gui && GOWORK=off go mod tidy && git add go.mod go.sum && git commit
+```
+
+Review the `go mod tidy` output rather than taking it. Then change the CI
+build steps from `go mod tidy` to `-mod=readonly`, so a dependency change
+fails at review time instead of resolving silently at build time. **Do this
+before the first signed release, not after.**
+
+**Last updated:** 2026-08-25. Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in
 **NimbusControl**, because most of it describes a server/client contract that
@@ -19,7 +30,8 @@ only makes sense read as one thing:
 
 | Document | What it is |
 |---|---|
-| `NimbusControl/docs/V4-STATUS.md` | **Start here.** Program-wide status, what is merged, what is not started, open questions |
+| `NimbusControl/docs/V4-BRINGUP.md` | **Start here if you have real hardware.** Standing v4 up on a live server + Windows agent, in order, and what will bite |
+| `NimbusControl/docs/V4-STATUS.md` | Program-wide status, what is merged, what is not started, open questions |
 | `NimbusControl/docs/V4-SPEC.md` | The corrected v4 requirements. §9 holds the verified PBS cryptography — do not re-derive it |
 | `NimbusControl/docs/V4-CLIENT-CONFIG.md` | Design for the next block of client work: managed jobs, PVE scheduling, GUI lockdown |
 | `NimbusControl/docs/V4-AUDIT.md` | Phase B audit findings, including the two client subsystems deleted |
@@ -389,6 +401,73 @@ against a real PBS**, which is also what phase E's outstanding caveat asks for.
   phases E or F has done this. It is phase E's stated caveat and it is now the
   next task: every piece exists, none of them have met each other outside a
   test.
+
+## Built since 2026-08-19
+
+All on `v4_dev` and green in CI.
+
+### The restore rewire — the GUI links no engine at all
+
+Restore moved behind the local API, matching what phase 3 did for backup. The
+console asks; the service does. Record: `docs/V4-RESTORE.md`.
+
+- `gui/api/restore.go` — the op table, the permission gate, the job registry.
+  Every op declares a right and a description; an op with neither is refused.
+- `gui/restore_service.go` (service) dispatches; `gui/restore_bindings.go`
+  (console) delegates. They are held together by
+  `gui/restore_ops_test.go`, which pins **three** lists against each other:
+  what the console can ask for, what the gate declares, and what the service
+  implements.
+- CI asserts the property directly: a **file-set** check asks the Go toolchain
+  which files each build would compile and fails if any engine file reaches the
+  console build. That check cannot be vacuous — it also fails if an engine file
+  is missing from the *service* side, so a rename breaks it rather than
+  satisfying it.
+
+### The image→volume rename
+
+"Image restore" read as "restore an image", which the client does not and must
+not do — it extracts **files** from a stored disk image. Bindings, ops, types
+and internals were renamed to say what they do
+(`RestoreFilesFromVolume`, `ListVolumeFiles`, `CancelVolumeFileRestore`,
+`streamVolumeZip`). The naming rule lives in the header of
+`gui/imagebrowse_core.go`: **nouns may say "image"** for the stored artifact;
+**verbs say what happens to files.**
+
+The server's own command vocabulary was NOT renamed — see the open-questions
+list in `NimbusControl/docs/V4-STATUS.md`.
+
+### Historical-key restore
+
+A snapshot older than a key rotation is opened by fetching the key its manifest
+names: `POST /api/agent/v1/backup-key/for-fingerprint`, `serverKeyForFingerprint`
+in the key-source chain. The PBS fingerprint derivation is pinned against an
+independent derivation *and* a shared cross-language vector, because a format
+validated only against an encoder we also own proves self-consistency and
+nothing else (dev rule 25).
+
+### Restores are reported as first-class events
+
+`controlplane/restorereport.go`, wired at the two ops that write files out of a
+snapshot. This does not make the claim honest — the same token authorises the
+key fetch and the report — but a lie now has to span two records instead of one
+field, and the server grades it accordingly.
+
+**A restore must never fail because its report did.** `finish()` returns
+nothing at all — not an ignored error, no error to ignore — because a signature
+that could return one is one somebody eventually propagates, during a recovery,
+over telemetry. A test pins that signature.
+
+### Provisioning profile v2
+
+`ProfileVersion = 2`, carrying the org's `encryption` answer so a preconfigured
+MSI lifts the never-checked-in refusal. The profile is unauthenticated, so the
+seed may fill a void but never overrule an existing answer, seeds no key
+material, refuses anything but `on`/`off`, and errors rather than clobbering an
+unreadable record. Every answer records its source; a check-in upgrades a
+provisioned one.
+
+---
 
 ## Building and testing
 
