@@ -181,11 +181,40 @@ the durable limit — an operator recovering a machine opens several snapshots
 in a row while hunting for the right one, and 3/hour would stop them halfway
 through a recovery.
 
-**The lasting fix** is to match a restore release against a restore *this
-server itself requested* — `Restore\ImageBrowseController` already records
-agent browse and extract commands — which turns `restore` into a claim with
-evidence behind it rather than a label. That is a follow-up, written down so
-nobody reads the label as a control it is not yet.
+### The claim now carries evidence — BUILT
+
+Both halves of the lasting fix are in.
+
+**The server corroborates at report time.** For each `restore` release,
+`BackupKeys::unmatchedReleases()` looks for a portal browse or extract issued
+to that agent within an hour, with `requested_by` naming a real user, and
+returns the evidence alongside the verdict.
+
+**This agent reports its own restores.** `POST /api/agent/v1/restores`
+(`controlplane/restorereport.go`, wired at the two file-restore ops in
+`gui/restore_service.go`) files a `restore_runs` row when a restore starts and
+again when it ends.
+
+The two are graded apart and deliberately not collapsed:
+
+| claim | what backs it | who could have written it |
+|---|---|---|
+| `asserted` | the `mode` field alone | this agent's token |
+| `reported` | a `restore_runs` row near the release | this agent's token |
+| `corroborated` | a portal action by a named user | **the server** |
+
+A stolen agent token can write a `restore_runs` row. It cannot make the server
+record that a human clicked something — that is the only line in the scale it
+cannot cross, and merging `reported` into `corroborated` would erase it.
+
+**What reporting must never do is fail a restore.** Recovery is the moment this
+product exists for; if the control server is unreachable the restore runs and
+the report is lost. `restoreReporter.finish` returns nothing at all, so there
+is no error for a future caller to propagate, and a source-level test pins that
+signature for exactly that reason.
+
+`asserted` is not an accusation. A restore driven from this machine's own
+console with a durably stored key can legitimately leave nothing else behind.
 
 ### A stronger shape, not taken yet
 

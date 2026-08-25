@@ -26,8 +26,30 @@ import (
 	"fmt"
 	"time"
 
+	"controlplane"
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
+
+// snapshotLabel renders a snapshot for the audit trail in the shape PBS names
+// it, so a row in the portal's restore history can be pasted straight into a
+// PBS query. Best-effort by design: a label nobody can resolve is worth more
+// than an empty column, and this must never be a reason a restore does not
+// run.
+func snapshotLabel(ref SnapshotRef) string {
+	when := ref.SnapshotID
+	if when == "" && ref.SnapshotUnix > 0 {
+		when = time.Unix(ref.SnapshotUnix, 0).UTC().Format("2006-01-02T15:04:05Z")
+	}
+	switch {
+	case ref.BackupID == "" && when == "":
+		return ""
+	case when == "":
+		return "host/" + ref.BackupID
+	case ref.BackupID == "":
+		return when
+	}
+	return "host/" + ref.BackupID + "/" + when
+}
 
 // restoreTime resolves the instant a SnapshotRef names.
 //
@@ -205,7 +227,12 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 		opts.OnProgress = func(pct float64, msg string) {
 			progress(pct*100, msg, 0, 0, 0, -1)
 		}
-		return nil, RestoreSnapshotInline(opts)
+		// REPORTED. This restore fetched a backup key and no backup run will
+		// follow it, so the server's release audit sees it as unmatched by
+		// construction -- see V4-SPEC 9.7 and restore_report_service.go. The
+		// report never changes what the caller gets back.
+		return nil, reportedRestore(controlplane.RestoreArchive, snapshotLabel(p.SnapshotRef),
+			len(p.IncludePaths), func() error { return RestoreSnapshotInline(opts) })
 
 	case opDownload:
 		p, err := decodeParams[DownloadParams](op, raw)
@@ -262,11 +289,18 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 		if err != nil {
 			return nil, err
 		}
-		return nil, withImageProgress(progress, func() error {
-			return a.RestoreFilesFromVolume(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
-				p.DiskArchive, p.PartIndex, p.IncludePaths, p.DestDir, p.KeepStructure,
-				p.Overwrite, p.RestoreMtimes, p.RestoreACLs, p.RestoreADS, p.NeededBytes)
-		})
+		// The SOURCE is a stored disk image; the operation is still a file
+		// restore, which is why the kind is `volume` and there is no kind
+		// meaning "a whole partition" for it to be confused with.
+		return nil, reportedRestore(controlplane.RestoreVolume,
+			snapshotLabel(SnapshotRef{BackupID: p.BackupID, SnapshotID: p.SnapshotID}),
+			len(p.IncludePaths), func() error {
+				return withImageProgress(progress, func() error {
+					return a.RestoreFilesFromVolume(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
+						p.DiskArchive, p.PartIndex, p.IncludePaths, p.DestDir, p.KeepStructure,
+						p.Overwrite, p.RestoreMtimes, p.RestoreACLs, p.RestoreADS, p.NeededBytes)
+				})
+			})
 	}
 	return nil, fmt.Errorf("restore job %q is declared but not implemented", op)
 }

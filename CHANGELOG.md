@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The agent reports its own restores to the control server
+  (`POST /api/agent/v1/restores`). A restore fetches a backup key and no backup
+  run follows it, so the server's key-release audit saw it as unmatched by
+  construction; the only thing separating "a person restored a file" from
+  "something took the key and vanished" was one field this process chose.
+  Reporting the restore means the two records have to agree. It is not proof —
+  the same token writes both — so the server grades a self-report below a
+  portal action taken by a named user. **A failed report never fails a
+  restore.**
+
 ## [0.3.0] - 2026-07-29
 
 Backup job correlation, end to end: every run is now traceable from the
