@@ -10,6 +10,6 @@ require (
 
 require (
 	github.com/dchest/siphash v1.2.3
-	golang.org/x/crypto v0.11.0
+	golang.org/x/crypto v0.51.0
 	golang.org/x/text v0.39.0 // indirect
 )
