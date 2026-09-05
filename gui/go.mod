@@ -3,11 +3,12 @@ module github.com/tizbac/proxmoxbackupclient_go/gui
 go 1.26
 
 require (
-	github.com/cornelk/hashmap v1.0.8
-	github.com/wailsapp/wails/v2 v2.8.0
-	github.com/tizbac/proxmoxbackupclient_go/gui/api v0.0.0
-	clientcommon v0.0.0
 	controlplane v0.0.0
+	github.com/getlantern/systray v1.2.2
+	github.com/kardianos/service v1.3.0
+	github.com/tizbac/proxmoxbackupclient_go/gui/api v0.0.0
+	github.com/wailsapp/wails/v2 v2.8.0
+	golang.org/x/sys v0.45.0
 	imagebrowse v0.0.0
 	pbscommon v0.0.0
 	retry v0.0.0
@@ -17,10 +18,20 @@ require (
 
 require (
 	github.com/bep/debounce v1.2.1 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dchest/siphash v1.2.3 // indirect
+	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect
+	github.com/getlantern/errors v0.0.0-20190325191628-abdb3e3e36f7 // indirect
+	github.com/getlantern/golog v0.0.0-20190830074920-4ef2e798c2d7 // indirect
+	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
+	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
+	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/labstack/echo/v4 v4.11.1 // indirect
 	github.com/labstack/gommon v0.4.0 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.0 // indirect
@@ -29,27 +40,30 @@ require (
 	github.com/leaanthony/u v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
+	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/samber/lo v1.38.1 // indirect
+	github.com/st-matskevich/go-vss v0.3.3 // indirect
 	github.com/tkrajina/go-reflector v0.5.6 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.10 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/crypto v0.11.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/time v0.5.0 // indirect
+	www.velocidex.com/golang/go-ntfs v0.2.0 // indirect
 )
 
 // Local package replacements to use sibling directories
 replace (
-	github.com/tizbac/proxmoxbackupclient_go/gui/api => ./api
 	clientcommon => ../clientcommon
 	controlplane => ../controlplane
+	github.com/tizbac/proxmoxbackupclient_go/gui/api => ./api
 	imagebrowse => ../imagebrowse
 	pbscommon => ../pbscommon
 	retry => ../pkg/retry
