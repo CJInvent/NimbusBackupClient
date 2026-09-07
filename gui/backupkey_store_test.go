@@ -57,8 +57,10 @@ func freshKeyMaterial(t *testing.T) (*controlplane.BackupKeyMaterial, []byte) {
 	if _, err := rand.Read(escrow); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
+	sealed, sealedTo := sealToThisMachine(t, raw)
 	return &controlplane.BackupKeyMaterial{
-		KeyB64:            base64.StdEncoding.EncodeToString(raw),
+		KeySealedB64:      sealed,
+		SealedToKeyID:     sealedTo,
 		KeyID:             keyIDOf(raw),
 		Version:           2,
 		Scope:             "org",
@@ -270,7 +272,7 @@ func TestBackupKeyStoreRejectsMismatchedMaterial(t *testing.T) {
 	if _, err := rand.Read(other); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
-	m.KeyB64 = base64.StdEncoding.EncodeToString(other) // right shape, wrong bytes
+	m.KeySealedB64, m.SealedToKeyID = sealToThisMachine(t, other) // right shape, wrong bytes
 
 	if err := storeBackupKey(m); err == nil {
 		t.Fatalf("stored material that does not match its key_id")
