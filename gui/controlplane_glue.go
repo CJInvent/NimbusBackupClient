@@ -94,6 +94,16 @@ func (a *App) StartControlPlane() {
 			writeWarnLog(fmt.Sprintf("[controlplane] WARNING: enrolled but config save failed: %v", err))
 		}
 		writeDebugLog(fmt.Sprintf("[controlplane] enrolled as agent %d", resp.AgentID))
+
+		// Registering the machine's public key is part of enrolling, not a
+		// later step: every secret endpoint refuses until one exists, so an
+		// agent that stops here can check in forever and never receive a PBS
+		// credential or a backup key. Failure is not fatal to enrollment --
+		// the machine is enrolled either way, and the secret paths register
+		// on demand -- but it is the first thing to know about.
+		if err := ensureAgentKeyRegistered(cpClient); err != nil {
+			writeWarnLog(fmt.Sprintf("[controlplane] WARNING: %v — secrets cannot be delivered to this machine until it registers a key", err))
+		}
 	}
 
 	cpAgent = &controlplane.Agent{
@@ -258,6 +268,16 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 		// NOT a live call — see that file's top comment for why check-in
 		// stopped triggering a fresh PBS network round-trip every ~120s.
 		PBSReachable: cachedPBSReachable(),
+		// Where this machine is on its own network. Cheap (a syscall, no
+		// I/O), and it is read on every check-in rather than cached: an
+		// address that changed is the entire signal, and a cache would
+		// report the old one for as long as the process lives.
+		Interfaces: controlplane.LocalInterfaces(),
+		// What actually protects this machine's stored secrets. Read from
+		// the same cached DEK the rest of the agent uses, so it costs a
+		// map lookup after the first call and cannot disagree with the
+		// protector the secrets are really under.
+		CredentialStorage: credentialStorageLevel(),
 	}
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
