@@ -202,7 +202,9 @@ func serverKeyForFingerprint(fingerprint string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	m, err := c.FetchBackupKeyByFingerprint(fingerprint)
+	m, err := withAgentKey(c, func() (*controlplane.BackupKeyMaterialForRestore, error) {
+		return c.FetchBackupKeyByFingerprint(fingerprint)
+	})
 	if err != nil {
 		if errors.Is(err, controlplane.ErrNoSuchKey) {
 			return nil, false, nil
