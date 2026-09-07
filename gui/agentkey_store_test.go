@@ -2,11 +2,14 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"controlplane"
 
@@ -161,6 +164,15 @@ func TestSealedBoxOverheadMatchesLibsodium(t *testing.T) {
 // The id is a function of the key, which is what makes re-registration
 // idempotent and makes "same id, different bytes" -- the collision the server
 // refuses -- unreachable by accident.
+//
+// THE DERIVATION IS RECOMPUTED HERE, from the primitive, rather than asserted
+// by calling agentKeyID twice and comparing the two answers. That comparison
+// was the first version of this test and it was worth almost nothing: it
+// proves the function is not RANDOM, which is not the property anyone cares
+// about, and it would have passed just as happily if the id stopped depending
+// on the key at all. staticcheck refused it outright (SA4000, identical
+// expressions either side of !=) and was right to -- the lint found a weak
+// assertion, not a style problem.
 func TestAgentKeyIDIsDerivedFromTheKey(t *testing.T) {
 	a, _, err := box.GenerateKey(rand.Reader)
 	if err != nil {
@@ -170,13 +182,31 @@ func TestAgentKeyIDIsDerivedFromTheKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agentKeyID(a[:]) != agentKeyID(a[:]) {
-		t.Fatal("the same key produced two different ids")
+
+	id := agentKeyID(a[:])
+
+	// Structural, not "equals today's date": agentKeyID reads the clock, and
+	// an assertion against a second clock read is a test that fails once a
+	// year at midnight UTC for no reason anyone will enjoy diagnosing.
+	cut := strings.LastIndex(id, "-")
+	if cut < 0 {
+		t.Fatalf("id %q is not <date>-<hash>", id)
 	}
+	if _, err := time.Parse("2006-01-02", id[:cut]); err != nil {
+		t.Fatalf("id %q does not start with a UTC date: %v", id, err)
+	}
+
+	sum := sha256.Sum256(a[:])
+	if got, want := id[cut+1:], hex.EncodeToString(sum[:4]); got != want {
+		t.Fatalf("id suffix = %q, want %q (the first 8 hex of sha256 over the public key)", got, want)
+	}
+
+	// And the part that matters to the server: two keys cannot collide on one
+	// id, because that is the state it refuses as a rotation gone wrong.
 	if agentKeyID(a[:]) == agentKeyID(b[:]) {
 		t.Fatal("two different keys produced the same id")
 	}
-	if len(agentKeyID(a[:])) > 128 {
+	if len(id) > 128 {
 		t.Fatal("the server caps a key id at 128 characters")
 	}
 }
