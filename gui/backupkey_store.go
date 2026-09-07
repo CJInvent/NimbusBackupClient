@@ -337,9 +337,9 @@ func storeBackupKey(m *controlplane.BackupKeyMaterial) error {
 	if m == nil {
 		return fmt.Errorf("no backup key material to store")
 	}
-	raw, err := base64.StdEncoding.DecodeString(m.KeyB64)
+	raw, err := openDeliveredKey(m)
 	if err != nil {
-		return fmt.Errorf("delivered backup key is not valid base64: %w", err)
+		return err
 	}
 	if err := controlplane.VerifyKeyMaterial(raw, m.KeyID); err != nil {
 		return err
@@ -426,7 +426,9 @@ func loadBackupKey() (raw []byte, escrow []byte, keyID string, err error) {
 	}
 	raw, err = openWithDEK(dek, sealed)
 	if err != nil {
-		return nil, nil, "", err
+		// openWithDEK is shared with the agent-key store, so it names no
+		// subject; the subject belongs to whoever asked.
+		return nil, nil, "", fmt.Errorf("the stored backup key could not be opened: %w", err)
 	}
 	if err := controlplane.VerifyKeyMaterial(raw, rec.KeyID); err != nil {
 		return nil, nil, "", fmt.Errorf("stored backup key does not match its recorded key_id: %w", err)
@@ -466,7 +468,7 @@ func openWithDEK(dek, sealed []byte) ([]byte, error) {
 		// No detail from the AEAD: it distinguishes nothing useful and the
 		// message is what an operator reads. What matters is that this is an
 		// error and not an empty key.
-		return nil, fmt.Errorf("the stored backup key could not be decrypted with this machine's master key")
+		return nil, fmt.Errorf("the stored value could not be decrypted with this machine's master key")
 	}
 	return plain, nil
 }
