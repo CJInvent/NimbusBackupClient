@@ -144,7 +144,10 @@ func (c *Client) FetchBackupKey(req BackupKeyRequest) (*BackupKeyMaterial, error
 	}
 	var out BackupKeyMaterial
 	if err := c.post("/api/agent/v1/backup-key", req, &out, true); err != nil {
-		return nil, err
+		// A 409 here is not a transient conflict: it is this server saying it
+		// has no public key to seal to, which no amount of retrying reaches.
+		// The caller registers one and asks again.
+		return nil, asKeyRequired(err)
 	}
 	return &out, nil
 }
