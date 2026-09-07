@@ -54,7 +54,43 @@ type Inventory struct {
 	// confirmed unreachable is Ptr(false), not omission.
 	PBSReachable *bool `json:"pbs_reachable,omitempty"`
 
+	// CredentialStorage is which protector this machine's stored secrets
+	// actually got: tpm | dpapi | plaintext | unavailable. See
+	// gui/credential_storage.go for why the fallback level, not the
+	// attempted one, is what goes on the wire.
+	//
+	// This is NOT what selects durable vs ephemeral key delivery -- the
+	// agent asserts that mode on /backup-key, derived from the same
+	// underlying fact (backupkey_store.go). Both are recorded on purpose:
+	// a client claiming `durable` while reporting `plaintext` is a
+	// disagreement the server can see.
+	CredentialStorage string `json:"credential_storage,omitempty"`
+
+	// Interfaces is this machine's LAN interfaces and their unicast
+	// addresses -- the half of address tracking only the machine can see
+	// (NimbusControl V4-SECURITY-ROADMAP §5). The PUBLIC address is NOT
+	// here and must never be: the server observes that itself, from the
+	// socket the check-in arrived on, and the entire value of it is that
+	// the agent cannot influence it.
+	//
+	// omitempty, unlike BreakGlassFileRestore above, and for the opposite
+	// reason: absent means "this agent produced no reading" -- an older
+	// client, or a host whose interface list could not be read -- which the
+	// server records as nothing rather than as "this machine has no
+	// addresses". A machine really holding no reportable address is
+	// indistinguishable from that here, and is also a machine that just
+	// reached us over a network, so the ambiguity costs nothing.
+	Interfaces []NetworkInterface `json:"interfaces,omitempty"`
+
 	Extra map[string]interface{} `json:"extra,omitempty"`
+}
+
+// NetworkInterface is one interface and the unicast addresses it holds.
+// Loopback and link-local are excluded before this is built (netiface.go):
+// every machine has them and they identify none of them.
+type NetworkInterface struct {
+	Name      string   `json:"name"`
+	Addresses []string `json:"addresses"`
 }
 
 type CheckinRequest struct {
