@@ -45,12 +45,13 @@ const testFingerprint = "39:8d:47:8a:4e:9d:88:1c:6e:79:43:86:c7:7e:e6:36:" +
 func TestARetiredKeyIsReturnedForARestore(t *testing.T) {
 	var sent BackupKeyByFingerprintRequest
 	c := fingerprintServer(t, http.StatusOK, map[string]any{
-		"key":         "AAAA",
-		"key_id":      "abc123",
-		"version":     1,
-		"scope":       "org",
-		"status":      "retired",
-		"escrow_blob": "BBBB",
+		"key_sealed":       "AAAA",
+		"sealed_to_key_id": "2026-09-07-deadbeef",
+		"key_id":           "abc123",
+		"version":          1,
+		"scope":            "org",
+		"status":           "retired",
+		"escrow_blob":      "BBBB",
 	}, &sent)
 
 	got, err := c.FetchBackupKeyByFingerprint(testFingerprint)
@@ -69,8 +70,14 @@ func TestARetiredKeyIsReturnedForARestore(t *testing.T) {
 	// The embedded shape must decode too: the restore path hands
 	// BackupKeyMaterial to the same verifier the backup path uses, and a
 	// wrapper that only populated Status would fail there instead of here.
-	if got.KeyB64 != "AAAA" || got.EscrowBlobB64 != "BBBB" {
+	if got.KeySealedB64 != "AAAA" || got.EscrowBlobB64 != "BBBB" {
 		t.Errorf("embedded material did not decode: %+v", got.BackupKeyMaterial)
+	}
+	// And which of our keys it was sealed to: during a rotation this machine
+	// holds two, and opening with the wrong one reports a damaged payload for
+	// a perfectly good one.
+	if got.SealedToKeyID != "2026-09-07-deadbeef" {
+		t.Errorf("sealed_to_key_id = %q, want the key the server sealed to", got.SealedToKeyID)
 	}
 }
 
