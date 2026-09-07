@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"os"
 	"strings"
@@ -139,7 +138,7 @@ func TestEphemeralKeyRejectsWrongBytes(t *testing.T) {
 	m, raw := freshKeyMaterial(t)
 	bad := append([]byte(nil), raw...)
 	bad[7] ^= 0x01
-	m.KeyB64 = base64.StdEncoding.EncodeToString(bad)
+	m.KeySealedB64, m.SealedToKeyID = sealToThisMachine(t, bad)
 
 	if _, _, err := ephemeralKeyFromMaterial(m); err == nil {
 		t.Fatal("accepted material that does not match its key_id")
@@ -161,7 +160,7 @@ func TestEphemeralKeyRejectsWrongLength(t *testing.T) {
 	if _, err := rand.Read(short); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
-	m.KeyB64 = base64.StdEncoding.EncodeToString(short)
+	m.KeySealedB64, m.SealedToKeyID = sealToThisMachine(t, short)
 	if _, _, err := ephemeralKeyFromMaterial(m); err == nil {
 		t.Fatal("accepted a 16-byte backup key")
 	}

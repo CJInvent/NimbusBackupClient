@@ -172,7 +172,13 @@ func fetchKeyMaterial(mode, runUUID string) (*controlplane.BackupKeyMaterial, er
 	if c == nil {
 		return nil, errors.New("no control server is configured on this machine")
 	}
-	m, err := c.FetchBackupKey(controlplane.BackupKeyRequest{Mode: mode, RunUUID: runUUID})
+	// The key this material arrives sealed to has to exist on the server
+	// before the server can seal anything (T4). withAgentKey registers it if
+	// this process has not yet, and registers again if the server says it
+	// does not have it.
+	m, err := withAgentKey(c, func() (*controlplane.BackupKeyMaterial, error) {
+		return c.FetchBackupKey(controlplane.BackupKeyRequest{Mode: mode, RunUUID: runUUID})
+	})
 	if err != nil {
 		return nil, err
 	}

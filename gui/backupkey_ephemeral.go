@@ -48,9 +48,9 @@ func ephemeralKeyFromMaterial(m *controlplane.BackupKeyMaterial) (key []byte, es
 	if m == nil {
 		return nil, nil, errors.New("no backup key material was delivered")
 	}
-	raw, err := base64.StdEncoding.DecodeString(m.KeyB64)
+	raw, err := openDeliveredKey(m)
 	if err != nil {
-		return nil, nil, fmt.Errorf("delivered backup key is not valid base64: %w", err)
+		return nil, nil, err
 	}
 	if err := controlplane.VerifyKeyMaterial(raw, m.KeyID); err != nil {
 		return nil, nil, err

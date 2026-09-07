@@ -8,6 +8,7 @@ require (
 	github.com/kardianos/service v1.3.0
 	github.com/tizbac/proxmoxbackupclient_go/gui/api v0.0.0
 	github.com/wailsapp/wails/v2 v2.8.0
+	golang.org/x/crypto v0.51.0
 	golang.org/x/sys v0.45.0
 	imagebrowse v0.0.0
 	pbscommon v0.0.0
@@ -51,7 +52,6 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.10 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/text v0.39.0 // indirect

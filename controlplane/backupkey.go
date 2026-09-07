@@ -69,11 +69,26 @@ const (
 
 // BackupKeyMaterial is the response from POST /api/agent/v1/backup-key.
 //
-// KeyB64 is base64 because JSON has no byte-string type and a raw AES key
-// spliced into a JSON string is a mojibake bug waiting for the first key whose
-// bytes are not valid UTF-8 — which is most of them.
+// THE KEY ARRIVES SEALED, and the plaintext field is GONE rather than sitting
+// beside it (T4; the server made the same change on the same terms). Sealed
+// with crypto_box_seal to the X25519 public key this agent registered, so what
+// crosses the wire is readable only by the machine holding the private half --
+// TLS becomes defense in depth instead of the only thing between a customer's
+// key and whoever terminates the connection. A sealed field next to a
+// plaintext one would seal nothing at all.
+//
+// SealedToKeyID names WHICH of our keys it was sealed to. During a rotation an
+// agent legitimately holds two, and the server seals to the OLD one until
+// promotion, so this is how the opener knows which private half to reach for
+// rather than guessing and reporting "damaged payload" on a perfectly good
+// one.
+//
+// Base64 throughout because JSON has no byte-string type, and raw key bytes
+// spliced into a JSON string are a mojibake bug waiting for the first key that
+// is not valid UTF-8 — which is most of them.
 type BackupKeyMaterial struct {
-	KeyB64            string `json:"key"`
+	KeySealedB64      string `json:"key_sealed"`
+	SealedToKeyID     string `json:"sealed_to_key_id"`
 	KeyID             string `json:"key_id"`
 	Version           int    `json:"version"`
 	Scope             string `json:"scope"`

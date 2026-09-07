@@ -63,7 +63,7 @@ func (c *Client) FetchBackupKeyByFingerprint(fingerprint string) (*BackupKeyMate
 		if he := (*httpError)(nil); asHTTPError(err, &he) && he.status == 404 {
 			return nil, ErrNoSuchKey
 		}
-		return nil, err
+		return nil, asKeyRequired(err)
 	}
 	return &out, nil
 }
