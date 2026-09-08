@@ -406,6 +406,98 @@ against a real PBS**, which is also what phase E's outstanding caveat asks for.
 
 All on `v4_dev` and green in CI.
 
+### LAN interface reporting (server roadmap §5) — written, NOT PUSHED
+
+`controlplane/netiface.go` + `Inventory.Interfaces`, reported on every
+check-in from `cpBuildInventory`. Tests: `controlplane/netiface_test.go`
+(`go vet` clean, suite green locally). **Not on the branch yet** — the deploy
+key on this repository is still read-only, so this sits in the working tree
+with the workflow change. It is additive on the wire and the server treats an
+absent `interfaces` key as "no reading from this agent", so the server half
+(NimbusControl migration 040) shipped without it and is not waiting on it.
+
+What is deliberately NOT here: any attempt to discover this machine's PUBLIC
+address. The server observes that from the socket the check-in arrives on. An
+address the agent asserts is one the agent could be wrong or lying about, and
+the readopt review depends on the difference — so there is no echo-service
+call in this client and there should never be one.
+
+### T4 client half: this machine's key, and opening what is sealed to it — written, NOT PUSHED
+
+**This is the one that unblocked the client.** Every secret endpoint on the
+current server answers 409 until the agent has registered an X25519 public
+key, and the backup key now arrives SEALED (`key_sealed` + `sealed_to_key_id`,
+the plaintext `key` field is gone). So the client as it stood could not obtain
+a backup key at all, from any server running the current branch.
+
+- `gui/agentkey_store.go` — keypair, and custody of the private half. Sealed
+  under the SAME DEK/protector chain as the control-plane secret and the
+  backup key; written, flushed and READ BACK, with the round trip proved
+  through the real primitive (seal to the public half, open with the private
+  one) before anything is registered against it. Unlike the backup key, a weak
+  protector does not send this down an ephemeral path: there is no ephemeral
+  path for an identity, and a machine that cannot keep this key across a
+  restart is not degraded, it is broken. How weak it is gets reported honestly
+  as `credential_storage` instead.
+- `gui/agentkey_open.go` — the one place a delivery is opened, used by both the
+  durable store and the ephemeral holder, so "how a delivered key is opened"
+  has one answer.
+- `gui/agentkey_register.go` — registers once per process, and re-registers and
+  retries exactly once when the server says it has no key for us (a rebuilt
+  control plane, a restored database). Once, not in a loop: a server that keeps
+  refusing is a disagreement to surface, and the endpoint behind it is rate
+  limited at 3/hour.
+- `controlplane/agentkey.go` — wire types and RegisterKey only. The module has
+  no dependencies and keeps none: the crypto lives in gui, next to the DEK.
+
+INTEROP WAS CHECKED, not assumed. A payload sealed by the server's PHP
+`sodium_crypto_box_seal` opens with this client's `nacl/box.OpenAnonymous`
+(2026-09-07): 43-byte plaintext, 91-byte sealed, 48 bytes of overhead.
+`TestSealedBoxOverheadMatchesLibsodium` pins the part of that a runner can
+check without PHP. Then the real client was pointed at a real server and
+registered a key over HTTP — which is how the server bug below was found.
+
+**It found a server bug that had never been hit.** `keysRegister` and
+`keysProve` read `$req->post`, which PHP populates only for a form-encoded
+body, while this API is JSON — so every correctly-formed registration was
+answered "Missing required field: key_id". The server's own T4 suite drives
+the `AgentKeys` class directly, so the class was right and the route was
+unreachable and nothing compared the two. Fixed on the server side with a
+suite that drives the ceremony over HTTP (NimbusControl
+`tests/agent_keys_wire.php`).
+
+**NOT built: the rotation ceremony.** challenge/prove/promote exist on the
+server and are documented; this client registers one key and keeps it. Doing
+rotation properly needs a store that holds TWO keys at once, because the
+server keeps sealing to the OLD key until promotion — that is the next slice,
+and wire helpers for a ceremony nothing drives would have been dead wiring.
+
+### Credential-storage posture reporting (server roadmap §6) — written, NOT PUSHED
+
+`gui/credential_storage.go` reports which protector this machine's secrets
+actually got — `tpm`, `dpapi`, `plaintext`, or `unavailable` — in
+`inventory.credential_storage` on every check-in. It reads the SAME resolved
+protector the backup-key store reads (`dekSource`), so the posture the server
+displays cannot disagree with the protector the secrets are really under.
+
+The reason it exists: every fallback in `secrets.go` is silent, because none
+of them may stop a backup. That is right for one machine and wrong for a
+fleet — an MSP with a hundred machines otherwise believes all hundred hold
+their secrets in a TPM. Two answers are deliberately not merged: `""` (say
+nothing, the server keeps what it knew) and `unavailable` (the store could not
+be consulted, which is a machine whose backups are about to start refusing).
+
+Tests: `gui/credential_storage_test.go`, using the same `withProtector` /
+`withBrokenDEK` injection the key-store suite uses — a Linux runner has
+neither DPAPI nor a TPM, so without it every branch but `plaintext` would be
+unreachable.
+
+**Not done, and it is the other half of §6:** the last-resort store is still
+`plaintext` written at mode 0600, which on Windows is not the
+`/inheritance:r` + explicit-grants ACL the roadmap asks for. It is reported
+honestly as `plaintext` rather than being dressed up as a hardened file. That
+work is Windows ACL code only the Windows CI job can exercise.
+
 ### The restore rewire — the GUI links no engine at all
 
 Restore moved behind the local API, matching what phase 3 did for backup. The
