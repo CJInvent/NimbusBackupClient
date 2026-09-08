@@ -183,6 +183,21 @@ type CheckinResponse struct {
 	PBSPollIntervalSeconds int `json:"pbs_poll_interval_seconds"`
 	PBSPollOffsetSeconds   int `json:"pbs_poll_offset_seconds"`
 
+	// PBSTarget is where this machine backs up and under which identity, or
+	// nil when this server does not provision automatically.
+	//
+	// NIL IS NOT AN INSTRUCTION -- see the type's own comment. It means "this
+	// server has nothing to say about your PBS settings", which is the state
+	// of a machine whose organization is not attached to a datastore yet, and
+	// also of every machine for as long as the vault is locked. Reading it as
+	// "back up somewhere else" would wipe a hand-configured PBS the first time
+	// a superadmin signed out.
+	//
+	// The SECRET is deliberately absent and always will be. AuthID is the
+	// change detector: fetch from /pbs-credential when it does not match the
+	// auth-id whose secret we already hold.
+	PBSTarget *PBSTarget `json:"pbs_target"`
+
 	// ManagedJobs is the complete set of server-defined backup jobs for
 	// this agent, delivered fresh on every check-in.
 	//

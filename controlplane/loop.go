@@ -79,6 +79,22 @@ type Agent struct {
 	// not merge — deletion has no representation other than absence.
 	OnManagedJobs func([]ManagedJob)
 
+	// OnPBSTarget is invoked whenever a check-in delivers `pbs_target` --
+	// every cycle, INCLUDING the cycles where it is nil, and for exactly the
+	// reason OnBackupKey is pushed rather than polled.
+	//
+	// nil DOES NOT MEAN "stop backing up" and it does not mean "back up
+	// somewhere else". It means this server provisions nothing for this
+	// machine: no client token owner configured, the organization not
+	// attached to a datastore, or -- routinely and temporarily -- the vault
+	// locked, which is a state roadmap §2 requires check-in to survive. A
+	// handler that treated nil as an instruction would wipe a hand-configured
+	// PBS the first time a superadmin signed out. The handler is passed nil
+	// anyway, rather than being skipped, so that "the server said nothing"
+	// and "the server was never reached" stay distinguishable to whoever
+	// owns the reacting behavior.
+	OnPBSTarget func(*PBSTarget)
+
 	AgentVersion string
 
 	// PolicyMaxAge optionally bounds how long a delivered policy stays in
@@ -279,6 +295,12 @@ func (a *Agent) CheckinNow() {
 	}
 	if a.OnPBSPollSchedule != nil {
 		a.OnPBSPollSchedule(resp.PBSPollIntervalSeconds, resp.PBSPollOffsetSeconds)
+	}
+	// The target lands before commands for the third time in this function
+	// and the same reason: a run_backup delivered in THIS response must find
+	// the destination this response named, not the previous cycle's.
+	if a.OnPBSTarget != nil {
+		a.OnPBSTarget(resp.PBSTarget)
 	}
 
 	if n := len(resp.Commands); n > 0 {

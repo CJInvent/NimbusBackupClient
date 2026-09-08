@@ -58,3 +58,9 @@ Thumbs.db
 *.log
 # Idées/notes locales (pas dans git)
 GEMINI_IDEAS.md
+
+# `go build ./...` inside gui/ leaves a bare `gui` binary next to the sources.
+# Untracked and easy to stage by accident with `git add -A`, which is how a
+# 20 MB Linux ELF ends up in a Windows client's history.
+/gui/gui
+/gui/gui.exe

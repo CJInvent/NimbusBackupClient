@@ -196,6 +196,14 @@ func (c *Client) PostCommandResult(id int64, res CommandResult) error {
 type httpError struct {
 	status int
 	msg    string
+	// code is the server's machine-readable discriminator, empty when it sent
+	// none. It exists because a status is a CLASS of failure, not a failure:
+	// /pbs-credential answers 409 both for "you have not registered a key"
+	// and for "this server provisions nothing for you", and those demand
+	// opposite responses -- register and retry, versus keep what you have and
+	// wait. Matching on the English sentence instead would make a typo fix on
+	// the server a fleet-wide behavior change.
+	code string
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("controlplane: HTTP %d: %s", e.status, e.msg) }
@@ -275,12 +283,13 @@ func (c *Client) once(path string, body []byte, out interface{}, authed bool) er
 		// Server error bodies are {"error": "..."} — surface the message.
 		var e struct {
 			Error string `json:"error"`
+			Code  string `json:"code"`
 		}
 		_ = json.Unmarshal(data, &e)
 		if e.Error == "" {
 			e.Error = http.StatusText(resp.StatusCode)
 		}
-		return &httpError{status: resp.StatusCode, msg: e.Error}
+		return &httpError{status: resp.StatusCode, msg: e.Error, code: e.Code}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
