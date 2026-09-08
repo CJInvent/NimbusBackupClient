@@ -122,6 +122,43 @@ jobs:
           echo "Legend: module current-version [latest-version]"
           echo "No brackets = already at latest version"
 
+      # Every build, test and audit step in this workflow resolves with
+      # `go mod download`, which consumes the committed go.mod/go.sum and never
+      # rewrites them. That is what makes the reviewed pin the thing that
+      # actually ships — but it only holds while the committed files stay
+      # tidy, so that is asserted here rather than assumed. Before this gate
+      # existed the workflow tidied in ten places, and five modules
+      # (directorybackup, machinebackup, nbd, pbscommon, snapshot) had drifted
+      # far enough that pbscommon's go.sum pinned versions its own go.mod did
+      # not require. Nothing was red, because nothing was ever asked.
+      #
+      # `-diff` reports what `tidy` WOULD change and exits non-zero, without
+      # writing anything.
+      - name: Module pin gate
+        env:
+          GOWORK: off
+        run: |
+          set -uo pipefail
+          # Discovered, not listed: a module added to the repository is gated
+          # the moment it exists.
+          mapfile -t modules < <(find . -name go.mod -not -path './gui/frontend/node_modules/*' -printf '%h\n' | sort)
+          if [ ${#modules[@]} -eq 0 ]; then
+            echo "::error::no Go modules found - the discovery is wrong, not the repository"
+            exit 1
+          fi
+          fail=0
+          for m in "${modules[@]}"; do
+            if ( cd "$m" && go mod tidy -diff ) > tidy.diff 2>&1; then
+              echo "ok    $m"
+            else
+              cat tidy.diff
+              echo "::error::$m: go.mod/go.sum are not tidy - run 'go mod tidy' in $m and commit the result"
+              fail=1
+            fi
+            rm -f tidy.diff
+          done
+          exit $fail
+
   # S11 — frontend gate, early and cheap. The i18n audit also runs as the
   # frontend's `prebuild` hook, but that is 20 minutes into the Windows Wails
   # build; a parity break should cost a minute on ubuntu instead.
@@ -195,7 +232,7 @@ jobs:
         env:
           GOWORK: off
         run: |
-          go mod tidy
+          go mod download
           fail=0
           run_view() {
             goos="$1"; tags="$2"
@@ -244,11 +281,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
-      - name: Tidy dependencies
+      - name: Resolve dependencies
         working-directory: gui
         env:
           GOWORK: off
-        run: go mod tidy
+        run: go mod download
 
       - name: Run gosec
         env:
@@ -356,11 +393,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
-      - name: Tidy dependencies (controlplane)
+      - name: Resolve dependencies (controlplane)
         working-directory: controlplane
         env:
           GOWORK: off
-        run: go mod tidy
+        run: go mod download
 
       - name: Run tests (controlplane module)
         working-directory: controlplane
@@ -368,11 +405,11 @@ jobs:
           GOWORK: off
         run: go test -v -race ./...
 
-      - name: Tidy dependencies
+      - name: Resolve dependencies
         working-directory: gui
         env:
           GOWORK: off
-        run: go mod tidy
+        run: go mod download
 
       - name: Run tests
         working-directory: gui
@@ -436,7 +473,7 @@ jobs:
           failed=""
           for m in $modules; do
             echo "::group::$m"
-            if ( cd "$m" && go mod tidy && go test -race -count=1 ./... > mod.log 2>&1 ); then
+            if ( cd "$m" && go mod download && go test -race -count=1 ./... > mod.log 2>&1 ); then
               cat "$m/mod.log"; rm -f "$m/mod.log"
               echo "PASS $m"
             else
@@ -491,7 +528,7 @@ jobs:
         env:
           GOWORK: off
         run: |
-          go mod tidy
+          go mod download
           # Failures are surfaced as annotations as well as log lines: workflow
           # log blobs are not always reachable, and a failure you cannot read is
           # a failure you cannot fix.
@@ -519,7 +556,7 @@ jobs:
         env:
           GOWORK: off
         run: |
-          go mod tidy
+          go mod download
           if go test -count=1 -v -run 'TestVSS' ./... > smoke.log 2>&1; then cat smoke.log; else
             cat smoke.log
             grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::S10: $l"; done
@@ -575,7 +612,7 @@ jobs:
           # `// indirect` line in a go.mod claims.
           for m in gui pbscommon; do
             echo "::group::$m selected versions"
-            ( cd "$m" && go mod tidy >/dev/null 2>&1 || true
+            ( cd "$m" && go mod download >/dev/null 2>&1 || true
               go list -m golang.org/x/net golang.org/x/crypto golang.org/x/sys 2>/dev/null || true )
             echo "::endgroup::"
           done
@@ -591,7 +628,7 @@ jobs:
             # Must stay an `if` CONDITION: Actions runs steps under `set -e`,
             # so capturing $? from a failing command aborts the step before the
             # reporting below can run. govulncheck exits 3 on findings.
-            if ( cd "$m" && go mod tidy >/dev/null 2>&1; govulncheck ./... ) > vuln.txt 2>&1; then
+            if ( cd "$m" && go mod download >/dev/null 2>&1; govulncheck ./... ) > vuln.txt 2>&1; then
               cat vuln.txt
               echo "OK   $m"
             else
@@ -760,10 +797,13 @@ jobs:
         env:
           GOWORK: off
         run: |
-          # wails build does not tidy, and gui/ carries no committed go.sum,
-          # so resolve explicitly here — otherwise a dependency bump lands as a
-          # "missing go.sum entry" at build time instead of at review time.
-          go mod tidy
+          # `download`, never `tidy`: the committed go.mod/go.sum ARE the
+          # dependency set of the MSI. `tidy` here would rewrite them from the
+          # source tree, so the shipped binary would be built from whatever
+          # resolution happened at build time rather than from the reviewed
+          # pin — and a stale pin would never fail. `download` consumes the
+          # pin and fails loudly on a missing go.sum entry.
+          go mod download
 
       - name: Build GUI
         working-directory: gui
