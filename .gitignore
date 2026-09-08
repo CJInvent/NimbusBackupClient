@@ -33,3 +33,28 @@ vendor/
 # version CI uses). Downloaded, never committed: a binary in the tree is a
 # second, silently-drifting pin.
 .tools/
+
+# Generated Windows version resource (created in CI by goversioninfo)
+*.syso
+gui/versioninfo.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packages
+*.tar.gz
+*.zip
+*.AppImage
+
+# Logs
+*.log
+# Idées/notes locales (pas dans git)
+GEMINI_IDEAS.md

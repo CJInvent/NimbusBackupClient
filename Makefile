@@ -50,7 +50,7 @@ help:
 
 # Install build dependencies
 install-deps:
-	@echo "\U0001F4E6 Installing dependencies..."
+	@echo "📦 Installing dependencies..."
 	go install github.com/wailsapp/wails/v2/cmd/wails@latest
 	cd gui/frontend && npm install
 
@@ -65,14 +65,14 @@ cli: cli-directory cli-machine
 endif
 
 cli-directory:
-	@echo "\U0001F528 Building Directory Backup CLI..."
+	@echo "🔨 Building Directory Backup CLI..."
 	@mkdir -p $(BUILD_DIR)
 	cd directorybackup && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/$(CLI_DIR_BIN)$(shell go env GOEXE)
 	@echo "✅ Built: $(BUILD_DIR)/$(CLI_DIR_BIN)"
 
 cli-machine:
-	@echo "\U0001F528 Building Machine Backup CLI..."
+	@echo "🔨 Building Machine Backup CLI..."
 	@mkdir -p $(BUILD_DIR)
 	cd machinebackup && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/$(CLI_MACHINE_BIN)$(shell go env GOEXE)
@@ -80,7 +80,7 @@ cli-machine:
 
 cli-nbd:
 ifeq ($(shell go env GOOS),linux)
-	@echo "\U0001F528 Building NBD Server CLI..."
+	@echo "🔨 Building NBD Server CLI..."
 	@mkdir -p $(BUILD_DIR)
 	cd nbd && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/$(CLI_NBD_BIN)$(shell go env GOEXE)
@@ -91,7 +91,7 @@ endif
 
 # Service Build (Standalone Windows Service)
 service:
-	@echo "\U0001F527 Building Backup Service..."
+	@echo "🔧 Building Backup Service..."
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p gui/build/bin
 	cd cmd/service && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
@@ -102,7 +102,7 @@ service:
 
 # GUI Build
 gui:
-	@echo "\U0001F3A8 Building GUI application (version $(VERSION))..."
+	@echo "🎨 Building GUI application (version $(VERSION))..."
 	cd gui && wails build -clean -platform $(shell go env GOOS)/$(shell go env GOARCH) \
 		-ldflags "-X main.appVersion=$(VERSION)"
 	@mkdir -p $(BUILD_DIR)
@@ -111,23 +111,23 @@ gui:
 
 # GUI Development mode
 gui-dev:
-	@echo "\U0001F680 Starting GUI in development mode..."
+	@echo "🚀 Starting GUI in development mode..."
 	cd gui && wails dev
 
 # Tests
 test:
-	@echo "\U0001F9EA Running tests..."
+	@echo "🧪 Running tests..."
 	go test -v -race -coverprofile=coverage.out ./...
-	@echo "\U0001F4CA Coverage report:"
+	@echo "📊 Coverage report:"
 	go tool cover -func=coverage.out
 
 test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
-	@echo "\U0001F4CA Coverage report generated: coverage.html"
+	@echo "📊 Coverage report generated: coverage.html"
 
 # Security checks
 security-check:
-	@echo "\U0001F512 Running security checks..."
+	@echo "🔒 Running security checks..."
 	@which gosec || go install github.com/securego/gosec/v2/cmd/gosec@latest
 	gosec -severity high -confidence high ./...
 
@@ -150,7 +150,7 @@ gates:
 
 # Clean build artifacts
 clean:
-	@echo "\U0001F9F9 Cleaning build artifacts..."
+	@echo "🧹 Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR)
 	rm -rf gui/build
 	rm -rf gui/frontend/dist
@@ -162,7 +162,7 @@ cross-compile: cross-cli-windows cross-cli-linux cross-cli-macos cross-gui-windo
 	@echo "✅ All cross-compilation complete"
 
 cross-cli-windows:
-	@echo "\U0001FA9F Cross-compiling CLI for Windows..."
+	@echo "🪟 Cross-compiling CLI for Windows..."
 	@mkdir -p $(BUILD_DIR)/windows
 	GOOS=windows GOARCH=amd64 cd directorybackup && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/windows/$(CLI_DIR_BIN).exe
@@ -170,7 +170,7 @@ cross-cli-windows:
 		-o ../$(BUILD_DIR)/windows/$(CLI_MACHINE_BIN).exe
 
 cross-cli-linux:
-	@echo "\U0001F427 Cross-compiling CLI for Linux..."
+	@echo "🐧 Cross-compiling CLI for Linux..."
 	@mkdir -p $(BUILD_DIR)/linux
 	GOOS=linux GOARCH=amd64 cd directorybackup && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/linux/$(CLI_DIR_BIN)
@@ -178,7 +178,7 @@ cross-cli-linux:
 		-o ../$(BUILD_DIR)/linux/$(CLI_MACHINE_BIN)
 
 cross-cli-macos:
-	@echo "\U0001F34E Cross-compiling CLI for macOS..."
+	@echo "🍎 Cross-compiling CLI for macOS..."
 	@mkdir -p $(BUILD_DIR)/macos
 	GOOS=darwin GOARCH=amd64 cd directorybackup && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/macos/$(CLI_DIR_BIN)
@@ -186,14 +186,14 @@ cross-cli-macos:
 		-o ../$(BUILD_DIR)/macos/$(CLI_DIR_BIN)-arm64
 
 cross-gui-windows:
-	@echo "\U0001FA9F\U0001F3A8 Cross-compiling GUI for Windows..."
+	@echo "🪟🎨 Cross-compiling GUI for Windows..."
 	cd gui && wails build -clean -platform windows/amd64
 	@mkdir -p $(BUILD_DIR)/windows
 	@cp gui/build/bin/$(GUI_BIN).exe $(BUILD_DIR)/windows/
 
 # Release preparation
 release: clean security-check lint test cross-compile
-	@echo "\U0001F4E6 Preparing release v$(VERSION)..."
+	@echo "📦 Preparing release v$(VERSION)..."
 	@mkdir -p $(BUILD_DIR)/release
 	cd $(BUILD_DIR) && tar -czf release/nimbus-backup-cli-v$(VERSION)-linux.tar.gz linux/
 	cd $(BUILD_DIR) && zip -r release/nimbus-backup-cli-v$(VERSION)-windows.zip windows/*.exe
@@ -204,7 +204,7 @@ release: clean security-check lint test cross-compile
 
 # Development setup
 dev-setup: install-deps
-	@echo "\U0001F527 Setting up development environment..."
+	@echo "🔧 Setting up development environment..."
 	go mod download
 	cd gui/frontend && npm install
 	@echo "✅ Development environment ready"
