@@ -36,6 +36,8 @@ help:
 	@echo "  gui          - Build GUI application"
 	@echo "  service      - Build Windows Service (NimbusBackupSVC.exe)"
 	@echo "  test         - Run all tests"
+	@echo "  lint         - Both golangci-lint passes, at the version CI pins"
+	@echo "  gates        - Every gate CI runs that can run on Linux"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  install-deps - Install build dependencies"
 	@echo ""
@@ -48,7 +50,7 @@ help:
 
 # Install build dependencies
 install-deps:
-	@echo "📦 Installing dependencies..."
+	@echo "\U0001F4E6 Installing dependencies..."
 	go install github.com/wailsapp/wails/v2/cmd/wails@latest
 	cd gui/frontend && npm install
 
@@ -63,14 +65,14 @@ cli: cli-directory cli-machine
 endif
 
 cli-directory:
-	@echo "🔨 Building Directory Backup CLI..."
+	@echo "\U0001F528 Building Directory Backup CLI..."
 	@mkdir -p $(BUILD_DIR)
 	cd directorybackup && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/$(CLI_DIR_BIN)$(shell go env GOEXE)
 	@echo "✅ Built: $(BUILD_DIR)/$(CLI_DIR_BIN)"
 
 cli-machine:
-	@echo "🔨 Building Machine Backup CLI..."
+	@echo "\U0001F528 Building Machine Backup CLI..."
 	@mkdir -p $(BUILD_DIR)
 	cd machinebackup && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/$(CLI_MACHINE_BIN)$(shell go env GOEXE)
@@ -78,7 +80,7 @@ cli-machine:
 
 cli-nbd:
 ifeq ($(shell go env GOOS),linux)
-	@echo "🔨 Building NBD Server CLI..."
+	@echo "\U0001F528 Building NBD Server CLI..."
 	@mkdir -p $(BUILD_DIR)
 	cd nbd && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/$(CLI_NBD_BIN)$(shell go env GOEXE)
@@ -89,7 +91,7 @@ endif
 
 # Service Build (Standalone Windows Service)
 service:
-	@echo "🔧 Building Backup Service..."
+	@echo "\U0001F527 Building Backup Service..."
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p gui/build/bin
 	cd cmd/service && go mod tidy && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
@@ -100,7 +102,7 @@ service:
 
 # GUI Build
 gui:
-	@echo "🎨 Building GUI application (version $(VERSION))..."
+	@echo "\U0001F3A8 Building GUI application (version $(VERSION))..."
 	cd gui && wails build -clean -platform $(shell go env GOOS)/$(shell go env GOARCH) \
 		-ldflags "-X main.appVersion=$(VERSION)"
 	@mkdir -p $(BUILD_DIR)
@@ -109,35 +111,46 @@ gui:
 
 # GUI Development mode
 gui-dev:
-	@echo "🚀 Starting GUI in development mode..."
+	@echo "\U0001F680 Starting GUI in development mode..."
 	cd gui && wails dev
 
 # Tests
 test:
-	@echo "🧪 Running tests..."
+	@echo "\U0001F9EA Running tests..."
 	go test -v -race -coverprofile=coverage.out ./...
-	@echo "📊 Coverage report:"
+	@echo "\U0001F4CA Coverage report:"
 	go tool cover -func=coverage.out
 
 test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
-	@echo "📊 Coverage report generated: coverage.html"
+	@echo "\U0001F4CA Coverage report generated: coverage.html"
 
 # Security checks
 security-check:
-	@echo "🔒 Running security checks..."
+	@echo "\U0001F512 Running security checks..."
 	@which gosec || go install github.com/securego/gosec/v2/cmd/gosec@latest
 	gosec -severity high -confidence high ./...
 
-# Linting
+# Linting — the two golangci-lint passes CI runs, at the version CI pins.
+#
+# This used to be `golangci-lint run ./...` from the repo root with an
+# @latest install, which answered a different question than CI does three
+# ways over: a floating tool version, one pass instead of two (the service
+# build was never linted here), and the workspace root instead of gui/ with
+# GOWORK=off. A local lint that disagrees with the gate is worse than none,
+# because it is trusted.
 lint:
-	@echo "🔍 Running linters..."
-	@which golangci-lint || go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	golangci-lint run ./...
+	@scripts/local-gates.sh lint
+
+# Everything CI can run on Linux: gofmt, the three compile views, both lint
+# passes, gosec, and every module's tests. See the script's header for what
+# it deliberately does not cover.
+gates:
+	@scripts/local-gates.sh
 
 # Clean build artifacts
 clean:
-	@echo "🧹 Cleaning build artifacts..."
+	@echo "\U0001F9F9 Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR)
 	rm -rf gui/build
 	rm -rf gui/frontend/dist
@@ -149,7 +162,7 @@ cross-compile: cross-cli-windows cross-cli-linux cross-cli-macos cross-gui-windo
 	@echo "✅ All cross-compilation complete"
 
 cross-cli-windows:
-	@echo "🪟 Cross-compiling CLI for Windows..."
+	@echo "\U0001FA9F Cross-compiling CLI for Windows..."
 	@mkdir -p $(BUILD_DIR)/windows
 	GOOS=windows GOARCH=amd64 cd directorybackup && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/windows/$(CLI_DIR_BIN).exe
@@ -157,7 +170,7 @@ cross-cli-windows:
 		-o ../$(BUILD_DIR)/windows/$(CLI_MACHINE_BIN).exe
 
 cross-cli-linux:
-	@echo "🐧 Cross-compiling CLI for Linux..."
+	@echo "\U0001F427 Cross-compiling CLI for Linux..."
 	@mkdir -p $(BUILD_DIR)/linux
 	GOOS=linux GOARCH=amd64 cd directorybackup && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/linux/$(CLI_DIR_BIN)
@@ -165,7 +178,7 @@ cross-cli-linux:
 		-o ../$(BUILD_DIR)/linux/$(CLI_MACHINE_BIN)
 
 cross-cli-macos:
-	@echo "🍎 Cross-compiling CLI for macOS..."
+	@echo "\U0001F34E Cross-compiling CLI for macOS..."
 	@mkdir -p $(BUILD_DIR)/macos
 	GOOS=darwin GOARCH=amd64 cd directorybackup && go build $(GO_FLAGS) -ldflags="$(LDFLAGS)" \
 		-o ../$(BUILD_DIR)/macos/$(CLI_DIR_BIN)
@@ -173,14 +186,14 @@ cross-cli-macos:
 		-o ../$(BUILD_DIR)/macos/$(CLI_DIR_BIN)-arm64
 
 cross-gui-windows:
-	@echo "🪟🎨 Cross-compiling GUI for Windows..."
+	@echo "\U0001FA9F\U0001F3A8 Cross-compiling GUI for Windows..."
 	cd gui && wails build -clean -platform windows/amd64
 	@mkdir -p $(BUILD_DIR)/windows
 	@cp gui/build/bin/$(GUI_BIN).exe $(BUILD_DIR)/windows/
 
 # Release preparation
 release: clean security-check lint test cross-compile
-	@echo "📦 Preparing release v$(VERSION)..."
+	@echo "\U0001F4E6 Preparing release v$(VERSION)..."
 	@mkdir -p $(BUILD_DIR)/release
 	cd $(BUILD_DIR) && tar -czf release/nimbus-backup-cli-v$(VERSION)-linux.tar.gz linux/
 	cd $(BUILD_DIR) && zip -r release/nimbus-backup-cli-v$(VERSION)-windows.zip windows/*.exe
@@ -191,9 +204,9 @@ release: clean security-check lint test cross-compile
 
 # Development setup
 dev-setup: install-deps
-	@echo "🔧 Setting up development environment..."
+	@echo "\U0001F527 Setting up development environment..."
 	go mod download
 	cd gui/frontend && npm install
 	@echo "✅ Development environment ready"
 
-.PHONY: gui-dev cross-compile cross-cli-windows cross-cli-linux cross-cli-macos cross-gui-windows release dev-setup security-check lint test-coverage
+.PHONY: gui-dev cross-compile cross-cli-windows cross-cli-linux cross-cli-macos cross-gui-windows release dev-setup security-check lint gates test-coverage
