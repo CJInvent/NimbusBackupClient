@@ -103,8 +103,32 @@ go build .                                   # GUI variant
 go build -tags service .                     # service variant
 ```
 
-Go ≥ 1.25. Tests: `go test ./...` in `pbscommon/` (race-detector prefetch
-suites) and `imagebrowse/` (real mkfs-built fixture images in `testdata/`).
+Go is pinned EXACTLY (see the workflows); a loose `1.26` resolves loosely and
+a toolchain job asserts the agreement.
+
+**`go vet` + `go test` is not the gate set, and treating it as one has let a
+lint failure through a merge.** CI runs golangci-lint TWICE over `gui/` — the
+default build, then `--build-tags=service --disable=unused` — and staticcheck
+lives inside it, not inside `go vet`. It caught an `x != x` comparison in a
+test that `go vet` was perfectly happy with.
+
+**The one command that reproduces what CI gates:**
+
+```
+make gates        # or: scripts/local-gates.sh
+make lint         # just the two golangci-lint passes
+```
+
+gofmt → three compile views (linux, windows, windows+service) → both
+golangci-lint passes at the version CI pins, installed into a gitignored
+`.tools/` → gosec on `controlplane/` → every workspace module's tests. Not
+covered: the Windows smoke job, the signed MSI builds, the frontend gate and
+govulncheck.
+
+A caveat worth knowing before you chase a phantom: **new code goes in the
+build view its caller lives in.** An untagged file whose only consumer is
+`service`-tagged has no caller in the default build, and the default pass is
+the one that still runs `unused`.
 
 ## Support notes
 
