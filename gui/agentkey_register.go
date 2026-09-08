@@ -36,6 +36,9 @@ var (
 // not a fact worth persisting, and a stale "already registered" on disk --
 // after a restore onto a rebuilt control plane, say -- would be a machine that
 // never registers again and can never be told why.
+// LOCK ORDER: agentKeyRegMu (this file) then agentKeyMu (the store), never
+// the reverse. The rotation this can call reaches the store repeatedly and
+// never reaches back here.
 func ensureAgentKeyRegistered(c *controlplane.Client) error {
 	if c == nil {
 		return errors.New("no control server is configured on this machine")
@@ -54,7 +57,37 @@ func ensureAgentKeyRegistered(c *controlplane.Client) error {
 
 	resp, err := c.RegisterKey(keyID, pub)
 	if err != nil {
+		if errors.Is(err, controlplane.ErrRotationInFlight) {
+			// A rotation is already under way. Finish it rather than report a
+			// conflict: the machine cannot receive a secret until one key is
+			// active and it holds that key's private half.
+			return rotateAgentKey(c, "a rotation was already in flight")
+		}
 		return fmt.Errorf("registering this machine's key failed: %w", err)
+	}
+
+	// THE STATE IS THE INSTRUCTION. `active` means this key is what secrets
+	// are sealed to and there is nothing more to do. `pending` means the
+	// server already holds a DIFFERENT active key for this machine -- it is
+	// sealing to that one, and this machine cannot open it. That happens for
+	// ordinary reasons (a lost key file, a re-created DEK, an image restored
+	// from before the key existed) and before the ceremony existed it left an
+	// agent silently unable to receive anything.
+	if resp.State != controlplane.KeyStateActive {
+		writeWarnLog(fmt.Sprintf(
+			"[AgentKey] key %s registered as %s — this server holds another active key for this machine; rotating",
+			resp.KeyID, resp.State))
+		// File it where the server says it is before driving the ceremony:
+		// the key we just registered is the in-flight one, whatever slot it
+		// started in.
+		if err := markAgentKeyPending(resp.KeyID); err != nil {
+			return fmt.Errorf("this machine cannot record key %s as in flight: %w", resp.KeyID, err)
+		}
+		if err := rotateAgentKey(c, "registration returned "+resp.State); err != nil {
+			return fmt.Errorf("this machine's key is registered but not active: %w", err)
+		}
+		agentKeyRegistered = true
+		return nil
 	}
 
 	agentKeyRegistered = true

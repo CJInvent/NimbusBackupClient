@@ -36,15 +36,13 @@ func openDeliveredKey(m *controlplane.BackupKeyMaterial) ([]byte, error) {
 		return nil, fmt.Errorf("the delivered backup key is not valid base64: %w", err)
 	}
 
-	raw, err := openSealedToAgent(sealed)
+	// The hint matters during a rotation: the server seals to the OLD key
+	// until promotion, and this machine holds both halves. openSealedToAgent
+	// tries the named one first and every other one it has after that, so a
+	// server that names a key we retired still gets its payload opened if we
+	// can.
+	raw, err := openSealedToAgent(sealed, m.SealedToKeyID)
 	if err != nil {
-		// Name the key it was sealed to. During a rotation this machine can
-		// hold two, and "sealed to a key you no longer have" is a different
-		// problem from "this payload is damaged" -- an operator reading the
-		// log should not have to guess which.
-		if m.SealedToKeyID != "" {
-			return nil, fmt.Errorf("%w (sealed to key %s)", err, m.SealedToKeyID)
-		}
 		return nil, err
 	}
 	return raw, nil

@@ -466,11 +466,50 @@ unreachable and nothing compared the two. Fixed on the server side with a
 suite that drives the ceremony over HTTP (NimbusControl
 `tests/agent_keys_wire.php`).
 
-**NOT built: the rotation ceremony.** challenge/prove/promote exist on the
-server and are documented; this client registers one key and keeps it. Doing
-rotation properly needs a store that holds TWO keys at once, because the
-server keeps sealing to the OLD key until promotion — that is the next slice,
-and wire helpers for a ceremony nothing drives would have been dead wiring.
+### The rotation ceremony — BUILT 2026-09-08, and it fixes a real dead machine
+
+`gui/agentkey_rotate.go`, on a two-slot store (`gui/agentkey_store.go`).
+
+**What triggers it is not a timer.** The server answers `keys/register` with
+the state it assigned: the FIRST key for an agent comes back `active`, every
+later one `pending`. So an agent told `pending` has learned something specific
+— this server already holds an active key for this machine, it is sealing
+secrets to that key, and this machine cannot open them. Machines reach that
+state for ordinary reasons: a lost key file, a re-created DEK, an image
+restored from before the key existed. **Before the ceremony existed such a
+machine was bricked silently** — it authenticated, checked in, took commands,
+and every secret endpoint handed it a payload sealed to a key it did not have.
+
+**Two slots, because the server seals to the OLD key for the whole ceremony**,
+including after `proven`. There is never an instant where the agent cannot
+open what it is sent — provided it holds both private halves, which is what
+the second slot is for. `openSealedToAgent` takes `sealed_to_key_id` as a HINT
+and falls back to every half it holds, because failing to open a payload we
+could have opened is worse than one extra scalar multiplication.
+
+**The record follows the server, not our guess.** A machine that lost its key
+file files the new key as active, registers it, and is told `pending` — so
+`markAgentKeyPending` moves it into the pending slot before the ceremony runs.
+Without that step the rotation generated a SECOND key, offered it, and was
+refused (one rotation in flight), leaving a machine holding a key the server
+had never heard of. That bug existed and a test caught it.
+
+**Every step resumes.** The pending key is on disk before it is registered,
+and each server call is idempotent, so a crash anywhere leaves a state the
+next attempt walks forward from. `loadOrCreateAgentKey` returns the pending
+key when there is no active one rather than minting a third.
+
+**One dead end, reported as itself:** `ErrRotationNotOurs`, when the server is
+rotating a key this machine does not hold. The challenge is sealed to a public
+half whose private half is gone, guessing spends the challenge, and there is
+no abandon-rotation endpoint — so it needs a person, and it says so.
+
+Driven end to end against a real server (2026-09-08): first key active, second
+pending, the challenge opens with the new half and NOT the old one, a wrong
+nonce spends the challenge, an empty attestation is refused client-side before
+it reaches the wire, prove → proven, promote → promoted, a repeat promote
+answers `promoted:false` without error, and the retired key id can never be
+re-registered.
 
 ### Credential-storage posture reporting (server roadmap §6) — written, NOT PUSHED
 

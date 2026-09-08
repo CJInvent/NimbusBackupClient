@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // The agent-key half of the wire contract (T4, NimbusControl
@@ -27,14 +28,13 @@ import (
 // protector chain that has to hold the private half -- and keeping them there
 // is what lets this module stay dependency-free.
 //
-// WHAT IS DELIBERATELY NOT HERE: challenge/prove/promote, the rotation
-// ceremony. The server implements all three and docs/AGENT-API.md describes
-// them fully, but this client performs none of them yet -- it registers one
-// key and keeps it. Wire helpers for a ceremony nothing drives would be
-// exactly the dead wiring this branch exists to remove, and the ceremony is
-// not a set of calls anyway: it needs a store that holds two keys at once,
-// because the server keeps sealing to the OLD one until promotion. That
-// belongs in the change that builds it.
+// THE ROTATION CEREMONY IS FOUR CALLS AND THEY ARE NOT INTERCHANGEABLE:
+// register a new key (it arrives `pending`), take a challenge sealed to it,
+// prove BOTH that we can open that challenge and that the private half is
+// durably stored, then promote. The server seals secrets to the OLD key for
+// the whole of it, including after `proven`, so there is never an instant
+// where the agent cannot open what it is sent -- which is also why the client
+// has to hold two private halves at once (gui/agentkey_store.go).
 
 // Key states, as the server names them.
 const (
@@ -76,6 +76,49 @@ type KeyRegisterResponse struct {
 	State string `json:"state"`
 }
 
+// KeyChallengeResponse -- a 32-byte nonce sealed to the IN-FLIGHT key.
+//
+// Spendable once. Re-issuing replaces the previous nonce, so an agent that
+// retries cannot answer an older one, and a WRONG answer spends the challenge
+// rather than allowing a second guess: ask for a new one.
+type KeyChallengeResponse struct {
+	KeyID  string `json:"key_id"`
+	Sealed string `json:"sealed"`
+}
+
+// KeyProveRequest carries BOTH directions of proof, because one-sided proof is
+// how an agent gets bricked.
+//
+// Nonce is the opened challenge: it proves we hold the new private half AND
+// that the server's sealing works against this exact public key -- a
+// well-formed but wrong key fails here rather than on the first real payload.
+//
+// StorageDetail is our attestation that the private key was written, flushed
+// and READ BACK. The server cannot verify another machine's fsync; what it can
+// do is refuse to retire the old key until we have claimed this, so a client
+// that skips the read-back has to lie deliberately rather than merely forget.
+// It is REQUIRED and must not be empty -- an optional field defaulting to ""
+// is not a claim, and the server refuses one (it used to accept it).
+type KeyProveRequest struct {
+	KeyID         string `json:"key_id"`
+	Nonce         string `json:"nonce"`
+	StorageDetail string `json:"storage_detail"`
+}
+
+// KeyProveResponse -- `proven` once both directions are in.
+type KeyProveResponse struct {
+	KeyID string `json:"key_id"`
+	State string `json:"state"`
+}
+
+// KeyPromoteResponse -- Promoted false means nothing was in flight, which is
+// the ordinary answer for an agent retrying after a lost response, not an
+// error.
+type KeyPromoteResponse struct {
+	Promoted    bool   `json:"promoted"`
+	ActiveKeyID string `json:"active_key_id"`
+}
+
 // RegisterKey publishes a public key for this agent.
 //
 // Idempotent by design on the server: the same id with the same bytes returns
@@ -96,6 +139,61 @@ func (c *Client) RegisterKey(keyID string, publicKey []byte) (*KeyRegisterRespon
 		if he := (*httpError)(nil); asHTTPError(err, &he) && he.status == 409 {
 			return nil, fmt.Errorf("%w: %s", ErrRotationInFlight, he.msg)
 		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// KeyChallenge asks for a nonce sealed to the in-flight key.
+//
+// Returns the raw sealed bytes: opening them needs the private half, which
+// this module deliberately never sees.
+func (c *Client) KeyChallenge() (keyID string, sealed []byte, err error) {
+	var out KeyChallengeResponse
+	if err := c.post("/api/agent/v1/keys/challenge", struct{}{}, &out, true); err != nil {
+		return "", nil, err
+	}
+	raw, derr := base64.StdEncoding.DecodeString(out.Sealed)
+	if derr != nil {
+		return "", nil, fmt.Errorf("controlplane: the challenge is not valid base64: %w", derr)
+	}
+	if len(raw) == 0 {
+		return "", nil, fmt.Errorf("controlplane: the challenge carried no sealed bytes")
+	}
+	return out.KeyID, raw, nil
+}
+
+// ProveKey answers the challenge and attests to durable storage.
+//
+// storageDetail must describe what was ACTUALLY done -- written, flushed, read
+// back -- because it is the only part of this exchange the server has to take
+// on trust, and the old key is retired on the strength of it. An empty one is
+// refused here rather than sent: a client that has nothing to say about its
+// own storage has no business retiring the key it can still open.
+func (c *Client) ProveKey(keyID string, nonce []byte, storageDetail string) (*KeyProveResponse, error) {
+	if len(nonce) == 0 {
+		return nil, fmt.Errorf("controlplane: refusing to prove a key with an empty nonce")
+	}
+	if strings.TrimSpace(storageDetail) == "" {
+		return nil, fmt.Errorf("controlplane: refusing to attest to storage with an empty description")
+	}
+	var out KeyProveResponse
+	if err := c.post("/api/agent/v1/keys/prove", KeyProveRequest{
+		KeyID:         keyID,
+		Nonce:         base64.StdEncoding.EncodeToString(nonce),
+		StorageDetail: storageDetail,
+	}, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PromoteKey retires the old key and activates the proven one, server-side, in
+// ONE transaction. Safe to repeat: a crash leaves exactly the state it started
+// from and the sequence resumes by calling this again.
+func (c *Client) PromoteKey() (*KeyPromoteResponse, error) {
+	var out KeyPromoteResponse
+	if err := c.post("/api/agent/v1/keys/promote", struct{}{}, &out, true); err != nil {
 		return nil, err
 	}
 	return &out, nil

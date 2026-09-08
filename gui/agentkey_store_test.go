@@ -73,7 +73,7 @@ func TestAgentKeyPrivateHalfIsNotOnDiskInTheClear(t *testing.T) {
 
 	// Whatever the record contains, the raw private bytes must not be in it.
 	// Reconstruct them the only legitimate way and search for their encoding.
-	priv := openPrivateForTest(t)
+	priv := openPrivateForTest(t, "active")
 	if strings.Contains(string(data), base64.StdEncoding.EncodeToString(priv)) {
 		t.Fatal("the private key is stored in the clear")
 	}
@@ -95,7 +95,7 @@ func TestAgentKeyOpensWhatWasSealedToIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opened, err := openSealedToAgent(sealed)
+	opened, err := openSealedToAgent(sealed, "")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestAgentKeyRefusesAPayloadSealedToAnotherKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := openSealedToAgent(sealed); err == nil {
+	if _, err := openSealedToAgent(sealed, ""); err == nil {
 		t.Fatal("opening a payload sealed to another key must fail, not return empty bytes")
 	} else if !strings.Contains(err.Error(), "could not be opened") {
 		t.Fatalf("unhelpful error for the rotation case: %v", err)
@@ -242,13 +242,20 @@ func TestOpenDeliveredKeyRefusesEveryMalformedDelivery(t *testing.T) {
 	}
 }
 
-// openPrivateForTest reconstructs the stored private half through the
-// production path, so the leak check above searches for the real bytes.
-func openPrivateForTest(t *testing.T) []byte {
+// openPrivateForTest reconstructs a stored private half through the production
+// path, so the leak check above searches for the real bytes.
+func openPrivateForTest(t *testing.T, slot string) []byte {
 	t.Helper()
-	rec, err := readAgentKeyRecord()
+	f, err := readAgentKeyFile()
 	if err != nil {
 		t.Fatalf("read record: %v", err)
+	}
+	rec := f.Active
+	if slot == "pending" {
+		rec = f.Pending
+	}
+	if rec == nil {
+		t.Fatalf("no %s key in the record", slot)
 	}
 	priv, err := openStoredAgentPrivate(rec)
 	if err != nil {
