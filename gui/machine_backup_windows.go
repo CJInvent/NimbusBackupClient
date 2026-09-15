@@ -631,7 +631,12 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 	return nil
 }
 
-func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onMilestone func(checkpoint, level, message string)) (int64, error) {
+// onPhase carries the run's lifecycle to the control plane. The machine
+// engine never called it: only the directory engine did, so an image backup
+// sat at "preparing" in the portal for its entire duration and then jumped
+// straight to success. The scheduled proof run on 2026-09-15 spent three and
+// a half minutes moving 80 GB while every page showed it preparing.
+func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onPhase func(string), onMilestone func(checkpoint, level, message string)) (int64, error) {
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
@@ -738,6 +743,12 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 			// guess.
 			onMilestone(controlplane.CheckpointSnapshotVSS, "info", fmt.Sprintf(
 				"VSS snapshot confirmed for PhysicalDrive%d", index))
+		}
+		// RUNNING, by the same product definition the directory engine uses:
+		// the shadow copy exists (or there was none to make) and bytes are
+		// about to move. The reporter dedupes, so a second disk is free.
+		if onPhase != nil {
+			onPhase("running")
 		}
 		// Fill gaps between partitions
 		newparts := make([]Partition, 0)
@@ -1070,7 +1081,7 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnMilestone)
+		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnPhase, opts.OnMilestone)
 		if err != nil {
 			// A cancelled context means the user pressed Stop; the read abort is
 			// the mechanism, not a fault.

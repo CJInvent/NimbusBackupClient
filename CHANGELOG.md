@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore.**
 
 ### Fixed
+- **An image backup stayed "preparing" in the portal for its whole duration**
+  and then jumped to success. Only the directory engine ever called
+  `OnPhase("running")`; the machine engine now fires it from the
+  VSS-confirmed callback, on the same product definition -- the shadow copy
+  exists and bytes are about to move. Found by the scheduled proof run on
+  2026-09-15, which spent three and a half minutes moving 80 GB while every
+  page showed it preparing.
 - The machine engine reported `new_chunks`/`reused_chunks` as zero for the
   whole run. The counters were allocated inside `uploadWorker`, which is
   per-archive, so a second disk also restarted the live counts from zero.
