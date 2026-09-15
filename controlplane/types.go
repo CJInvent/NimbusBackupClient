@@ -82,7 +82,41 @@ type Inventory struct {
 	// reached us over a network, so the ambiguity costs nothing.
 	Interfaces []NetworkInterface `json:"interfaces,omitempty"`
 
+	// Disks is this machine's physical disks and the drive letters on each,
+	// so the portal's image-job picker can OFFER them instead of asking an
+	// operator to type a letter for a machine they are not sitting at. See
+	// NimbusControl docs/V4-JOB-TARGETS.md section 1.1.
+	//
+	// SIZE ONLY, NO LABEL. The agent's own PhysicalDiskInfo carries a
+	// rendered Label; it is deliberately not on the wire. A label is display
+	// text belonging to whichever UI shows it, and the portal composes its
+	// own from these three fields. (The agent's happens to be French, which
+	// is a client bug fixed separately -- but even correct, a portal
+	// repeating a machine's display string is a portal that inherits that
+	// machine's language, spelling and version.)
+	//
+	// omitempty, same reasoning as Interfaces above: absent means "no
+	// reading" -- an older client, or enumeration that failed -- which is
+	// not the same claim as "this machine has no disks", and only one of
+	// those should ever overwrite a good list the server already holds.
+	Disks []InventoryDisk `json:"disks,omitempty"`
+
 	Extra map[string]interface{} `json:"extra,omitempty"`
+}
+
+// InventoryDisk is one physical disk as the portal needs it: which disk,
+// how big, and which drive letters live on it. Letters are what a job
+// stores (docs/V4-JOB-TARGETS.md section 1), so they are what the picker
+// offers; the device path is NOT reported, because a job that named one
+// would be pinned to a disk number that moves.
+type InventoryDisk struct {
+	DiskNumber int   `json:"disk_number"`
+	SizeBytes  int64 `json:"size_bytes"`
+	// Letters as the machine spells them, e.g. ["C:", "E:"]. Never nil on
+	// the wire: a disk with no letters is a real, reportable thing (an
+	// unformatted or fully-unlettered spindle), and null vs [] should not
+	// be a distinction the server has to think about.
+	Letters []string `json:"letters"`
 }
 
 // NetworkInterface is one interface and the unicast addresses it holds.

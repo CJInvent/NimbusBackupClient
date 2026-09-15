@@ -279,6 +279,11 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 		// map lookup after the first call and cannot disagree with the
 		// protector the secrets are really under.
 		CredentialStorage: credentialStorageLevel(),
+		// This machine's disks, so the portal can OFFER image targets
+		// instead of asking for typed drive letters. Cached on a slow
+		// clock (disk_inventory.go) -- enumeration touches every disk and
+		// the answer changes with the hardware, not with the cycle.
+		Disks: cpDisks(),
 	}
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {

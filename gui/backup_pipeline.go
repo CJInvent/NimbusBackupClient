@@ -148,7 +148,21 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 		if !isAdmin() {
 			return nil, errors.New(errAdminRequired)
 		}
-		out.targetDirs = req.DriveLetters
+		// LETTERS TRAVEL; THE MACHINE RESOLVES THEM. See disk_targets.go for
+		// why the portal keeps speaking in drive letters rather than storing
+		// a device path that silently rots when disk numbering moves.
+		//
+		// Device paths from the agent's own picker pass through untouched, so
+		// this is a widening of what is accepted, not a change of contract.
+		disks, err := ListPhysicalDisks()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", errDiskUnresolved, err)
+		}
+		resolved, err := resolveDiskTargets(req.DriveLetters, disks)
+		if err != nil {
+			return nil, err
+		}
+		out.targetDirs = resolved
 		// Directory backups are stored as host snapshots; full-volume
 		// backups as vm snapshots holding drive-*.img.fidx, matching the
 		// upstream machinebackup layout the nbd restore tool expects.

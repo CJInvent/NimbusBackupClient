@@ -132,6 +132,19 @@ function App() {
   const [disksLoading, setDisksLoading] = useState(false)
   const [disksError, setDisksError] = useState('')
   const [excludeList, setExcludeList] = useState('')
+
+  // What exclusions actually apply, given the backup type.
+  //
+  // HIDING THE FIELD IS NOT ENOUGH. The value lives in component state, so a
+  // list typed for a folder backup and then switched to an image backup would
+  // still be SENT -- ignored by the engine, but stored on a scheduled job and
+  // read by the next person as though it were in force. An image backup is a
+  // block-level copy of a disk; there is nothing for a file pattern to act on.
+  // See docs/V4-JOB-TARGETS.md section 4 in NimbusControl.
+  const excludesForType = () =>
+    backupType === 'directory'
+      ? excludeList.split('\n').filter(l => l.trim())
+      : []
   const [progress, setProgress] = useState(0)
   const [backupPhase, setBackupPhase] = useState('')   // current engine phase, shown once in the card
   // Opt-in: split this backup into parts (for the first backup of a large volume).
@@ -944,7 +957,7 @@ function App() {
           backupType,
           dirList,
           selectedDrives,
-          excludeList.split('\n').filter(l => l.trim()),
+          excludesForType(),
           config['backup-id'],
           config.usevss,
           ''
@@ -969,7 +982,7 @@ function App() {
             selectedDrives,
             // Merge user exclusions with this job's own (a root-remainder job
             // excludes the subfolders already covered by other jobs — v2-H-01).
-            [...excludeList.split('\n').filter(l => l.trim()), ...(job.exclude_list || [])],
+            [...excludesForType(), ...(job.exclude_list || [])],
             job.backup_id,
             config.usevss,
             ''
@@ -1055,7 +1068,7 @@ function App() {
         backupId: config['backup-id'],
         useVSS: config.usevss,
         backupType: backupType,
-        excludeList: excludeList.split('\n').filter(l => l.trim())
+        excludeList: excludesForType()
       }
 
       // Save or update to backend
@@ -1090,7 +1103,7 @@ function App() {
         backupType,
         dirList,
         selectedDrives,
-        excludeList.split('\n').filter(l => l.trim()),
+        excludesForType(),
         config['backup-id'],
         config.usevss,
         ''
@@ -2403,6 +2416,17 @@ function App() {
           )}
 
           {backupType === 'directory' ? (
+            <>
+            {/* EXCLUSIONS BELONG TO FOLDER BACKUPS ONLY.
+                They were rendered in the MACHINE branch and nowhere else --
+                exactly backwards. ExcludeList reaches backupDirectory ->
+                backupReal -> archive.ExcludeList, which only the directory
+                engine runs; machine_backup_windows.go contains no reference to
+                exclusions at all, because an image backup is a block-level
+                copy of a disk and there is nothing for a file pattern to act
+                on. So the control was offered where it does nothing and hidden
+                where it works. See docs/V4-JOB-TARGETS.md section 4 in
+                NimbusControl. */}
             <div className="form-group">
               <label>{t('directoriesToBackup')}</label>
               <textarea
@@ -2417,6 +2441,17 @@ function App() {
                 placeholder="C:\Data&#10;C:\Users&#10;D:\Documents"
               />
             </div>
+
+            <div className="form-group">
+              <label>{t('filesToExclude')}</label>
+              <textarea
+                value={excludeList}
+                onChange={(e) => setExcludeList(e.target.value)}
+                rows="4"
+                placeholder="*.tmp&#10;*.log&#10;C:\Windows\Temp"
+              />
+            </div>
+            </>
           ) : (
             <>
               <div className="info-box" style={{backgroundColor: 'var(--nc-warn-bg)', borderColor: 'var(--nc-warn-border)'}}>
@@ -2460,15 +2495,6 @@ function App() {
                 )}
               </div>
 
-              <div className="form-group">
-                <label>{t('filesToExclude')}</label>
-                <textarea
-                  value={excludeList}
-                  onChange={(e) => setExcludeList(e.target.value)}
-                  rows="4"
-                  placeholder="*.tmp&#10;*.log&#10;C:\Windows\Temp"
-                />
-              </div>
             </>
           )}
 
