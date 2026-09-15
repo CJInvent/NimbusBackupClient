@@ -11,9 +11,14 @@ package main
 //
 // Command contract (payload -> result, all JSON):
 //
-//	list_disks {}            -> {disks: [{disk_number, size_bytes, letters}]}
-//	list_dir   {path}        -> {path, entries: [...], truncated}
-//	                            path empty = this machine's roots
+//	list_dir {path} -> {path, entries: [...], truncated}
+//	                   path empty = this machine's ROOTS, which are this
+//	                   machine's lettered drives
+//
+// There is deliberately no separate "list the disks" command. The image job's
+// disk picker is fed by the check-in INVENTORY (V4-JOB-TARGETS.md section
+// 1.1) and an empty-path list_dir already returns the drives as roots, so a
+// third path to the same fact would be a third thing to keep in step.
 //
 // Entries use the same compact keys as the image browser, for the same
 // reason (the server caps command result bodies):
@@ -53,32 +58,10 @@ import (
 // folder, not for finding one file among a scanned volume.
 const cpListDirCap = 5000
 
-// cpHandleFSBrowseCommand answers list_disks / list_dir. Returns ok=false for
-// commands it does not own, so cpHandleCommand falls through.
+// cpHandleFSBrowseCommand answers list_dir. Returns ok=false for commands it
+// does not own, so cpHandleCommand falls through.
 func (a *App) cpHandleFSBrowseCommand(cmd controlplane.Command) (controlplane.CommandResult, bool) {
 	switch cmd.Command {
-	case "list_disks":
-		disks, err := ListPhysicalDisks()
-		if err != nil {
-			return cpErr("enumerate disks: " + err.Error()), true
-		}
-		out := make([]map[string]interface{}, 0, len(disks))
-		for _, d := range disks {
-			letters := d.Letters
-			if letters == nil {
-				letters = []string{}
-			}
-			// The same three facts the check-in inventory reports, and for
-			// the same reason: the portal renders its own label, in its own
-			// language. This machine's Label field stays here.
-			out = append(out, map[string]interface{}{
-				"disk_number": d.DiskNumber,
-				"size_bytes":  d.SizeBytes,
-				"letters":     letters,
-			})
-		}
-		return controlplane.CommandResult{OK: true, Result: map[string]interface{}{"disks": out}}, true
-
 	case "list_dir":
 		raw, _ := cmd.Payload["path"].(string)
 		if strings.TrimSpace(raw) == "" {

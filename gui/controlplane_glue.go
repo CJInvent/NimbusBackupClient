@@ -355,8 +355,8 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 	if res, handled := a.cpHandleBrowseCommand(cmd); handled {
 		return res
 	}
-	// Portal-delegated LIVE filesystem browsing (list_disks / list_dir) for
-	// the job target pickers — see controlplane_fsbrowse.go.
+	// Portal-delegated LIVE filesystem browsing (list_dir) for the directory
+	// job's target picker — see controlplane_fsbrowse.go.
 	if res, handled := a.cpHandleFSBrowseCommand(cmd); handled {
 		return res
 	}
