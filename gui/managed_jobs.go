@@ -162,6 +162,14 @@ func sameStrings(a, b []string) bool {
 	return true
 }
 
+// managedJobIDPrefix marks a local job id as standing for a SERVER job.
+//
+// One constant rather than the literal in three places: the prefix is applied
+// in managedToScheduledJob, tested by isManagedJobID and stripped by
+// managedJobServerID, and a typo in any one of them would be a job that is
+// managed for one of those questions and not the others.
+const managedJobIDPrefix = "managed-"
+
 // toScheduledJob adapts a managed job to the shape the scheduler and the
 // engine already speak.
 //
@@ -177,7 +185,7 @@ func sameStrings(a, b []string) bool {
 // second, wrong opinion about when the job runs.
 func managedToScheduledJob(m controlplane.ManagedJob) ScheduledJob {
 	return ScheduledJob{
-		ID:           fmt.Sprintf("managed-%d", m.ID),
+		ID:           fmt.Sprintf("%s%d", managedJobIDPrefix, m.ID),
 		Name:         m.Name,
 		ScheduleTime: "",
 		RunAtStartup: false,
@@ -200,5 +208,5 @@ func managedToScheduledJob(m controlplane.ManagedJob) ScheduledJob {
 // silently stop the org's OWN jobs on every machine the org restricted --
 // turning a lockdown into an outage.
 func isManagedJobID(id string) bool {
-	return strings.HasPrefix(id, "managed-")
+	return strings.HasPrefix(id, managedJobIDPrefix)
 }

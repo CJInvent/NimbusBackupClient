@@ -258,22 +258,56 @@ type RunReport struct {
 	// Sent on every report for the run, not just the first — the server
 	// only needs it once to ack, but sending it every time means a lost
 	// first report still lets a later one carry the link.
-	RequestID     string    `json:"request_id,omitempty"`
-	JobName       string    `json:"job_name"`
-	BackupType    string    `json:"backup_type"` // "directory" | "machine"
-	Status        RunStatus `json:"status"`
-	StartedAt     string    `json:"started_at"` // ISO 8601 (RFC 3339)
-	FinishedAt    string    `json:"finished_at,omitempty"`
-	BytesTotal    int64     `json:"bytes_total,omitempty"`
-	BytesUploaded int64     `json:"bytes_uploaded,omitempty"`
-	PBSServer     string    `json:"pbs_server,omitempty"`
-	PBSDatastore  string    `json:"pbs_datastore,omitempty"`
-	PBSNamespace  string    `json:"pbs_namespace,omitempty"`
-	PBSBackupType string    `json:"pbs_backup_type,omitempty"` // "host"
-	PBSBackupID   string    `json:"pbs_backup_id,omitempty"`
-	PBSBackupTime int64     `json:"pbs_backup_time,omitempty"`
-	ErrorSummary  string    `json:"error_summary,omitempty"`
-	LogTail       string    `json:"log_tail,omitempty"` // <=16 KB
+	RequestID string `json:"request_id,omitempty"`
+
+	// JobID is the SERVER's backup_jobs.id for the managed job this run
+	// belongs to, echoed back from the check-in that delivered the job. Zero
+	// means no managed job (ad-hoc, unmanaged, engine-initiated) and is
+	// legitimately omitted -- an identity is present or it is not, unlike the
+	// measurements below.
+	//
+	// Reported so history attaches to the JOB rather than to its NAME. A name
+	// is a label an operator edits, and managed jobs accumulate across scope
+	// (org + group + machine), so two jobs called "Nightly" can run on one
+	// machine in one hour. See docs/V4-RUN-AUDIT.md section 1.2.
+	JobID int64 `json:"job_id,omitempty"`
+
+	// Trigger is what STARTED this run: "schedule", "portal", "manual" or
+	// "service". Sent on every report, never omitted -- an absent trigger is
+	// stored as "service", and silently defaulting is how the server ended up
+	// inferring four states from whether request_id happened to be set.
+	//
+	// Reported, never acted on: nothing server-side branches behavior on it.
+	Trigger string `json:"trigger"`
+
+	JobName    string    `json:"job_name"`
+	BackupType string    `json:"backup_type"` // "directory" | "machine"
+	Status     RunStatus `json:"status"`
+	StartedAt  string    `json:"started_at"` // ISO 8601 (RFC 3339)
+	FinishedAt string    `json:"finished_at,omitempty"`
+
+	// MEASURED QUANTITIES ARE POINTERS, AND THEY DO NOT CARRY omitempty.
+	//
+	// These were plain int64 with omitempty, which silently erased a real
+	// measurement: a fully deduplicated backup uploads ZERO bytes -- the
+	// steady state for most machines on most nights -- and the field vanished
+	// from the JSON, so the server stored NULL and the portal showed a dash.
+	// "Nothing changed" and "never reported" became the same row.
+	//
+	// nil marshals to null and means NOT KNOWN YET, which Preparing() honestly
+	// is. A pointer to 0 marshals to 0 and means measured, and zero.
+	BytesTotal    *int64 `json:"bytes_total"`
+	BytesUploaded *int64 `json:"bytes_uploaded"`
+	PBSServer     string `json:"pbs_server,omitempty"`
+	PBSDatastore  string `json:"pbs_datastore,omitempty"`
+	PBSNamespace  string `json:"pbs_namespace,omitempty"`
+	PBSBackupType string `json:"pbs_backup_type,omitempty"` // "host"
+	PBSBackupID   string `json:"pbs_backup_id,omitempty"`
+	// Same rule as the byte counts: a snapshot time is a measurement of when
+	// the artifact exists, and nil means not known yet.
+	PBSBackupTime *int64 `json:"pbs_backup_time"`
+	ErrorSummary  string `json:"error_summary,omitempty"`
+	LogTail       string `json:"log_tail,omitempty"` // <=16 KB
 }
 
 // RunEvent — POST /api/agent/v1/runs/{uuid}/events. One granular milestone

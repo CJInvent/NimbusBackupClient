@@ -64,6 +64,26 @@ func (r *RunReporter) SetRequestID(requestID string) {
 	r.base.RequestID = requestID
 }
 
+// SetTrigger records what STARTED this run -- call before the first post, so
+// even a run that never reaches a terminal state says how it began.
+//
+// The server stores an absent trigger as "service" rather than guessing, so
+// the cost of not calling this is an honest "nobody said", not a wrong answer.
+func (r *RunReporter) SetTrigger(trigger string) {
+	r.base.Trigger = trigger
+}
+
+// SetJobID links this run to the SERVER's managed job -- backup_jobs.id, as
+// delivered in the check-in that handed this machine the job. Call before the
+// first post. Leave unset for a run that belongs to no managed job.
+func (r *RunReporter) SetJobID(jobID int64) {
+	r.base.JobID = jobID
+}
+
+// i64 is the "measured, and it is this" pointer. Its whole purpose is to make
+// a zero survive the wire -- see RunReport's comment on BytesTotal.
+func i64(v int64) *int64 { return &v }
+
 func (r *RunReporter) Preparing() { r.post(StatusPreparing, nil) }
 
 // Running MUST only be called after VSS confirmed the shadow copy (or, for
@@ -84,8 +104,9 @@ func (r *RunReporter) VSSFailed(errSummary string) {
 // it the server can never detect PBS-side prune of this snapshot.
 func (r *RunReporter) Success(pbsBackupType, pbsBackupID string, pbsBackupTime int64, bytesTotal, bytesUploaded int64, logTail string) {
 	r.post(StatusSuccess, func(rep *RunReport) {
-		rep.PBSBackupType, rep.PBSBackupID, rep.PBSBackupTime = pbsBackupType, pbsBackupID, pbsBackupTime
-		rep.BytesTotal, rep.BytesUploaded = bytesTotal, bytesUploaded
+		rep.PBSBackupType, rep.PBSBackupID = pbsBackupType, pbsBackupID
+		rep.PBSBackupTime = i64(pbsBackupTime)
+		rep.BytesTotal, rep.BytesUploaded = i64(bytesTotal), i64(bytesUploaded)
 		rep.LogTail = clip(logTail, 16<<10)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	})
@@ -94,8 +115,9 @@ func (r *RunReporter) Success(pbsBackupType, pbsBackupID string, pbsBackupTime i
 // Warning is terminal: the backup exists but with caveats (skipped files…).
 func (r *RunReporter) Warning(pbsBackupType, pbsBackupID string, pbsBackupTime int64, bytesTotal, bytesUploaded int64, errSummary, logTail string) {
 	r.post(StatusWarning, func(rep *RunReport) {
-		rep.PBSBackupType, rep.PBSBackupID, rep.PBSBackupTime = pbsBackupType, pbsBackupID, pbsBackupTime
-		rep.BytesTotal, rep.BytesUploaded = bytesTotal, bytesUploaded
+		rep.PBSBackupType, rep.PBSBackupID = pbsBackupType, pbsBackupID
+		rep.PBSBackupTime = i64(pbsBackupTime)
+		rep.BytesTotal, rep.BytesUploaded = i64(bytesTotal), i64(bytesUploaded)
 		rep.ErrorSummary = clip(errSummary, 500)
 		rep.LogTail = clip(logTail, 16<<10)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
