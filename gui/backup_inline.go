@@ -367,14 +367,15 @@ func (c *ChunkState) HandleData(b []byte, client *pbscommon.PBSClient) error {
 				// Structured live stats for the GUI (same cadence as the message).
 				if c.onStats != nil {
 					c.onStats(&BackupProgressStats{
-						Percent:      progress,
-						BytesDone:    c.pos,
-						BytesTotal:   totalSize,
-						NewChunks:    c.newchunk.Load(),
-						ReusedChunks: c.reusechunk.Load(),
-						FailedChunks: failed,
-						CurrentDir:   c.currentDir,
-						Message:      msg,
+						Percent:       progress,
+						BytesDone:     c.pos,
+						BytesTotal:    totalSize,
+						BytesUploaded: client.UploadedBytes(),
+						NewChunks:     c.newchunk.Load(),
+						ReusedChunks:  c.reusechunk.Load(),
+						FailedChunks:  failed,
+						CurrentDir:    c.currentDir,
+						Message:       msg,
 					})
 				}
 			}
@@ -904,6 +905,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			BackupTime:       client.Manifest.BackupTime,
 			DurationSec:      time.Since(startTime).Seconds(),
 			TotalBytes:       totalSize.Load(),
+			BytesUploaded:    client.UploadedBytes(),
 			NewChunks:        newchunk.Load(),
 			ReusedChunks:     reusechunk.Load(),
 			FailedChunks:     failedchunk.Load(),
@@ -993,6 +995,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		BackupTime:       client.Manifest.BackupTime,
 		DurationSec:      duration.Seconds(),
 		TotalBytes:       totalSize.Load(),
+		BytesUploaded:    client.UploadedBytes(),
 		NewChunks:        newchunk.Load(),
 		ReusedChunks:     reusechunk.Load(),
 		FailedChunks:     failed,

@@ -39,9 +39,11 @@ func TestZeroMeasurementSurvivesTheWire(t *testing.T) {
 		BytesTotal:    &zero,
 		BytesUploaded: &zero,
 		PBSBackupTime: &zero,
+		ChunksNew:     &zero,
+		ChunksReused:  &zero,
 	})
 
-	for _, field := range []string{"bytes_total", "bytes_uploaded", "pbs_backup_time"} {
+	for _, field := range []string{"bytes_total", "bytes_uploaded", "pbs_backup_time", "chunks_new", "chunks_reused"} {
 		v, present := m[field]
 		if !present {
 			t.Fatalf("%s was omitted; a measured zero must reach the server", field)
@@ -61,7 +63,7 @@ func TestUnknownMeasurementIsNullNotAbsent(t *testing.T) {
 	// reason these fields are pointers rather than plain integers.
 	m := decode(t, RunReport{Status: StatusPreparing})
 
-	for _, field := range []string{"bytes_total", "bytes_uploaded", "pbs_backup_time"} {
+	for _, field := range []string{"bytes_total", "bytes_uploaded", "pbs_backup_time", "chunks_new", "chunks_reused"} {
 		v, present := m[field]
 		if !present {
 			t.Fatalf("%s absent; the field must be sent so null can mean not-known", field)

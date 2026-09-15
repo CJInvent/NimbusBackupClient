@@ -145,11 +145,11 @@ func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 				rep.Failed(firstLine(s.Message), tail)
 			case len(s.SkippedReadError) > 0 || len(s.Directories) > 0 && anyDirFailed(s.Directories):
 				rep.Warning(opts.BackupType, s.BackupID, s.BackupTime,
-					int64(s.TotalBytes), 0, firstLine(s.Message), tail)
+					totalsOf(s), firstLine(s.Message), tail)
 				cpStampSnapshotNotes(opts, rep, s.BackupID, s.BackupTime)
 			default:
 				rep.Success(opts.BackupType, s.BackupID, s.BackupTime,
-					int64(s.TotalBytes), 0, tail)
+					totalsOf(s), tail)
 				cpStampSnapshotNotes(opts, rep, s.BackupID, s.BackupTime)
 			}
 		}
@@ -180,8 +180,23 @@ func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 		// the SUCCESS is still strictly better than leaving the run in
 		// "preparing" forever, and closing that metadata gap is exactly
 		// what end-to-end backup-job correlation is for.
-		rep.Success(opts.BackupType, opts.BackupID, time.Now().Unix(), 0, 0, "")
+		rep.Success(opts.BackupType, opts.BackupID, time.Now().Unix(), controlplane.RunTotals{}, "")
 	}, rep.RunUUID()
+}
+
+// totalsOf carries the engine's own measurements onto the wire. It exists so
+// there is ONE place that maps BackupStatus to RunTotals: the previous code
+// passed a literal 0 for bytes uploaded at both call sites, which is how
+// backup_runs.bytes_uploaded read 0 on every successful run ever recorded
+// (docs/V4-UX.md §0) -- a value nobody had measured, presented as one that
+// had been.
+func totalsOf(s *BackupStatus) controlplane.RunTotals {
+	return controlplane.RunTotals{
+		BytesTotal:    int64(s.TotalBytes),
+		BytesUploaded: int64(s.BytesUploaded),
+		ChunksNew:     int64(s.NewChunks),
+		ChunksReused:  int64(s.ReusedChunks),
+	}
 }
 
 func anyDirFailed(dirs []DirResult) bool {

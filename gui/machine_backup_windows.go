@@ -430,9 +430,23 @@ func (c *MachineChunkState) Init(newchunk *atomic.Uint64, reusechunk *atomic.Uin
 // guarantees a single machine backup at a time, so a package var is safe here.
 var machineStatsFn func(bytesDone, bytesTotal, newChunks, reusedChunks uint64)
 
-func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64, ch chan []byte, readerErr <-chan error, progress func(float64, string)) error {
-	var newchunk *atomic.Uint64 = new(atomic.Uint64)
-	var reusechunk *atomic.Uint64 = new(atomic.Uint64)
+// chunkCounters accumulates chunk accounting for ONE machine backup, across
+// every disk in it.
+//
+// These used to be allocated INSIDE uploadWorker, which is per-archive: a
+// second disk restarted the live counts from zero, and the run-level totals
+// did not exist anywhere at all -- which is why RunMachineBackup reported
+// new/reused as zero "rather than guessed". Owning them at the run makes the
+// number real, and makes the dedup story on the run row (docs/V4-UX.md §6)
+// the whole machine rather than its last disk.
+type chunkCounters struct {
+	newChunks    atomic.Uint64
+	reusedChunks atomic.Uint64
+}
+
+func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename string, totalSize uint64, ch chan []byte, readerErr <-chan error, progress func(float64, string)) error {
+	newchunk := &counters.newChunks
+	reusechunk := &counters.reusedChunks
 	knownChunks := pbscommon.NewChunkSet()
 
 	// abort unblocks the disk reader before returning an error: the reader
@@ -617,7 +631,7 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, totalSize uint64
 	return nil
 }
 
-func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index int, progress func(float64, string), onMilestone func(checkpoint, level, message string)) (int64, error) {
+func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onMilestone func(checkpoint, level, message string)) (int64, error) {
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
@@ -903,7 +917,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, index i
 			close(ch)
 		}()
 
-		return uploadWorker(client, fmt.Sprintf("drive-sata%d.img.fidx", index), uint64(total), ch, readerErr, progress)
+		return uploadWorker(client, counters, fmt.Sprintf("drive-sata%d.img.fidx", index), uint64(total), ch, readerErr, progress)
 	})
 }
 
@@ -939,21 +953,8 @@ func RunMachineBackup(opts BackupOptions) error {
 	}
 	defer lock.Unlock()
 
-	// Structured live stats for the GUI (speed and ETA are derived client-side
-	// from these deltas). Set while holding the backup lock (single machine
-	// backup at a time), cleared on exit.
-	if opts.OnStats != nil {
-		machineStatsFn = func(bytesDone, bytesTotal, newChunks, reusedChunks uint64) {
-			opts.OnStats(&BackupProgressStats{
-				Percent:      float64(bytesDone) / float64(bytesTotal),
-				BytesDone:    bytesDone,
-				BytesTotal:   bytesTotal,
-				NewChunks:    newChunks,
-				ReusedChunks: reusedChunks,
-			})
-		}
-		defer func() { machineStatsFn = nil }()
-	}
+	// Chunk accounting for this run, shared by every disk in it.
+	counters := &chunkCounters{}
 
 	// fail logs the detailed cause and reports only a generic message to the
 	// UI/history; the log is the source of truth for diagnostics.
@@ -991,6 +992,24 @@ func RunMachineBackup(opts BackupOptions) error {
 		Manifest: pbscommon.BackupManifest{
 			BackupID: opts.BackupID,
 		},
+	}
+
+	// Structured live stats for the GUI (speed and ETA are derived client-side
+	// from these deltas). Set while holding the backup lock (single machine
+	// backup at a time), cleared on exit. Installed AFTER the client exists
+	// because the wire-byte count lives on the client.
+	if opts.OnStats != nil {
+		machineStatsFn = func(bytesDone, bytesTotal, newChunks, reusedChunks uint64) {
+			opts.OnStats(&BackupProgressStats{
+				Percent:       float64(bytesDone) / float64(bytesTotal),
+				BytesDone:     bytesDone,
+				BytesTotal:    bytesTotal,
+				BytesUploaded: client.UploadedBytes(),
+				NewChunks:     newChunks,
+				ReusedChunks:  reusedChunks,
+			})
+		}
+		defer func() { machineStatsFn = nil }()
 	}
 
 	// Encryption, if the gate resolved a key. Same rule as the directory
@@ -1051,7 +1070,7 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		diskBytes, err := backupWindowsDisk(opts.Ctx, client, int(idx), progress, opts.OnMilestone)
+		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnMilestone)
 		if err != nil {
 			// A cancelled context means the user pressed Stop; the read abort is
 			// the mechanism, not a fault.
@@ -1095,19 +1114,22 @@ func RunMachineBackup(opts BackupOptions) error {
 	// the finalizer's fallback, precisely because THAT path has no
 	// trustworthy backup-time to target).
 	//
-	// NewChunks/ReusedChunks are left at zero rather than guessed: per-
-	// disk chunk counters exist inside uploadWorker but are not currently
-	// surfaced up through backupWindowsDisk's return value, so there is
-	// nothing genuine to report here yet. TotalBytes uses the same disk-
-	// capacity figure the engine's own log already reports ("Total disk
-	// size: ..."), not a fabricated number.
+	// Every number here is measured. TotalBytes is the disk-capacity figure
+	// the engine's own log already reports ("Total disk size: ..."), the
+	// chunk counts are the run-level counters every disk in this backup
+	// added to, and BytesUploaded is what the PBS client actually put on
+	// the wire. The three answer different questions and none is derived
+	// from another.
 	status := &BackupStatus{
-		Outcome:     OutcomeVerifiedSuccess,
-		BackupID:    client.Manifest.BackupID,
-		BackupTime:  client.Manifest.BackupTime,
-		DurationSec: time.Since(startTime).Seconds(),
-		TotalBytes:  uint64(totalBytes),
-		Message:     "Machine backup completed successfully",
+		Outcome:       OutcomeVerifiedSuccess,
+		BackupID:      client.Manifest.BackupID,
+		BackupTime:    client.Manifest.BackupTime,
+		DurationSec:   time.Since(startTime).Seconds(),
+		TotalBytes:    uint64(totalBytes),
+		BytesUploaded: client.UploadedBytes(),
+		NewChunks:     counters.newChunks.Load(),
+		ReusedChunks:  counters.reusedChunks.Load(),
+		Message:       "Machine backup completed successfully",
 	}
 
 	if opts.OnComplete != nil {

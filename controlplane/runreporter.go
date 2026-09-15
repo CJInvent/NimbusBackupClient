@@ -13,7 +13,7 @@ import (
 //	... VSS snapshot created OK ...
 //	rep.Running()                   // ONLY after the shadow copy exists
 //	... upload ...
-//	rep.Success(finalStats)         // or rep.VSSFailed(err) / rep.Failed(err, tail)
+//	rep.Success(type, id, time, totals, tail)   // or VSSFailed / Failed
 //
 // Every post is fire-and-forget on a goroutine (Client.post already retries
 // with backoff); a lost non-terminal report is harmless — the server's
@@ -25,6 +25,25 @@ type RunReporter struct {
 	c        *Client
 	base     RunReport
 	terminal bool
+}
+
+// RunTotals is what a terminal report measured.
+//
+// A struct rather than four more int64 arguments: the call sites already read
+// Success(type, id, time, a, b, tail) and adding two more bare numbers to that
+// is how a caller eventually swaps two of them. Every field is filled from a
+// measurement or left zero because it WAS zero -- none is a placeholder.
+type RunTotals struct {
+	// BytesTotal is the logical size of what was backed up.
+	BytesTotal int64
+	// BytesUploaded is what went over the wire: encoded chunk bodies PBS
+	// accepted, after dedup, compression and encryption. It is normally a
+	// small fraction of BytesTotal and that is the product working.
+	BytesUploaded int64
+	// ChunksNew/ChunksReused: chunks sent vs chunks the datastore already
+	// had. Their sum is the run's chunk count.
+	ChunksNew    int64
+	ChunksReused int64
 }
 
 // NewRun starts tracking a run. backupType: "directory" | "machine".
@@ -84,6 +103,13 @@ func (r *RunReporter) SetJobID(jobID int64) {
 // a zero survive the wire -- see RunReport's comment on BytesTotal.
 func i64(v int64) *int64 { return &v }
 
+// into stamps the measured totals onto a report. All four together, so a new
+// measurement cannot be added to RunTotals and then forgotten on the wire.
+func (t RunTotals) into(rep *RunReport) {
+	rep.BytesTotal, rep.BytesUploaded = i64(t.BytesTotal), i64(t.BytesUploaded)
+	rep.ChunksNew, rep.ChunksReused = i64(t.ChunksNew), i64(t.ChunksReused)
+}
+
 func (r *RunReporter) Preparing() { r.post(StatusPreparing, nil) }
 
 // Running MUST only be called after VSS confirmed the shadow copy (or, for
@@ -102,22 +128,22 @@ func (r *RunReporter) VSSFailed(errSummary string) {
 
 // Success is terminal. The PBS snapshot triple is REQUIRED here — without
 // it the server can never detect PBS-side prune of this snapshot.
-func (r *RunReporter) Success(pbsBackupType, pbsBackupID string, pbsBackupTime int64, bytesTotal, bytesUploaded int64, logTail string) {
+func (r *RunReporter) Success(pbsBackupType, pbsBackupID string, pbsBackupTime int64, totals RunTotals, logTail string) {
 	r.post(StatusSuccess, func(rep *RunReport) {
 		rep.PBSBackupType, rep.PBSBackupID = pbsBackupType, pbsBackupID
 		rep.PBSBackupTime = i64(pbsBackupTime)
-		rep.BytesTotal, rep.BytesUploaded = i64(bytesTotal), i64(bytesUploaded)
+		totals.into(rep)
 		rep.LogTail = clip(logTail, 16<<10)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	})
 }
 
 // Warning is terminal: the backup exists but with caveats (skipped files…).
-func (r *RunReporter) Warning(pbsBackupType, pbsBackupID string, pbsBackupTime int64, bytesTotal, bytesUploaded int64, errSummary, logTail string) {
+func (r *RunReporter) Warning(pbsBackupType, pbsBackupID string, pbsBackupTime int64, totals RunTotals, errSummary, logTail string) {
 	r.post(StatusWarning, func(rep *RunReport) {
 		rep.PBSBackupType, rep.PBSBackupID = pbsBackupType, pbsBackupID
 		rep.PBSBackupTime = i64(pbsBackupTime)
-		rep.BytesTotal, rep.BytesUploaded = i64(bytesTotal), i64(bytesUploaded)
+		totals.into(rep)
 		rep.ErrorSummary = clip(errSummary, 500)
 		rep.LogTail = clip(logTail, 16<<10)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)

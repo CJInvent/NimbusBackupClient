@@ -351,6 +351,11 @@ type RunReport struct {
 	// is. A pointer to 0 marshals to 0 and means measured, and zero.
 	BytesTotal    *int64 `json:"bytes_total"`
 	BytesUploaded *int64 `json:"bytes_uploaded"`
+	// The dedup story, and the same pointer rule: a run that reused every
+	// chunk it needed sends chunks_new = 0, and 0 is the answer, not a
+	// missing field. nil is what Preparing() honestly knows.
+	ChunksNew     *int64 `json:"chunks_new"`
+	ChunksReused  *int64 `json:"chunks_reused"`
 	PBSServer     string `json:"pbs_server,omitempty"`
 	PBSDatastore  string `json:"pbs_datastore,omitempty"`
 	PBSNamespace  string `json:"pbs_namespace,omitempty"`

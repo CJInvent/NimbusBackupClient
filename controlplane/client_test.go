@@ -181,7 +181,7 @@ func TestRunReporterEvent(t *testing.T) {
 	c := &Client{BaseURL: srv.URL, AgentID: 7, Secret: "s3cret"}
 	rep := c.NewRun("J", "machine")
 	rep.Preparing()
-	rep.Success("vm", "DESKTOP-01", 1700000123, 0, 0, "")
+	rep.Success("vm", "DESKTOP-01", 1700000123, RunTotals{}, "")
 
 	rep.Event(CheckpointDisksPartitions, "info", "Partition 2: 100MB, backed up successfully")
 	select {

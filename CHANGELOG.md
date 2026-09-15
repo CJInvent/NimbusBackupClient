@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bytes actually uploaded, and the chunk counts behind them.** The PBS
+  client now counts the encoded size of every chunk body PBS accepted
+  (`PBSClient.UploadedBytes`), the machine engine owns its chunk counters at
+  the RUN rather than per-disk, and a terminal run report carries all four
+  numbers to the control plane as `controlplane.RunTotals` (`bytes_total`,
+  `bytes_uploaded`, `chunks_new`, `chunks_reused`). `backup_runs.bytes_uploaded`
+  read 0 on every successful run ever recorded because both terminal call
+  sites passed a literal zero next to an engine that had the real figure --
+  a number nobody had measured, presented as one that had been. See
+  NimbusControl `docs/V4-UX.md` §0 and §6.
+
 - The agent reports its own restores to the control server
   (`POST /api/agent/v1/restores`). A restore fetches a backup key and no backup
   run follows it, so the server's key-release audit saw it as unmatched by
@@ -27,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same token writes both — so the server grades a self-report below a
   portal action taken by a named user. **A failed report never fails a
   restore.**
+
+### Fixed
+- The machine engine reported `new_chunks`/`reused_chunks` as zero for the
+  whole run. The counters were allocated inside `uploadWorker`, which is
+  per-archive, so a second disk also restarted the live counts from zero.
 
 ## [0.3.0] - 2026-07-29
 

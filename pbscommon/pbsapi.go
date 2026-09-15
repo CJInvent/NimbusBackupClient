@@ -178,7 +178,31 @@ type PBSClient struct {
 	// alone is a no-op while streams are open.
 	activeConn   net.Conn
 	activeConnMu sync.Mutex
+
+	// uploadedBytes counts what this session actually PUT on the wire:
+	// the encoded length of every chunk body putChunk sent, after
+	// compression and encryption, summed across every archive and every
+	// upload worker.
+	//
+	// This is the only place in the system that knows the number. The
+	// engines count CHUNKS (new vs reused), which answers "how much did
+	// dedup save"; the run row's bytes_total is the logical size of what
+	// was backed up. Neither is what an operator means by "how much did
+	// this machine send over the link tonight", and that column
+	// (backup_runs.bytes_uploaded) read 0 on every successful run because
+	// nothing measured it -- see docs/V4-UX.md §0.
+	//
+	// Chunks only. Blobs (manifest, index.json, client log, escrow) and
+	// the index assignments are a few kilobytes against gigabytes, and
+	// counting them here would mean threading the counter through every
+	// unrelated PUT for a rounding error.
+	uploadedBytes atomic.Uint64
 }
+
+// UploadedBytes reports what this session has sent so far: see uploadedBytes.
+// Safe to call while a backup is running -- it is how a progress tick gets
+// the number.
+func (pbs *PBSClient) UploadedBytes() uint64 { return pbs.uploadedBytes.Load() }
 
 // activeClients tracks every PBSClient currently holding an open HTTP/2
 // session. A signal handler or Wails shutdown hook calls CloseAllActive
@@ -852,6 +876,11 @@ func (pbs *PBSClient) putChunk(writerid uint64, digest string, encoded []byte, p
 		fmt.Println("Error making request:", string(resp1), string(resp2.Proto))
 		return fmt.Errorf("Error making request: %s %s", string(resp1), string(resp2.Proto))
 	}
+
+	// Counted AFTER the 200, so the number is bytes PBS accepted rather than
+	// bytes we attempted: a failed chunk is retried or fails the run, and
+	// either way it did not land in the datastore.
+	pbs.uploadedBytes.Add(uint64(len(outBuffer)))
 
 	return nil
 }

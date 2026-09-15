@@ -62,15 +62,21 @@ type DirResult struct {
 
 // BackupStatus is the authoritative description of a finished backup run.
 type BackupStatus struct {
-	Outcome      BackupOutcome `json:"outcome"`
-	BackupID     string        `json:"backup_id"`
-	BackupTime   int64         `json:"backup_time"`
-	DurationSec  float64       `json:"duration_sec"`
-	TotalBytes   uint64        `json:"total_bytes"`
-	NewChunks    uint64        `json:"new_chunks"`
-	ReusedChunks uint64        `json:"reused_chunks"`
-	FailedChunks uint64        `json:"failed_chunks"`
-	Directories  []DirResult   `json:"directories"`
+	Outcome     BackupOutcome `json:"outcome"`
+	BackupID    string        `json:"backup_id"`
+	BackupTime  int64         `json:"backup_time"`
+	DurationSec float64       `json:"duration_sec"`
+	TotalBytes  uint64        `json:"total_bytes"`
+	// BytesUploaded is what went over the wire: the encoded size of every
+	// chunk PBS accepted, after dedup, compression and encryption. It is
+	// NOT TotalBytes minus anything -- a fully deduplicated nightly run
+	// backs up 80 GB and uploads a few megabytes, and those are two
+	// different true statements about the same run.
+	BytesUploaded uint64      `json:"bytes_uploaded"`
+	NewChunks     uint64      `json:"new_chunks"`
+	ReusedChunks  uint64      `json:"reused_chunks"`
+	FailedChunks  uint64      `json:"failed_chunks"`
+	Directories   []DirResult `json:"directories"`
 
 	// Three buckets of files that did not make it into the backup intact.
 	// ExcludedByPolicy and Corrupted are populated in Group 1; SkippedReadError
@@ -118,6 +124,7 @@ func (s *BackupStatus) merge(child *BackupStatus) {
 		return
 	}
 	s.Outcome = worstOutcome(s.Outcome, child.Outcome)
+	s.BytesUploaded += child.BytesUploaded
 	s.NewChunks += child.NewChunks
 	s.ReusedChunks += child.ReusedChunks
 	s.FailedChunks += child.FailedChunks
@@ -172,12 +179,15 @@ func excludedToIssues(excluded []string) []FileIssue {
 // BackupProgressStats is a structured snapshot of in-flight backup progress so the
 // GUI can render real statistics instead of parsing them out of a log string.
 type BackupProgressStats struct {
-	Percent      float64 `json:"percent"` // 0.0 - 1.0
-	BytesDone    uint64  `json:"bytes_done"`
-	BytesTotal   uint64  `json:"bytes_total"` // 0 when the background size scan has not finished
-	NewChunks    uint64  `json:"new_chunks"`
-	ReusedChunks uint64  `json:"reused_chunks"`
-	FailedChunks uint64  `json:"failed_chunks"`
-	CurrentDir   string  `json:"current_dir,omitempty"`
-	Message      string  `json:"message"`
+	Percent    float64 `json:"percent"` // 0.0 - 1.0
+	BytesDone  uint64  `json:"bytes_done"`
+	BytesTotal uint64  `json:"bytes_total"` // 0 when the background size scan has not finished
+	// BytesUploaded: wire bytes so far (see BackupStatus.BytesUploaded).
+	// BytesDone is progress through the SOURCE; this is traffic.
+	BytesUploaded uint64 `json:"bytes_uploaded"`
+	NewChunks     uint64 `json:"new_chunks"`
+	ReusedChunks  uint64 `json:"reused_chunks"`
+	FailedChunks  uint64 `json:"failed_chunks"`
+	CurrentDir    string `json:"current_dir,omitempty"`
+	Message       string `json:"message"`
 }
