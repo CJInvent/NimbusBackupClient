@@ -126,7 +126,14 @@ type Agent struct {
 	// the first check-in response assigns a real value — an agent that has
 	// never talked to the server has nothing to stagger against yet.
 	checkinOffset atomic.Int64
-	mu            sync.Mutex // serializes forced check-ins with the loop
+
+	// burstSeconds/burstUntil are the temporary fast cadence described on
+	// CheckinResponse. Held as a DEADLINE the agent enforces itself, so an
+	// unreachable or crashed server cannot leave this machine polling fast
+	// forever -- the window simply runs out.
+	burstSeconds atomic.Int64
+	burstUntil   atomic.Int64 // unix seconds; 0 = no burst
+	mu           sync.Mutex   // serializes forced check-ins with the loop
 
 	statusMu sync.Mutex
 	status   Status
@@ -235,7 +242,7 @@ func (a *Agent) Run(stop <-chan struct{}) {
 	a.interval.Store(120) // contract default until the server says otherwise
 	a.CheckinNow()
 	for {
-		wait := NextAligned(time.Now(), int(a.interval.Load()), int(a.checkinOffset.Load()))
+		wait := a.nextWait(time.Now())
 		select {
 		case <-stop:
 			return
@@ -243,6 +250,43 @@ func (a *Agent) Run(stop <-chan struct{}) {
 		}
 		a.CheckinNow()
 	}
+}
+
+// applyBurst takes the burst window out of one check-in response.
+//
+// Both halves or neither. A cadence with no deadline is the one shape this
+// must never hold, so a response carrying only one of them CLEARS the window
+// rather than guessing the other -- and an already-expired deadline clears it
+// too, which is what lets the server end a window by simply saying nothing.
+func (a *Agent) applyBurst(resp *CheckinResponse) {
+	if resp.BurstSeconds >= 1 && resp.BurstUntil > time.Now().Unix() {
+		a.burstSeconds.Store(int64(resp.BurstSeconds))
+		a.burstUntil.Store(resp.BurstUntil)
+		return
+	}
+	a.burstUntil.Store(0)
+}
+
+// nextWait is how long to sleep before the next check-in.
+//
+// Ordinarily the epoch-aligned grid slot (schedule.go), which is what keeps a
+// fleet that rebooted together from checking in together. Inside a burst
+// window it is the burst interval, PLAIN -- aligning a two-second cadence to
+// a grid would herd every browsing machine onto the same second for no
+// benefit, and the window is short and single-machine by construction.
+//
+// The deadline is checked HERE, on every cycle, rather than cancelled by a
+// later response: that is what makes the window survivable when the server
+// does not come back.
+func (a *Agent) nextWait(now time.Time) time.Duration {
+	if until := a.burstUntil.Load(); until > now.Unix() {
+		s := a.burstSeconds.Load()
+		if s < 1 {
+			s = 1
+		}
+		return time.Duration(s) * time.Second
+	}
+	return NextAligned(now, int(a.interval.Load()), int(a.checkinOffset.Load()))
 }
 
 // CheckinNow performs one check-in cycle (also callable out-of-band, e.g.
@@ -267,6 +311,7 @@ func (a *Agent) CheckinNow() {
 	if resp.CheckinSeconds >= 30 { // refuse absurd values; floor at 30 s
 		a.interval.Store(int64(resp.CheckinSeconds))
 	}
+	a.applyBurst(resp)
 	// Offset has no meaningful floor/ceiling of its own — NextAligned already
 	// normalizes any value mod the current interval, so an offset larger
 	// than (or equal to) the interval is harmless, not a value to reject.

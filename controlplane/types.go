@@ -207,6 +207,25 @@ type CheckinResponse struct {
 	// reassigns it. Zero is a valid offset, not "unset".
 	CheckinOffsetSeconds int `json:"checkin_offset_seconds"`
 
+	// BurstSeconds/BurstUntil are a TEMPORARY fast cadence for ONE machine,
+	// used while somebody is browsing it from the portal (NimbusControl
+	// docs/V4-JOB-TARGETS.md section 3). A command answered at the next
+	// ordinary check-in means up to two minutes per click, which is not a
+	// picker anybody would use.
+	//
+	// BURST IS A DEADLINE, NOT A MODE. BurstUntil is a unix time, and the
+	// agent returns to its ordinary cadence when that time passes EVEN IF
+	// THE SERVER NEVER SPEAKS AGAIN. A portal that crashed mid-browse, or a
+	// technician who closed a laptop, must not leave a machine polling every
+	// second forever -- and a cadence that can only be cancelled by the thing
+	// that set it is exactly that failure waiting to happen.
+	//
+	// Not subject to the ordinary 30s floor: the floor exists to stop a
+	// misconfigured server hammering a fleet forever, and a bounded window on
+	// one machine is the case it was never aimed at.
+	BurstSeconds int   `json:"burst_seconds,omitempty"`
+	BurstUntil   int64 `json:"burst_until,omitempty"`
+
 	// PBSPollIntervalSeconds/PBSPollOffsetSeconds are the server-assigned
 	// schedule for the INDEPENDENT PBS-connectivity poll (see
 	// gui/controlplane_pbspoll.go) -- decoupled from the check-in cadence
