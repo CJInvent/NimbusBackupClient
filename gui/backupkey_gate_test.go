@@ -253,3 +253,40 @@ func TestCheckinRotationDoesNotReviveOldKeyAfterRestart(t *testing.T) {
 		t.Fatalf("old key accepted: %v", action)
 	}
 }
+
+func TestCheckinLateDeliveryCannotReplaceNewPolicy(t *testing.T) {
+	for _, state := range []string{"off", "unavailable", "rotated"} {
+		t.Run(state, func(t *testing.T) {
+			isolateConfigDir(t)
+			withProtector(t, "dpapi")
+			material, _ := freshKeyMaterial(t)
+			applyBackupKeyFromCheckin(&controlplane.BackupKeyAd{KeyID: material.KeyID})
+			switch state {
+			case "off":
+				applyBackupKeyFromCheckin(nil)
+			case "unavailable":
+				applyBackupKeyFromCheckin(&controlplane.BackupKeyAd{Unavailable: true})
+			case "rotated":
+				applyBackupKeyFromCheckin(&controlplane.BackupKeyAd{KeyID: strings.Repeat("c", 64)})
+			}
+			path, err := backupKeyPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := storeBackupKey(material); err == nil {
+				t.Fatal("late key delivery replaced a newer authenticated policy")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("refused delivery modified durable policy")
+			}
+		})
+	}
+}

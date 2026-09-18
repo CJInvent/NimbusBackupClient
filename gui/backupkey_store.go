@@ -367,6 +367,20 @@ func storeBackupKey(m *controlplane.BackupKeyMaterial) error {
 	backupKeyMu.Lock()
 	defer backupKeyMu.Unlock()
 
+	// A check-in may have advanced policy while this response was in flight.
+	// Compare under the same lock used by the policy writer: a delayed key
+	// must never restore an obsolete assignment across the next restart.
+	current, readErr := readBackupKeyRecord()
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return fmt.Errorf("reading current encryption policy before key storage: %w", readErr)
+	}
+	if current != nil && current.EncryptionSource != encSourceProvisioning {
+		if current.Encryption == encStateOff || current.Unavailable ||
+			(current.AssignedKeyID != "" && current.AssignedKeyID != m.KeyID) {
+			return errors.New("backup key assignment changed during delivery; wait for the next check-in")
+		}
+	}
+
 	dek, protector, err := durableDEK()
 	if err != nil {
 		return fmt.Errorf("refusing to store the backup key: %w", err)

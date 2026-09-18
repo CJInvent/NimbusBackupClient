@@ -640,3 +640,17 @@ server report and ERROR/backup logs instead of returning only "see log".
 Run-log retrieval includes retained compressed rotations, scopes every line to
 the requested time/checkpoint, and explicitly refuses an empty or over-limit
 result. It cannot label a missing historical log as a successful empty report.
+
+### Release identity follow-up (2026-09-18)
+
+The dev release action omitted `target_commitish`, so GitHub created tag
+`v4.0.0-dev.179` on the default branch although its artifacts correctly name
+`acbb683` in build-info. Future dev releases explicitly target the tested SHA
+and verify the published tag through the GitHub API. The historical tag is
+not silently rewritten; use the next corrected release for traceable installs.
+
+Delayed key delivery is compared with the latest persisted assignment under
+the policy writer lock. It cannot overwrite a newer off, unavailable or rotated
+policy. Regression tests reproduce all three stale-response cases and verify
+that refusal leaves the durable record byte-for-byte unchanged. The run gate
+also compares the identifier of the opened key with its expected assignment.

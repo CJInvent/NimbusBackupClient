@@ -89,6 +89,11 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 				return nil, nil, fmt.Errorf(
 					"encrypted backup is required but the stored key could not be opened: %w", lerr)
 			}
+			if keyID != ad.KeyID {
+				st.Err = errors.New("stored backup key changed while opening it; retry after check-in")
+				reportKeyStatus(ad, st)
+				return nil, nil, st.Err
+			}
 			writeBackupLog(fmt.Sprintf("[BackupKey] run %s: encryption gate passed under key %s (stored)", runUUID, shortKeyID(keyID)))
 			reportKeyStatus(ad, st)
 			return raw, blob, nil

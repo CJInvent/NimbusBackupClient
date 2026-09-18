@@ -1320,6 +1320,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.id.outputs.version }}
+          # Otherwise GitHub creates the tag on the default branch, which is
+          # unrelated to the tested v4_dev artifacts.
+          target_commitish: ${{ github.sha }}
           name: NimbusBackupClient ${{ steps.id.outputs.version }}
           prerelease: true
           body: |
@@ -1341,6 +1344,18 @@ jobs:
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify published tag identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.id.outputs.version }}
+        run: |
+          set -euo pipefail
+          ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')
+          test "${ACTUAL}" = "${GITHUB_SHA}" || {
+            echo "::error::Published dev tag does not name the tested commit"
+            exit 1
+          }
 
   # Create release on tag
   release:
