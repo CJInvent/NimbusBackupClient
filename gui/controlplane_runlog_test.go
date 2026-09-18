@@ -1,7 +1,9 @@
 package main
 
 import (
+	"compress/gzip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +122,34 @@ func TestFilterLogByTimeWindowCrossTimezone(t *testing.T) {
 	}
 	if kept != 1 || !strings.Contains(out, "Local-time log line") {
 		t.Errorf("a Chicago-local-time log line was not recognized as inside a UTC window: kept=%d out=%q", kept, out)
+	}
+}
+
+func TestRetainedRunLogIncludesCompressedRotation(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "service-service.log")
+	if err := os.WriteFile(base, []byte("[ERROR] [2026-07-28 10:00:00] later run\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(base + ".20260728-093000.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	if _, err := gz.Write([]byte("[ERROR] [2026-07-28 09:06:44] required key unavailable\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 7, 28, 9, 0, 0, 0, time.Local)
+	out, n, err := filterRetainedLogByTimeWindow(base, start, start.Add(10*time.Minute), "")
+	if err != nil || n != 1 || !strings.Contains(out, "required key unavailable") || strings.Contains(out, "later run") {
+		t.Fatalf("n=%d err=%v out=%q", n, err, out)
+	}
+	if _, _, err := filterRetainedLogByTimeWindow(base, start.Add(-time.Hour), start.Add(-time.Minute), ""); err == nil {
+		t.Fatal("expired logs reported as a successful empty artifact")
 	}
 }

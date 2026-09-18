@@ -46,15 +46,14 @@ var ErrBackupKeyUnknown = errors.New(
 
 // applyBackupKeyFromCheckin is the Agent.OnBackupKey hook.
 //
-// ITS ONLY JOB IS THE NULL CASE. A key advertisement needs no action here —
-// material is fetched at backup time, on a mismatch, which is what keeps it off
-// the wire on the ~720 check-ins a machine makes each day. But `null` is the
-// server saying "this org does not encrypt", and that answer has to be written
-// down while we can still hear it, or a machine that reboots into an outage
-// cannot distinguish it from having heard nothing at all.
+// Persist policy separately from material. Both "off" and affirmative
+// assignments must survive restart; material is still fetched only at run time.
 func applyBackupKeyFromCheckin(ad *controlplane.BackupKeyAd) {
 	warnIfProvisioningWasWrong(ad)
 	if ad != nil {
+		if err := recordEncryptionRequired(ad); err != nil {
+			writeErrorLog(fmt.Sprintf("[BackupKey] could not persist required encryption policy: %v", err))
+		}
 		return
 	}
 	if err := recordEncryptionOff(); err != nil {
@@ -85,9 +84,9 @@ func warnIfProvisioningWasWrong(ad *controlplane.BackupKeyAd) {
 		return
 	}
 	writeWarnLog(
-		"[BackupKey] WARNING: this machine was provisioned with encryption=off and has been " +
-			"backing up in the clear, but the control server says this org DOES encrypt. " +
-			"Backups taken before this check-in are unencrypted; new ones will be encrypted. " +
+		"[BackupKey] WARNING: this machine was provisioned with encryption=off and may have " +
+			"backed up in the clear, but the control server says this org DOES encrypt. " +
+			"Backups taken before this check-in are unencrypted; new backups must pass the encryption gate. " +
 			"Check the provisioning profile that installed this machine.")
 }
 
@@ -114,7 +113,7 @@ func adFromPersistedState() (*controlplane.BackupKeyAd, error) {
 		// it compares key_id against storage, and the master fingerprint /
 		// public PEM matter only to a fetch, which cannot happen while the
 		// server is unreachable anyway.
-		return &controlplane.BackupKeyAd{KeyID: keyID}, nil
+		return &controlplane.BackupKeyAd{KeyID: keyID, Unavailable: keyID == ""}, nil
 	default:
 		return nil, ErrBackupKeyUnknown
 	}

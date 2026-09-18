@@ -2,10 +2,14 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
 	"controlplane"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -17,14 +21,8 @@ import (
 // 'run_log', accepts this same upload path with a 10MB cap instead of
 // extraction's 5GB).
 //
-// SCOPE, DELIBERATELY: reads ONLY the current service-service.log, not
-// any rotated .log.<timestamp>[.gz] files RotatingLogger may have already
-// rotated away (log_rotation.go: 10MB/file, 5 kept). A run whose window
-// has already rotated out of the current file returns a partial or empty
-// result rather than an error -- the artifact still uploads, just thin.
-// This covers the common case (a recent run, which is what "detailed
-// report" is for) without the added complexity of globbing, ordering, and
-// decompressing rotated files in this pass.
+// Includes retained plain/gzip rotations. An expired or over-limit window is
+// an explicit refusal, never a successful empty or silently partial artifact.
 func (a *App) cpHandleRunLogCommand(cmd controlplane.Command) (controlplane.CommandResult, bool) {
 	if cmd.Command != "fetch_run_log" {
 		return controlplane.CommandResult{}, false
@@ -64,7 +62,7 @@ func (a *App) cpHandleRunLogCommand(cmd controlplane.Command) (controlplane.Comm
 	started = started.Add(-5 * time.Second)
 	ended = ended.Add(5 * time.Second)
 
-	content, kept, err := filterLogByTimeWindow(GetServiceLogPath(), started, ended, checkpoint)
+	content, kept, err := filterRetainedLogByTimeWindow(GetServiceLogPath(), started, ended, checkpoint)
 	if err != nil {
 		return cpErr("reading service log: " + err.Error()), true
 	}
@@ -117,10 +115,20 @@ func filterLogByTimeWindow(path string, start, end time.Time, keyword string) (s
 	}
 	defer func() { _ = f.Close() }()
 
+	var reader io.Reader = f
+	if strings.HasSuffix(path, ".gz") {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return "", 0, err
+		}
+		defer func() { _ = gz.Close() }()
+		reader = gz
+	}
+	limited := &io.LimitedReader{R: reader, N: 64*1024*1024 + 1}
 	var out strings.Builder
 	kept := 0
 	keywordLower := strings.ToLower(keyword)
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(limited)
 	// Default bufio.Scanner line cap is 64KB; a log line is never that
 	// long in practice, but size the buffer generously rather than have
 	// a single unusually long line abort the whole scan.
@@ -141,9 +149,62 @@ func filterLogByTimeWindow(path string, start, end time.Time, keyword string) (s
 		if keyword != "" && !strings.Contains(strings.ToLower(line), keywordLower) {
 			continue
 		}
+		if out.Len()+len(line)+1 > 8*1024*1024 {
+			return "", 0, fmt.Errorf("matching log exceeds 8 MiB; narrow the requested window")
+		}
 		out.WriteString(line)
 		out.WriteByte('\n')
 		kept++
 	}
+	if limited.N == 0 {
+		return "", 0, fmt.Errorf("retained log exceeds read limit")
+	}
 	return out.String(), kept, sc.Err()
+}
+
+// Only the named service log and its timestamped rotations are eligible.
+// Prefer the complete raw file when compression is in progress beside it.
+func filterRetainedLogByTimeWindow(path string, start, end time.Time, keyword string) (string, int, error) {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return "", 0, err
+	}
+	pattern := regexp.MustCompile("^" + regexp.QuoteMeta(filepath.Base(path)) + `\.\d{8}-\d{6}(\.gz)?$`)
+	files := map[string]string{}
+	for _, entry := range entries {
+		if entry.IsDir() || !pattern.MatchString(entry.Name()) {
+			continue
+		}
+		name := entry.Name()
+		base := strings.TrimSuffix(name, ".gz")
+		if _, ok := files[base]; !ok || name == base {
+			files[base] = name
+		}
+	}
+	names := make([]string, 0, len(files))
+	for _, name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	names = append(names, filepath.Base(path))
+	var out strings.Builder
+	kept := 0
+	for _, name := range names {
+		content, n, err := filterLogByTimeWindow(filepath.Join(filepath.Dir(path), name), start, end, keyword)
+		if err != nil {
+			if os.IsNotExist(err) && name == filepath.Base(path) {
+				continue
+			}
+			return "", 0, err
+		}
+		if out.Len()+len(content) > 8*1024*1024 {
+			return "", 0, fmt.Errorf("matching logs exceed 8 MiB; narrow the requested window")
+		}
+		out.WriteString(content)
+		kept += n
+	}
+	if kept == 0 {
+		return "", 0, fmt.Errorf("no retained log lines match this run window and checkpoint")
+	}
+	return out.String(), kept, nil
 }

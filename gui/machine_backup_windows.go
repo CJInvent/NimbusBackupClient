@@ -190,19 +190,18 @@ func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 						uintptr(unsafe.Pointer(&returnLength)),
 					)
 
-					if r1 == 0 {
-						return ret, nil
+					if r1 == 0 && returnLength > uint32(len(buffer2)) {
+						buffer2 = make([]uint16, returnLength)
+						r1, _, _ = procGetVolumePathNamesForVolumeW.Call(
+							uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(volName))),
+							uintptr(unsafe.Pointer(&buffer2[0])), uintptr(len(buffer2)),
+							uintptr(unsafe.Pointer(&returnLength)),
+						)
 					}
-
-					i := 0
-					for i < len(buffer) && buffer[i] != 0 {
-						start := i
-						for buffer[i] != 0 {
-							i++
-						}
-						path := windows.UTF16ToString(buffer2[start:i])
-						v.Letters = append(v.Letters, path)
-						i++
+					if r1 == 0 {
+						writeWarnLog(fmt.Sprintf("Could not enumerate mount paths for disk %d", v.DiskNumber))
+					} else {
+						v.Letters = volumeMountPaths(buffer2)
 					}
 
 					ret = append(ret, v)
@@ -499,6 +498,8 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 	var assignmentMutex sync.Mutex
 
 	errch := make(chan error, 8)
+	stop := make(chan struct{})
+	var stopOnce sync.Once
 	digests := make(map[int64][]byte)
 
 	type PosSeg struct {
@@ -509,15 +510,25 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 	ch2 := make(chan PosSeg, 8)
 
 	workerfn := func() {
-		for seg := range ch2 {
-			h := sha256.New()
-			_, _ = h.Write(seg.Data)
-
-			shahash := hex.EncodeToString(h.Sum(nil))
+		var workerErr error
+		defer func() { errch <- workerErr }()
+		for {
+			var seg PosSeg
+			select {
+			case <-stop:
+				return
+			case next, ok := <-ch2:
+				if !ok {
+					return
+				}
+				seg = next
+			}
+			digest := client.ChunkDigest(seg.Data)
+			shahash := hex.EncodeToString(digest[:])
 
 			assignmentMutex.Lock()
-			CS.indexHashData[seg.Pos] = h.Sum(nil)
-			digests[int64(seg.Pos)] = h.Sum(nil)
+			CS.indexHashData[seg.Pos] = digest[:]
+			digests[int64(seg.Pos)] = digest[:]
 
 			_, exists := knownChunks.GetOrInsert(shahash, true)
 			assignmentMutex.Unlock()
@@ -525,10 +536,10 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 			if exists {
 				reusechunk.Add(1)
 			} else {
-				err = client.UploadFixedCompressedChunk(wrid, shahash, seg.Data)
-				if err != nil {
-					errch <- err
-					break
+				uploadErr := client.UploadFixedCompressedChunk(wrid, shahash, seg.Data)
+				if uploadErr != nil {
+					workerErr = uploadErr
+					return
 				}
 				newchunk.Add(1)
 			}
@@ -564,23 +575,23 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 			}
 
 			if processedSnapshot > totalSize {
-				errch <- fmt.Errorf("fatal: tried to backup more data than specified size")
-				break
+				workerErr = fmt.Errorf("fatal: tried to backup more data than specified size")
+				return
 			}
 		}
-		errch <- nil
 	}
 
 	posfn := func() {
+		defer close(ch2)
 		pos := uint64(0)
 		for block := range ch {
-			ch2 <- PosSeg{
-				Pos:  pos,
-				Data: block,
+			select {
+			case ch2 <- PosSeg{Pos: pos, Data: block}:
+			case <-stop:
+				return
 			}
 			pos += uint64(len(block))
 		}
-		close(ch2)
 	}
 
 	go posfn()
@@ -588,11 +599,17 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 	for i := 0; i < 8; i++ {
 		go workerfn()
 	}
+	var firstUploadErr error
 	for i := 0; i < 8; i++ {
-		err := <-errch
-		if err != nil {
-			return abort(err)
+		if workerErr := <-errch; workerErr != nil {
+			if firstUploadErr == nil {
+				firstUploadErr = workerErr
+			}
+			stopOnce.Do(func() { close(stop) })
 		}
+	}
+	if firstUploadErr != nil {
+		return abort(firstUploadErr)
 	}
 
 	// The stream is fully drained; now learn how the reader ended. A read
@@ -933,7 +950,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 }
 
 // machineBackupFailedMsg is what the UI (history, progress) shows on failure.
-// The detailed cause is deliberately kept to the log only.
+// Detailed, redacted cause is preserved in the returned error and server report.
 const machineBackupFailedMsg = errBackupFailedSeeLog
 
 // RunMachineBackup performs a full physical disk backup
@@ -967,14 +984,15 @@ func RunMachineBackup(opts BackupOptions) error {
 	// Chunk accounting for this run, shared by every disk in it.
 	counters := &chunkCounters{}
 
-	// fail logs the detailed cause and reports only a generic message to the
-	// UI/history; the log is the source of truth for diagnostics.
+	// Keep the redacted cause in both local logs and the terminal run report.
 	fail := func(detail string) error {
-		writeDebugLog(detail)
+		detail = redactLogLine(detail)
+		writeErrorLog(detail)
+		writeBackupLog(detail)
 		if opts.OnComplete != nil {
 			opts.OnComplete(false, machineBackupFailedMsg)
 		}
-		return errors.New(machineBackupFailedMsg)
+		return fmt.Errorf("%s :: %s", machineBackupFailedMsg, detail)
 	}
 
 	// stopped reports a user-initiated Stop. Deliberately distinct from fail:

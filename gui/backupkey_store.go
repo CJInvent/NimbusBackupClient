@@ -66,7 +66,9 @@ type storedBackupKey struct {
 	// whose key it simply has not heard about yet. Those are opposite
 	// instructions, and guessing either way is a silent downgrade or a stopped
 	// backup.
-	Encryption string `json:"encryption"`
+	Encryption    string `json:"encryption"`
+	AssignedKeyID string `json:"assigned_key_id,omitempty"`
+	Unavailable   bool   `json:"unavailable,omitempty"`
 	// EncryptionSource says WHO told us: encSourceCheckin (the control server,
 	// authoritative) or encSourceProvisioning (a preconfigured MSI's profile,
 	// provisional and unauthenticated).
@@ -203,7 +205,7 @@ func readBackupKeyRecord() (*storedBackupKey, error) {
 	case encStateOff:
 		return &rec, nil
 	case encStateOn:
-		if rec.KeyID == "" || rec.Sealed == "" {
+		if (rec.KeyID == "") != (rec.Sealed == "") {
 			return nil, fmt.Errorf("stored backup key record claims a key but carries none")
 		}
 		return &rec, nil
@@ -239,6 +241,12 @@ func persistedEncryptionWithSource() (state string, keyID string, source string,
 	if src == "" {
 		// Records written before the field existed came from a check-in.
 		src = encSourceCheckin
+	}
+	if rec.Unavailable {
+		return rec.Encryption, "", src, nil
+	}
+	if rec.AssignedKeyID != "" {
+		return rec.Encryption, rec.AssignedKeyID, src, nil
 	}
 	return rec.Encryption, rec.KeyID, src, nil
 }
@@ -492,4 +500,36 @@ func shortKeyID(id string) string {
 		return id
 	}
 	return id[:12] + "…"
+}
+
+// Persist every affirmative policy answer before a restart can revive an old
+// "off" marker or an obsolete key. Keep sealed historical material until the
+// new key is fetched; assignment and possession are different facts.
+func recordEncryptionRequired(ad *controlplane.BackupKeyAd) error {
+	backupKeyMu.Lock()
+	defer backupKeyMu.Unlock()
+	rec, err := readBackupKeyRecord()
+	if errors.Is(err, os.ErrNotExist) {
+		rec = &storedBackupKey{}
+	} else if err != nil {
+		return err
+	}
+	unavailable := ad.Unavailable || ad.KeyID == ""
+	if rec.Encryption == encStateOn && rec.EncryptionSource == encSourceCheckin &&
+		rec.AssignedKeyID == ad.KeyID && rec.Unavailable == unavailable {
+		return nil
+	}
+	rec.Encryption = encStateOn
+	rec.EncryptionSource = encSourceCheckin
+	rec.AssignedKeyID = ad.KeyID
+	rec.Unavailable = unavailable
+	path, err := backupKeyPath()
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data, 0600)
 }

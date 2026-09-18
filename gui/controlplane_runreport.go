@@ -44,7 +44,8 @@ func takeRunReporter(backupID, backupType string) *controlplane.RunReporter {
 		cpPendingRep = nil
 		return rep
 	}
-	rep := cpClient.NewRun("manual:"+backupID, backupType)
+	rep := cpClient.NewRun("Manual backup", backupType)
+	rep.SetTrigger("manual")
 	rep.Preparing()
 	return rep
 }

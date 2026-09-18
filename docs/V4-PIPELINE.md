@@ -597,3 +597,46 @@ are what make it true rather than nominal.
    the first thing a technician wants, but it can contain paths and PBS
    hostnames. Recommendation: keep it, since a locked GUI that cannot show
    why a backup failed sends every question to the MSP helpdesk.
+
+## Encryption and run-history corrections (2026-09-17)
+
+Every production directory and image consumer addresses chunks using the
+active PBS client's key-scoped digest. The index checksum remains the normal
+SHA-256 checksum over index entries. The upload boundary rejects a digest
+that disagrees with the active key. FIDX and DIDX restores, including complete
+DIDX assembly, verify the same scoped addresses and reject wrong addresses.
+
+The check-in key block distinguishes disabled (`null`) from required but
+unavailable (`unavailable: true`). Both affirmative assignments and disabled
+state persist; assignment is distinct from possession, so restart before a
+fetch cannot downgrade encryption or revive an obsolete key. Ephemeral fetch
+must match the advertised assignment. A failed fetch/open reports unavailable
+rather than healthy key storage. Encryption-gate logs carry the run UUID;
+these are gate decisions, not proof of successful upload or restoration.
+
+The pipeline writes one local history entry on completion, including an
+encryption-gate refusal. The scheduler no longer adds a duplicate, incorrectly
+named manual entry. Scheduled/portal job names come from the adopted run;
+ad-hoc jobs are `Manual backup` with no fabricated scheduled-job ID.
+
+Local gates require Go 1.26.6, matching CI. Missing gosec fails the gate; both
+GUI and control-plane security scans run. Windows CI executes the actual
+image consumer against an HTTP fixture containing previous plain chunk
+addresses, and checks uploaded ciphertext, assigned digests and FIDX checksum.
+Directory consumers and all restore readers have corresponding behavioral
+coverage. Full hardware/VSS backup and real PBS restores remain the live
+acceptance step after installation.
+
+The Windows physical-disk picker now parses drive letters from the UTF-16
+mount-path MULTI_SZ, never from the unrelated disk-extents byte buffer. Empty
+and incomplete lists are bounded; mount-path enumeration errors are logged
+without abandoning all later disks. Windows CI covers multiple drive letters
+and incomplete input. Image upload failure also stops and joins all upload
+workers before returning, so an error cannot leave a background pipeline
+running or commit a partial index.
+
+Machine-backup errors retain their redacted detailed cause in the terminal
+server report and ERROR/backup logs instead of returning only "see log".
+Run-log retrieval includes retained compressed rotations, scopes every line to
+the requested time/checkpoint, and explicitly refuses an empty or over-limit
+result. It cannot label a missing historical log as a successful empty report.

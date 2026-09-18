@@ -24,10 +24,11 @@ import (
 // enabled for this org. THAT IS A DIFFERENT STATE FROM "the key is unavailable"
 // and the two must never be collapsed; see BackupKeyDecision.
 type BackupKeyAd struct {
-	ID      int64  `json:"id"`
-	KeyID   string `json:"key_id"`
-	Version int    `json:"version"`
-	Scope   string `json:"scope"` // "org" | "agent"
+	Unavailable bool   `json:"unavailable,omitempty"`
+	ID          int64  `json:"id"`
+	KeyID       string `json:"key_id"`
+	Version     int    `json:"version"`
+	Scope       string `json:"scope"` // "org" | "agent"
 
 	// MasterFingerprint / MasterPublicPEM identify the org's RSA master
 	// keypair. The PUBLIC half only — it is the escrow primitive PBS uses for
@@ -232,6 +233,10 @@ func BackupKeyDecision(ad *BackupKeyAd, st KeyStorage, alreadyFetched bool) (Bac
 		return BackupKeyProceedPlain, "encryption is not enabled for this organization"
 	}
 
+	if ad.Unavailable {
+		return BackupKeyRefuse, "encrypted backup is required but the server has no active key at the required scope"
+	}
+
 	if strings.TrimSpace(ad.KeyID) == "" {
 		// A key block with no identifier. Refuse rather than guess: nothing we
 		// stored could be verified against it, so "encrypted" would be a claim
@@ -284,6 +289,8 @@ func BackupKeyDecision(ad *BackupKeyAd, st KeyStorage, alreadyFetched bool) (Bac
 // only this machine has.
 func KeyStatusFor(ad *BackupKeyAd, st KeyStorage) KeyStatusReport {
 	switch {
+	case ad != nil && (ad.Unavailable || strings.TrimSpace(ad.KeyID) == ""):
+		return KeyStatusReport{Status: KeyStorageUnavailable, Detail: "server-required backup key is unavailable"}
 	case st.Err != nil:
 		return KeyStatusReport{
 			Status: KeyStorageUnavailable,

@@ -349,6 +349,9 @@ func (r *FIDXReaderAt) fetchAndCache(ci int) ([]byte, error) {
 		return nil, fmt.Errorf("chunk %s (index %d): got %d bytes, need %d", digest, ci, len(chunk), want)
 	}
 	sum := sha256.Sum256(chunk)
+	if r.pbs != nil {
+		sum = r.pbs.ChunkDigest(chunk)
+	}
 	if hex.EncodeToString(sum[:]) != digest {
 		return nil, fmt.Errorf("chunk %s (index %d): content hash mismatch", digest, ci)
 	}

@@ -771,6 +771,11 @@ func (pbs *PBSClient) ChunkDigest(plaintext []byte) [32]byte {
 }
 
 func (pbs *PBSClient) UploadChunk(writerid uint64, digest string, chunkdata []byte, dynamic bool, compressed bool) error {
+	actual := pbs.ChunkDigest(chunkdata)
+	if digest != hex.EncodeToString(actual[:]) {
+		return fmt.Errorf("chunk digest does not match the active encryption scope")
+	}
+
 	// Preallocate: magic + crc + worst-case payload. Avoids the append-growth
 	// reallocations the old code did on every chunk.
 	outBuffer := make([]byte, 0, len(chunkdata)+len(blobCompressedMagic)+8)
@@ -870,6 +875,8 @@ func (pbs *PBSClient) putChunk(writerid uint64, digest string, encoded []byte, p
 		fmt.Println("Error making request:", err)
 		return err
 	}
+
+	defer func() { _ = resp2.Body.Close() }()
 
 	if resp2.StatusCode != http.StatusOK {
 		resp1, _ := io.ReadAll(resp2.Body)
@@ -1061,6 +1068,8 @@ func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
 		fmt.Println("Error making request:", err)
 		return err
 	}
+
+	defer func() { _ = resp2.Body.Close() }()
 
 	if resp2.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp2.Body)

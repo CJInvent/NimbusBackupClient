@@ -261,7 +261,7 @@ Directory backups have a pxar catalog; image backups are raw disks (one
 
 * **`pbscommon.FIDXReaderAt`** — `io.ReaderAt` over a fixed index: index
   downloaded once, 4 MB chunks fetched on demand with an LRU, each verified by
-  SHA-256. Only chunks a read touches are fetched.
+  the active PBS key-scoped chunk digest (plain SHA-256 when unencrypted). Only chunks a read touches are fetched.
 * **`imagebrowse`** — GPT (authoritative) / MBR (fallback) parsing; per-
   partition boot-sector sniffing (NTFS / exFAT / FAT / BitLocker via the
   `-FVE-FS-` OEM id). NTFS via go-ntfs (pure Go, read-only). Output shaped as

@@ -199,8 +199,57 @@ func TestCheckinHookDoesNotRecordAKeyItWasOnlyToldAbout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("persistedEncryption: %v", err)
 	}
-	if state != encStateUnknown || keyID != "" {
-		t.Errorf("state = %q key = %q; an advertisement is not material and must not be recorded as held",
+	if backupKeyStorage().StoredKeyID != "" {
+		t.Fatal("advertised key falsely reported as held")
+	}
+	if state != encStateOn || keyID != "abc123" {
+		t.Errorf("state = %q key = %q; required encryption assignment was not persisted",
 			state, keyID)
+	}
+}
+
+func TestCheckinRequirementSurvivesRestartBeforeFetch(t *testing.T) {
+	isolateConfigDir(t)
+	withProtector(t, "dpapi")
+	if err := recordEncryptionOff(); err != nil {
+		t.Fatal(err)
+	}
+	assigned := &controlplane.BackupKeyAd{KeyID: strings.Repeat("a", 64)}
+	applyBackupKeyFromCheckin(assigned)
+	ad, err := adFromPersistedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, _ := controlplane.BackupKeyDecision(ad, backupKeyStorage(), false)
+	if action != controlplane.BackupKeyFetch {
+		t.Fatalf("after restart: %v", action)
+	}
+	applyBackupKeyFromCheckin(&controlplane.BackupKeyAd{Unavailable: true})
+	ad, err = adFromPersistedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, _ = controlplane.BackupKeyDecision(ad, backupKeyStorage(), false)
+	if action != controlplane.BackupKeyRefuse {
+		t.Fatalf("unavailable after restart: %v", action)
+	}
+}
+
+func TestCheckinRotationDoesNotReviveOldKeyAfterRestart(t *testing.T) {
+	isolateConfigDir(t)
+	withProtector(t, "dpapi")
+	m, _ := freshKeyMaterial(t)
+	if err := storeBackupKey(m); err != nil {
+		t.Fatal(err)
+	}
+	assigned := &controlplane.BackupKeyAd{KeyID: strings.Repeat("b", 64)}
+	applyBackupKeyFromCheckin(assigned)
+	ad, err := adFromPersistedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, _ := controlplane.BackupKeyDecision(ad, backupKeyStorage(), false)
+	if action != controlplane.BackupKeyFetch {
+		t.Fatalf("old key accepted: %v", action)
 	}
 }

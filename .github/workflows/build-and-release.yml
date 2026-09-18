@@ -538,6 +538,15 @@ jobs:
             exit 1
           fi
 
+      - name: Encryption consumers and service history
+        shell: bash
+        working-directory: gui
+        env:
+          GOWORK: off
+        run: |
+          go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|VolumeMountPaths)' ./...
+          go test -tags service -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths)' ./...
+
       # S10: create a real VSS snapshot through the production code path and
       # confirm the 0.2.150 diagnostics actually emit.
       #

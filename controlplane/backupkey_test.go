@@ -313,3 +313,16 @@ func TestVerifyKeyMaterial(t *testing.T) {
 		t.Error("a single-bit-flipped key was accepted")
 	}
 }
+
+func TestUnavailableKeyAlwaysRefuses(t *testing.T) {
+	ad := &BackupKeyAd{Unavailable: true, KeyID: strings.Repeat("a", 64)}
+	for _, st := range []KeyStorage{{}, {Durable: true, StoredKeyID: ad.KeyID}} {
+		got, reason := BackupKeyDecision(ad, st, false)
+		if got != BackupKeyRefuse || reason == "" {
+			t.Fatalf("unavailable: %v %q", got, reason)
+		}
+		if KeyStatusFor(ad, st).Status != KeyStorageUnavailable {
+			t.Fatal("unavailable key reported as healthy")
+		}
+	}
+}

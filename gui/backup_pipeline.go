@@ -177,7 +177,7 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 // runBackupPipeline validates, assembles, executes and finalizes one backup.
 // It blocks until the engine returns; callers that need it asynchronous wrap
 // it themselves, as the API server already does.
-func (a *App) runBackupPipeline(req backupRequest) error {
+func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	r, err := a.resolveBackupRequest(req)
 	if err != nil {
 		return err
@@ -190,6 +190,7 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 	// --- Assemble --------------------------------------------------------
 
 	var lastRelayedMsg string
+	var completionMessage string
 	opts := BackupOptions{
 		BaseURL:         pbsCfg.BaseURL,
 		AuthID:          pbsCfg.AuthID,
@@ -231,34 +232,13 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 		},
 
 		OnComplete: func(success bool, message string) {
+			completionMessage = message
 			writeDebugLog(fmt.Sprintf("[Backup Complete] success=%v - %s", success, message))
 			if success {
 				a.maybeRunExchangePostBackup()
 			}
 
 			a.notifyCompleteCallbacks(success, message)
-
-			// Local history. The service build grew this separately because
-			// a manual "Back up now" on a managed machine appeared in the
-			// portal (takeRunReporter's ad-hoc fallback) but not in the
-			// client's own list — the two counts disagreed for exactly that
-			// reason.
-			historyEntry := JobHistory{
-				ID:         fmt.Sprintf("%d", time.Now().Unix()),
-				Name:       fmt.Sprintf("Manual backup - %s", backupID),
-				Timestamp:  time.Now().Format(time.RFC3339),
-				Status:     "success",
-				Message:    message,
-				BackupDirs: targetDirs,
-				BackupID:   backupID,
-				UseVSS:     req.UseVSS,
-			}
-			if !success {
-				historyEntry.Status = "failed"
-			}
-			if err := a.AddJobHistory(historyEntry); err != nil {
-				writeWarnLog(fmt.Sprintf("Warning: failed to add backup to history: %v", err))
-			}
 
 			if success && req.BackupType == "directory" {
 				a.config.LastBackupDirs = req.BackupDirs
@@ -276,7 +256,23 @@ func (a *App) runBackupPipeline(req backupRequest) error {
 	// is never reported as finished at all — to the portal or to the local
 	// status panel.
 	cpFinish, runUUID := attachControlPlaneHooks(&opts)
-	runFinish := attachRunRegistry(&opts)
+	runFinish, historyName := attachRunRegistry(&opts)
+	historyID := runUUID
+	if historyID == "" {
+		historyID = fmt.Sprintf("local-%d", time.Now().UnixNano())
+	}
+	defer func() {
+		status := "success"
+		if resultErr != nil {
+			status = "failed"
+			completionMessage = resultErr.Error()
+		}
+		if err := a.AddJobHistory(JobHistory{ID: historyID, Name: historyName,
+			Timestamp: time.Now().Format(time.RFC3339), Status: status, Message: completionMessage,
+			BackupDirs: targetDirs, BackupID: backupID, UseVSS: req.UseVSS}); err != nil {
+			writeWarnLog(fmt.Sprintf("[Pipeline] run %s: failed to record backup history: %v", historyID, err))
+		}
+	}()
 
 	// --- Gate ------------------------------------------------------------
 	//

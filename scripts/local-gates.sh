@@ -38,7 +38,7 @@ bad()  { printf '\nFAILED: %s\n' "$1"; fail=1; }
 
 command -v go >/dev/null 2>&1 || { echo "go is not installed; this script needs the toolchain"; exit 1; }
 have="$(go env GOVERSION)"
-[ "$have" = "go${GO_VERSION}" ] || echo "NOTE: go is $have, CI pins go${GO_VERSION} -- results can differ"
+[ "$have" = "go${GO_VERSION}" ] || { echo "FAIL: go is $have; CI requires go${GO_VERSION}"; exit 1; }
 
 # golangci-lint goes in .tools/ rather than onto the PATH, at the pinned
 # version, for the same reason CI pins it: a tool release can change output or
@@ -84,9 +84,10 @@ fi
 if [ "${1:-all}" != "lint" ]; then
     step "gosec (controlplane)"
     if command -v gosec >/dev/null 2>&1; then
-        ( cd controlplane && gosec -severity high -confidence high ./... ) || bad "gosec"
+        ( cd controlplane && gosec -severity high -confidence high ./... ) || bad "gosec controlplane"
+        ( cd gui && gosec -severity high -confidence high ./... ) || bad "gosec gui"
     else
-        echo "SKIP: gosec not installed (go install github.com/securego/gosec/v2/cmd/gosec@latest)"
+        bad "gosec not installed; security gate did not run"
     fi
 
     step "tests: controlplane and gui"
@@ -102,5 +103,7 @@ if [ "${1:-all}" != "lint" ]; then
 fi
 
 echo
-if [ "$fail" -eq 0 ]; then echo "ALL LOCAL GATES PASSED"; else echo "LOCAL GATES FAILED"; fi
+if [ "$fail" -ne 0 ]; then echo "LOCAL GATES FAILED"
+elif [ "${1:-all}" = "lint" ]; then echo "LINT GATES PASSED (lint-only run)"
+else echo "ALL LOCAL GATES PASSED"; fi
 exit $fail

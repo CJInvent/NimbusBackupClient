@@ -73,11 +73,8 @@ func (c *ChunkState) HandleData(b []byte, client *pbscommon.PBSClient) error {
 			//Append data until break position
 			c.current_chunk = append(c.current_chunk, b[:chunkpos]...)
 
-			h := sha256.New()
-			if _, err := h.Write(c.current_chunk); err != nil {
-				return fmt.Errorf("failed to hash chunk: %w", err)
-			}
-			bindigest := h.Sum(nil)
+			digest := client.ChunkDigest(c.current_chunk)
+			bindigest := digest[:]
 			shahash := hex.EncodeToString(bindigest)
 
 			if _, ok := c.knownChunks.GetOrInsert(shahash, true); !ok {
@@ -95,7 +92,7 @@ func (c *ChunkState) HandleData(b []byte, client *pbscommon.PBSClient) error {
 			if err := binary.Write(c.chunkdigests, binary.LittleEndian, (c.pos + uint64(len(c.current_chunk)))); err != nil {
 				return fmt.Errorf("failed to write chunk offset: %w", err)
 			}
-			if _, err := c.chunkdigests.Write(h.Sum(nil)); err != nil {
+			if _, err := c.chunkdigests.Write(bindigest); err != nil {
 				return fmt.Errorf("failed to write chunk digest: %w", err)
 			}
 
@@ -120,16 +117,14 @@ func (c *ChunkState) Eof(client *pbscommon.PBSClient) error {
 	//Here we write the remainder of data for which cyclic hash did not trigger
 
 	if len(c.current_chunk) > 0 {
-		h := sha256.New()
-		if _, err := h.Write(c.current_chunk); err != nil {
-			return fmt.Errorf("failed to hash final chunk: %w", err)
-		}
+		digest := client.ChunkDigest(c.current_chunk)
+		bindigest := digest[:]
 
-		shahash := hex.EncodeToString(h.Sum(nil))
+		shahash := hex.EncodeToString(bindigest)
 		if err := binary.Write(c.chunkdigests, binary.LittleEndian, (c.pos + uint64(len(c.current_chunk)))); err != nil {
 			return fmt.Errorf("failed to write final chunk offset: %w", err)
 		}
-		if _, err := c.chunkdigests.Write(h.Sum(nil)); err != nil {
+		if _, err := c.chunkdigests.Write(bindigest); err != nil {
 			return fmt.Errorf("failed to write final chunk digest: %w", err)
 		}
 

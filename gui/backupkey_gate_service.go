@@ -80,6 +80,8 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 		case controlplane.BackupKeyProceedEncrypted:
 			raw, blob, keyID, lerr := loadBackupKey()
 			if lerr != nil {
+				st.Err = lerr
+				reportKeyStatus(ad, st)
 				// The storage said it holds this key and then could not produce
 				// it. Refuse: this is the one case where "storage is fine" and
 				// "the key is usable" came apart, and proceeding would mean
@@ -87,7 +89,7 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 				return nil, nil, fmt.Errorf(
 					"encrypted backup is required but the stored key could not be opened: %w", lerr)
 			}
-			writeBackupLog(fmt.Sprintf("[BackupKey] backup will be encrypted under key %s (stored)", shortKeyID(keyID)))
+			writeBackupLog(fmt.Sprintf("[BackupKey] run %s: encryption gate passed under key %s (stored)", runUUID, shortKeyID(keyID)))
 			reportKeyStatus(ad, st)
 			return raw, blob, nil
 
@@ -99,6 +101,8 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 				// and would turn it into a legitimate proceed if the storage
 				// turned out to hold the right key after all.
 				writeWarnLog(fmt.Sprintf("[BackupKey] fetching the backup key failed: %v", ferr))
+			} else if m.KeyID != ad.KeyID {
+				writeWarnLog("[BackupKey] assignment changed during fetch; refusing until next check-in")
 			} else if serr := storeBackupKey(m); serr != nil {
 				writeWarnLog(fmt.Sprintf("[BackupKey] storing the fetched backup key failed: %v", serr))
 			}
@@ -108,23 +112,31 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 		case controlplane.BackupKeyFetchEphemeral:
 			m, ferr := fetchKeyMaterial(controlplane.KeyModeEphemeral, runUUID)
 			if ferr != nil {
+				st.Err = ferr
 				fetched = true
 				writeWarnLog(fmt.Sprintf("[BackupKey] fetching the ephemeral backup key failed: %v", ferr))
 				continue
 			}
+			if m.KeyID != ad.KeyID {
+				st.Err = errors.New("backup key assignment changed during fetch; wait for the next check-in")
+				reportKeyStatus(ad, st)
+				return nil, nil, st.Err
+			}
 			raw, blob, herr := ephemeralKeyFromMaterial(m)
 			if herr != nil {
+				st.Err = herr
 				fetched = true
 				writeWarnLog(fmt.Sprintf("[BackupKey] the delivered ephemeral key was unusable: %v", herr))
 				continue
 			}
 			writeBackupLog(fmt.Sprintf(
-				"[BackupKey] backup will be encrypted under key %s (ephemeral: held in memory for this run only)",
-				shortKeyID(m.KeyID)))
+				"[BackupKey] run %s: encryption gate passed under key %s (ephemeral: held in memory for this run only)",
+				runUUID, shortKeyID(m.KeyID)))
 			reportKeyStatus(ad, st)
 			return raw, blob, nil
 
 		case controlplane.BackupKeyRefuse:
+			writeErrorLog(fmt.Sprintf("[BackupKey] run %s: backup refused: %s", runUUID, reason))
 			reportKeyStatus(ad, st)
 			return nil, nil, errors.New(reason)
 		}
@@ -150,7 +162,7 @@ func reportKeyStatus(ad *controlplane.BackupKeyAd, st controlplane.KeyStorage) {
 	}
 	rep := controlplane.KeyStatusFor(ad, st)
 	if _, err := c.ReportKeyStatus(rep); err != nil {
-		writeDebugLog(fmt.Sprintf("[BackupKey] key-status report failed: %v", err))
+		writeWarnLog(fmt.Sprintf("[BackupKey] key-status report failed: %v", err))
 	}
 }
 

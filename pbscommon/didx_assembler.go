@@ -2,7 +2,6 @@ package pbscommon
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -182,10 +181,10 @@ func (pbs *PBSClient) AssembleDIDXToFile(archiveName string, maxParallel int, pr
 				return
 			}
 			// Verify the chunk content against its index digest. PBS dynamic-index
-			// digests are the SHA-256 of the chunk plaintext, so a mismatch means a
+			// digests include the active identity key, so a mismatch means a
 			// corrupted or tampered chunk — fail the restore rather than silently
 			// writing wrong data.
-			sum := sha256.Sum256(chunk)
+			sum := pbs.ChunkDigest(chunk)
 			if hex.EncodeToString(sum[:]) != idx.digests[idxNum] {
 				firstErr.CompareAndSwap(nil, fmt.Errorf("chunk %s (index %d): content hash mismatch",
 					idx.digests[idxNum], idxNum))

@@ -119,18 +119,12 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, total_size uint6
 
 	workerfn := func() {
 		for seg := range ch2 {
-			h := sha256.New()
-			if _, err := h.Write(seg.Data); err != nil {
-				errch <- fmt.Errorf("failed to hash chunk at position %d: %w", seg.Pos, err)
-				break
-			}
-
-			shahash := hex.EncodeToString(h.Sum(nil))
-			//binary.Write(CS.chunkdigests, binary.LittleEndian, (CS.pos + uint64(nread)))
+			digest := client.ChunkDigest(seg.Data)
+			shahash := hex.EncodeToString(digest[:])
 
 			assignment_mutex.Lock()
-			CS.index_hash_data[seg.Pos] = h.Sum(nil)
-			digests[int64(seg.Pos)] = h.Sum(nil)
+			CS.index_hash_data[seg.Pos] = digest[:]
+			digests[int64(seg.Pos)] = digest[:]
 
 			_, exists := knownChunks.GetOrInsert(shahash, true)
 			assignment_mutex.Unlock()
@@ -138,9 +132,9 @@ func uploadWorker(client *pbscommon.PBSClient, filename string, total_size uint6
 			if exists {
 				reusechunk.Add(1)
 			} else {
-				err = client.UploadFixedCompressedChunk(wrid, shahash, seg.Data)
-				if err != nil {
-					errch <- fmt.Errorf("failed to upload chunk %s: %w", shahash, err)
+				uploadErr := client.UploadFixedCompressedChunk(wrid, shahash, seg.Data)
+				if uploadErr != nil {
+					errch <- fmt.Errorf("failed to upload chunk %s: %w", shahash, uploadErr)
 					break
 				}
 
