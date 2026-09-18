@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestVSSSmokeEmitsDiagnosticsWindows(t *testing.T) {
@@ -43,8 +45,18 @@ func TestVSSSmokeEmitsDiagnosticsWindows(t *testing.T) {
 		vol = "C:"
 	}
 
+	// Exercise the GUID identity used by the image engine, including map keys.
+	mount, err := windows.UTF16PtrFromString(vol + "\\")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := make([]uint16, 1024)
+	if err := windows.GetVolumeNameForVolumeMountPoint(mount, &name[0], uint32(len(name))); err != nil {
+		t.Fatal(err)
+	}
+	volume := windows.UTF16ToString(name)
 	var captured map[string]SnapShot
-	err := CreateVSSSnapshot([]string{vol + "\\"}, func(sn map[string]SnapShot) error {
+	err = CreateVSSSnapshot([]string{volume}, func(sn map[string]SnapShot) error {
 		captured = sn
 		return nil
 	})
@@ -72,6 +84,10 @@ func TestVSSSmokeEmitsDiagnosticsWindows(t *testing.T) {
 		t.Skipf("VSS snapshot unavailable on this runner (diagnostics verified): %v", err)
 	}
 
+	if _, ok := captured[volume]; !ok {
+		t.Fatalf("snapshot GUID missing from callback: %q", volume)
+	}
+
 	if len(captured) == 0 {
 		t.Fatal("snapshot callback received no volumes")
 	}
@@ -94,5 +110,23 @@ func TestVSSSmokeEmitsDiagnosticsWindows(t *testing.T) {
 	// service runs it at every start to clear orphaned shadows.
 	if err := VSSCleanup(); err != nil {
 		t.Errorf("VSSCleanup after a successful snapshot: %v", err)
+	}
+}
+
+func TestVSSWriterDiagnostics(t *testing.T) {
+	var lines []string
+	old := LogFn
+	LogFn = func(s string) { lines = append(lines, s) }
+	t.Cleanup(func() { LogFn = old })
+	healthy := "Writer name: 'System Writer'\nState: [1] Stable\nLast error: No error\n"
+	if logWriterWarnings(healthy) || len(lines) != 0 {
+		t.Fatalf("healthy writer warned: %q", lines)
+	}
+	failed := "Writer name: 'Other Writer'\nState: [8] Failed\nLast error: Non-retryable error\n"
+	if !logWriterWarnings(healthy + failed) {
+		t.Fatal("writer failure omitted")
+	}
+	if len(lines) != 2 || !strings.Contains(lines[0], "Other Writer") || strings.Contains(strings.Join(lines, "\n"), "System Writer") {
+		t.Fatalf("wrong writer attribution: %q", lines)
 	}
 }

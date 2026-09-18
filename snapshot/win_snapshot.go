@@ -120,30 +120,13 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 
 		// Check VSS writers status before creating snapshot
 		checkWritersCmd := exec.Command("vssadmin", "list", "writers")
-		writersOutput, _ := checkWritersCmd.CombinedOutput()
+		writersOutput, writerErr := checkWritersCmd.CombinedOutput()
+		if writerErr != nil {
+			LogFn(fmt.Sprintf("VSS WARNING: could not inspect writer status: %v", writerErr))
+		}
 		writersStatus := string(writersOutput)
 
-		// Log warnings for writers with known errors
-		hasWriterWarnings := false
-		if strings.Contains(writersStatus, "System Writer") && strings.Contains(writersStatus, "Last error") {
-			LogFn("VSS WARNING: System Writer reports errors — system state may not be fully captured")
-			hasWriterWarnings = true
-		}
-		if strings.Contains(writersStatus, "NTDS") && (strings.Contains(writersStatus, "Last error") || strings.Contains(writersStatus, "0x800423f4")) {
-			LogFn("VSS WARNING: NTDS Writer refuses to participate — Active Directory state will not be captured")
-			hasWriterWarnings = true
-		}
-		if strings.Contains(writersStatus, "Dhcp") && strings.Contains(writersStatus, "Last error") {
-			LogFn("VSS WARNING: DHCP Jet Writer reports errors — DHCP configuration may not be captured")
-			hasWriterWarnings = true
-		}
-
-		if hasWriterWarnings {
-			for _, wl := range writerErrorLines(writersStatus) {
-				LogFn("VSS " + wl)
-			}
-			LogFn("VSS: continuing with available writers — volume data capture is unaffected")
-		}
+		hasWriterWarnings := logWriterWarnings(writersStatus)
 
 		snapshot, err := sn.CreateSnapshot(volName, false, 180)
 		if err != nil && isShadowAlreadyInProgress(err) {
@@ -329,4 +312,17 @@ func restartVSSService() error {
 	}
 	fmt.Println("VSS Cleanup: VSS service restarted")
 	return nil
+}
+
+// logWriterWarnings attributes only actual errors to their own writer.
+// The Last error label itself is also present for healthy writers.
+func logWriterWarnings(status string) bool {
+	errors := writerErrorLines(status)
+	for _, line := range errors {
+		LogFn("VSS WARNING: " + line)
+	}
+	if len(errors) > 0 {
+		LogFn("VSS: continuing with writer errors — application consistency may be affected")
+	}
+	return len(errors) > 0
 }

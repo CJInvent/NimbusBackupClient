@@ -220,6 +220,13 @@ userland control can prevent — the design goal is that they cannot do it
 
 ## Backup engine
 
+Windows image backups carry the enumerated volume GUID unchanged through VSS
+creation and snapshot lookup. Mount paths (including directory mounts) are display
+metadata, never bare drive letters to reconstruct. Missing or invalid snapshots
+abort before index commit. Writer warnings identify actual nonzero writer errors;
+a healthy Last error: No error line is not a warning. PBS reachability logs use
+true, false, or unknown, matching inventory semantics.
+
 * **Directory mode** — `backup_inline.go`: streams PXAR, DIDX dynamic chunking
   with dedup, junction/locked-file skip with reporting, optional auto-split
   for large first backups (`backup_split_api.go`, `backup_analysis.go`).

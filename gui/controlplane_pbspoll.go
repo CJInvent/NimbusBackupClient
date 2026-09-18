@@ -131,7 +131,7 @@ func (a *App) runPBSPollLoop(stop <-chan struct{}) {
 		pbsLastCheckedAt = checkedAt
 		pbsResultMu.Unlock()
 		writeDebugLog(fmt.Sprintf("[pbspoll] scheduled PBS connectivity check at %s: reachable=%v",
-			checkedAt.Format(time.RFC3339), result))
+			checkedAt.Format(time.RFC3339), pbsReachabilityLabel(result)))
 	}
 }
 
@@ -156,4 +156,15 @@ func cachedPBSCheckedAt() time.Time {
 	pbsResultMu.Lock()
 	defer pbsResultMu.Unlock()
 	return pbsLastCheckedAt
+}
+
+// Preserve the inventory tri-state without logging the pointer address.
+func pbsReachabilityLabel(result *bool) string {
+	if result == nil {
+		return "unknown"
+	}
+	if *result {
+		return "true"
+	}
+	return "false"
 }

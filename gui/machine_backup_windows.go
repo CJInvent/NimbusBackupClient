@@ -105,6 +105,7 @@ var (
 type VolumeLetterAssign struct {
 	DiskNumber int32
 	Offset     uint64
+	VolumePath string
 	Letters    []string
 }
 
@@ -113,7 +114,7 @@ type Partition struct {
 	EndByte     uint64
 	RequiresVSS bool
 	Skip        bool
-	Letter      string
+	VolumePath  string
 }
 
 // PhysicalDiskInfo contains information about a physical disk
@@ -180,6 +181,7 @@ func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 					v := VolumeLetterAssign{
 						DiskNumber: int32(extent.DiskNumber),
 						Offset:     uint64(extent.StartingOffset),
+						VolumePath: volName,
 						Letters:    make([]string, 0),
 					}
 
@@ -714,11 +716,11 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 				index, E.PartitionNumber, BytesToString(int64(E.StartingOffset)), BytesToString(int64(E.PartitionLength))))
 		}
 
-		var letter string = ""
+		var volumePath string
 		for _, V := range vols {
 			if V.DiskNumber == int32(index) && V.Offset == E.StartingOffset {
 				if len(V.Letters) > 0 {
-					letter = V.Letters[0]
+					volumePath = V.VolumePath
 				}
 			}
 		}
@@ -726,18 +728,13 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 		parts = append(parts, Partition{
 			StartByte:   uint64(E.StartingOffset),
 			EndByte:     uint64(E.StartingOffset + E.PartitionLength),
-			RequiresVSS: letter != "",
+			RequiresVSS: volumePath != "",
 			Skip:        false,
-			Letter:      letter,
+			VolumePath:  volumePath,
 		})
 	}
 
-	snapshotPaths := make([]string, 0)
-	for _, p := range parts {
-		if p.RequiresVSS {
-			snapshotPaths = append(snapshotPaths, fmt.Sprintf("%s:\\\\", p.Letter))
-		}
-	}
+	snapshotPaths := imageSnapshotPaths(parts)
 
 	total, err := GetDiskLength(diskdev)
 	if err != nil {
@@ -776,7 +773,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 					StartByte:   curpos,
 					EndByte:     P.StartByte,
 					RequiresVSS: false,
-					Letter:      "",
+					VolumePath:  "",
 					Skip:        false,
 				})
 			}
@@ -788,7 +785,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 				StartByte:   curpos,
 				EndByte:     uint64(total),
 				RequiresVSS: false,
-				Letter:      "",
+				VolumePath:  "",
 				Skip:        false,
 			})
 		}
@@ -873,9 +870,9 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 						writeErrorLog(fmt.Sprintf("Failed to read partition entirely %d/%d", pos, P.EndByte))
 					}
 				} else {
-					snap, ok := snapshots[P.Letter+":\\"]
-					if !ok {
-						failRead(fmt.Errorf("no VSS snapshot for volume %s:", P.Letter))
+					snap, err := imagePartitionSnapshot(P, snapshots)
+					if err != nil {
+						failRead(err)
 						return
 					}
 
