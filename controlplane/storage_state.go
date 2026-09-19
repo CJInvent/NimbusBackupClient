@@ -169,3 +169,25 @@ func (s *StorageState) Refuse(reason string) error {
 	next.Error = reason
 	return s.persist(next)
 }
+
+// SetAuthority prevents a standalone or differently enrolled baseline from
+// becoming dashboard-authorized merely because its local revision is higher.
+func (s *StorageState) SetAuthority(authority string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if authority == "" {
+		return errors.New("storage authority is required")
+	}
+	if s.status.Authority == authority {
+		return nil
+	}
+	next := s.status
+	next.Authority = authority
+	next.Bindings = nil
+	next.Revision = 0
+	next.Error = "storage management authority changed; manual approval required"
+	if next.Observation == "" {
+		next.Observation = StorageObservation(next.Devices)
+	}
+	return s.persist(next)
+}

@@ -95,3 +95,52 @@ func TestStorageStateRefusesUnprotectedPersistence(t *testing.T) {
 		t.Fatal("failed persistence changed authoritative memory")
 	}
 }
+
+func TestStorageAuthorityChangeInvalidatesLocalApproval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storage.json")
+	s, err := OpenStorageState(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetAuthority("standalone"); err != nil {
+		t.Fatal(err)
+	}
+	d := storageFixture()
+	if err = s.Observe([]StorageDevice{d}, nil); err != nil {
+		t.Fatal(err)
+	}
+	approval := StorageApproval{Revision: 20, Observation: s.Snapshot().Observation, Bindings: []StorageBinding{{Target: "boot", Device: d}}}
+	if err = s.Approve(approval); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetAuthority("joined:server-a-agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Snapshot()
+	if st.Revision != 0 || len(st.Bindings) != 0 || st.Error == "" {
+		t.Fatal("local approval crossed authority boundary")
+	}
+	s, err = OpenStorageState(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Resolve([]string{"boot"}); err == nil {
+		t.Fatal("restarted joined agent used local approval")
+	}
+	approval.Revision = 1
+	if err = s.Approve(approval); err != nil {
+		t.Fatalf("new dashboard revision blocked by old local revision: %v", err)
+	}
+	if err = s.SetAuthority("joined:server-a-agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Resolve([]string{"boot"}); err != nil {
+		t.Fatal("unchanged authority invalidated dashboard approval")
+	}
+	if err = s.SetAuthority("joined:server-a-agent-2"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Snapshot().Error == "" || len(s.Snapshot().Bindings) != 0 {
+		t.Fatal("re-enrollment retained prior authority")
+	}
+}

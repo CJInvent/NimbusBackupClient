@@ -38,6 +38,7 @@ type StorageApproval struct {
 	Bindings    []StorageBinding `json:"bindings"`
 }
 type StorageStatus struct {
+	Authority   string           `json:"authority,omitempty"`
 	Observation string           `json:"observation"`
 	Revision    int64            `json:"revision"`
 	Error       string           `json:"error,omitempty"`

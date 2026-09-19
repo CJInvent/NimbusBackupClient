@@ -2,8 +2,10 @@ package main
 
 import (
 	"controlplane"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -16,6 +18,9 @@ func (a *App) storageController() (*controlplane.StorageState, error) {
 	a.storageMu.Lock()
 	defer a.storageMu.Unlock()
 	if a.storageState != nil {
+		if err := a.bindStorageAuthority(a.storageState); err != nil {
+			return nil, err
+		}
 		return a.storageState, nil
 	}
 	dir, err := getConfigDir()
@@ -23,6 +28,9 @@ func (a *App) storageController() (*controlplane.StorageState, error) {
 		return nil, err
 	}
 	s, err := controlplane.OpenStorageState(filepath.Join(dir, "storage-identity.json"), restrictToServiceOnly)
+	if err == nil {
+		err = a.bindStorageAuthority(s)
+	}
 	if err == nil {
 		a.storageState = s
 	}
@@ -193,4 +201,21 @@ func storageWireStatus(st controlplane.StorageStatus) controlplane.StorageStatus
 		}
 	}
 	return st
+}
+
+// Only the authority fingerprint is persisted/reported, never a URL credential.
+// Called under storageMu so configuration ownership cannot race initialization.
+func (a *App) bindStorageAuthority(s *controlplane.StorageState) error {
+	authority := "standalone"
+	if a.config != nil && a.config.ControlServerURL != "" {
+		authority = fmt.Sprintf("joined:%x", sha256.Sum256([]byte(fmt.Sprintf("%s#%d", strings.TrimRight(a.config.ControlServerURL, "/"), a.config.ControlAgentID))))
+	}
+	before := s.Snapshot().Authority
+	if err := s.SetAuthority(authority); err != nil {
+		return err
+	}
+	if before != authority {
+		writeWarnLog(fmt.Sprintf("[StorageIdentity] authority changed from %q to %q; prior bindings invalidated; manual approval required", before, authority))
+	}
+	return nil
 }

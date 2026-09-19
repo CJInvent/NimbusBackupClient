@@ -880,3 +880,8 @@ and remain visible to the local tray/status path. The service retains the first
 failure until a successful state write durably latches it; only explicit approval
 clears that latch. VSS reads require the declared snapshot length: unexpected EOF
 or a snapshot larger than its partition aborts before index commit.
+
+Storage approvals are bound to their management authority. Joining, leaving, or
+changing server/agent enrollment invalidates the prior bindings and resets the
+approval revision; it requires approval through the new authority. An unchanged
+authority survives restart without discarding a valid approval.
