@@ -21,7 +21,7 @@ type ScheduledJob struct {
 	ScheduleTime string   `json:"scheduleTime"` // HH:MM format
 	RunAtStartup bool     `json:"runAtStartup"`
 	BackupDirs   []string `json:"backupDirs"`
-	DriveLetters []string `json:"driveLetters"` // physical drives for machine (full-volume) backups
+	DiskTargets  []string `json:"diskTargets"` // persistent targets for machine (full-volume) backups
 	BackupID     string   `json:"backupId"`
 	UseVSS       bool     `json:"useVSS"`
 	BackupType   string   `json:"backupType"`
@@ -399,7 +399,7 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	err := a.StartBackup(
 		job.BackupType,
 		job.BackupDirs,
-		job.DriveLetters, // physical drives for machine backups; empty for directory backups
+		job.DiskTargets, // persistent targets for machine backups; empty for directory backups
 		job.ExcludeList,
 		job.BackupID,
 		job.UseVSS,

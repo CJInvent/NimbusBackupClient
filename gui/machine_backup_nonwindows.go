@@ -7,6 +7,8 @@ import "fmt"
 
 // PhysicalDiskInfo contains information about a physical disk
 type PhysicalDiskInfo struct {
+	Identity   string   `json:"identity"`
+	Target     string   `json:"target"`
 	DiskNumber int      `json:"diskNumber"`
 	SizeBytes  int64    `json:"sizeBytes"`
 	SizeText   string   `json:"sizeText"`

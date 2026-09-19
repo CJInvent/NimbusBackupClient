@@ -62,23 +62,24 @@ import (
 
 // backupRequest is one request to back something up, however it arrived.
 type backupRequest struct {
-	BackupType   string // "directory" | "machine"
-	BackupDirs   []string
-	DriveLetters []string
-	ExcludeList  []string
-	BackupID     string
-	UseVSS       bool
-	Compression  string
+	BackupType  string // "directory" | "machine"
+	BackupDirs  []string
+	DiskTargets []string
+	ExcludeList []string
+	BackupID    string
+	UseVSS      bool
+	Compression string
 }
 
 // resolvedBackup is a request after normalization and validation: everything
 // the option assembly needs, with nothing left to decide.
 type resolvedBackup struct {
-	backupID      string
-	compression   string
-	pbsBackupType string // "host" | "vm"
-	targetDirs    []string
-	pbs           *Config
+	backupID        string
+	compression     string
+	pbsBackupType   string // "host" | "vm"
+	sourceValidator func(uintptr, string) error
+	targetDirs      []string
+	pbs             *Config
 }
 
 // resolveBackupRequest normalizes and validates one request.
@@ -137,9 +138,6 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 		}
 		out.targetDirs = req.BackupDirs
 	case "machine":
-		if len(req.DriveLetters) == 0 {
-			return nil, errors.New(errDiskRequired)
-		}
 		// Raw access to \\.\PhysicalDriveN, and the VSS snapshot of its
 		// mounted partitions, always requires elevation. Failing here with a
 		// clear message beats an opaque CreateFile "access denied" partway
@@ -148,21 +146,17 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 		if !isAdmin() {
 			return nil, errors.New(errAdminRequired)
 		}
-		// LETTERS TRAVEL; THE MACHINE RESOLVES THEM. See disk_targets.go for
-		// why the portal keeps speaking in drive letters rather than storing
-		// a device path that silently rots when disk numbering moves.
-		//
-		// Device paths from the agent's own picker pass through untouched, so
-		// this is a widening of what is accepted, not a change of contract.
-		disks, err := ListPhysicalDisks()
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", errDiskUnresolved, err)
-		}
-		resolved, err := resolveDiskTargets(req.DriveLetters, disks)
+		// Resolve only operator-approved persistent identities. Letters and
+		// PhysicalDrive numbers cannot authorize an image target.
+		resolved, err := a.storageBackupTargets(req.DiskTargets)
 		if err != nil {
 			return nil, err
 		}
 		out.targetDirs = resolved
+		out.sourceValidator, err = a.storageSourceValidator()
+		if err != nil {
+			return nil, err
+		}
 		// Directory backups are stored as host snapshots; full-volume
 		// backups as vm snapshots holding drive-*.img.fidx, matching the
 		// upstream machinebackup layout the nbd restore tool expects.
@@ -192,6 +186,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	var lastRelayedMsg string
 	var completionMessage string
 	opts := BackupOptions{
+		ValidateSource:  r.sourceValidator,
 		BaseURL:         pbsCfg.BaseURL,
 		AuthID:          pbsCfg.AuthID,
 		Secret:          pbsCfg.Secret,

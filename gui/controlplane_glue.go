@@ -107,13 +107,14 @@ func (a *App) StartControlPlane() {
 	}
 
 	cpAgent = &controlplane.Agent{
-		Client:         cpClient,
-		AgentVersion:   appVersion,
-		BuildInventory: a.cpBuildInventory,
-		HandleCommand:  a.cpHandleCommand,
-		OnManagedJobs:  applyManagedJobsFromCheckin,
-		OnBackupKey:    applyBackupKeyFromCheckin,
-		OnPBSTarget:    a.applyPBSTargetFromCheckin,
+		Client:            cpClient,
+		AgentVersion:      appVersion,
+		BuildInventory:    a.cpBuildInventory,
+		HandleCommand:     a.cpHandleCommand,
+		OnManagedJobs:     applyManagedJobsFromCheckin,
+		OnStorageApproval: a.applyStorageApproval,
+		OnBackupKey:       applyBackupKeyFromCheckin,
+		OnPBSTarget:       a.applyPBSTargetFromCheckin,
 		OnPolicy: func(p controlplane.Policy) {
 			writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
 		},
@@ -158,7 +159,8 @@ func (a *App) RestartControlPlane() {
 func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 	cfg := a.config
 	out := map[string]interface{}{
-		"configured": cfg != nil && cfg.ControlServerURL != "",
+		"storage_identity": a.StorageIdentityStatusMap(),
+		"configured":       cfg != nil && cfg.ControlServerURL != "",
 		"server_host": func() string {
 			if cfg == nil || cfg.ControlServerURL == "" {
 				return ""
@@ -262,7 +264,10 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 	// only way the MSP ever learns it happened: the override is admissible
 	// precisely BECAUSE the server was unreachable, so the agent cannot tell
 	// anyone at the time. The first reachable check-in is the first chance.
+	storage := a.refreshStorageIdentity()
+	storage.Bindings = nil
 	inv := controlplane.Inventory{
+		StorageIdentity:       &storage,
 		Jobs:                  []controlplane.InventoryJob{},
 		BreakGlassFileRestore: BreakGlassInEffect(),
 		// Cached result from the independent PBS poller (controlplane_pbspoll.go),

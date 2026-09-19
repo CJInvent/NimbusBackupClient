@@ -118,13 +118,17 @@ type BackupManifest struct {
 	Unprotected Unprotected `json:"unprotected"`
 }
 
-type AuthErr struct {
+type PBSResponseError struct {
 	StatusCode   string
 	ResponseBody string
 }
 
-func (e *AuthErr) Error() string {
-	return fmt.Sprintf("PBS authentication failed: HTTP %s - %s", e.StatusCode, e.ResponseBody)
+func (e *PBSResponseError) Error() string {
+	kind := "PBS session rejected"
+	if strings.HasPrefix(e.StatusCode, "401") || strings.HasPrefix(e.StatusCode, "403") {
+		kind = "PBS authentication or authorization failed"
+	}
+	return fmt.Sprintf("%s: HTTP %s - %s", kind, e.StatusCode, e.ResponseBody)
 }
 
 type PBSClient struct {
@@ -1446,7 +1450,7 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 						if responseBody != "" {
 							errBody = errBody + "\nBody: " + responseBody
 						}
-						return nil, &AuthErr{
+						return nil, &PBSResponseError{
 							StatusCode:   statusCode,
 							ResponseBody: errBody,
 						}

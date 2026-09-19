@@ -119,6 +119,8 @@ type Partition struct {
 
 // PhysicalDiskInfo contains information about a physical disk
 type PhysicalDiskInfo struct {
+	Identity   string   `json:"identity"`
+	Target     string   `json:"target"`
 	DiskNumber int      `json:"diskNumber"`
 	SizeBytes  int64    `json:"sizeBytes"`
 	SizeText   string   `json:"sizeText"`
@@ -388,6 +390,21 @@ func ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 		writeDebugLog(fmt.Sprintf("Found: %s", label))
 	}
 
+	devices, err := discoverStorageDevices()
+	if err != nil {
+		return nil, err
+	}
+	for i := range disks {
+		for _, device := range devices {
+			if device.Path == disks[i].Path {
+				disks[i].Identity = device.ID
+				disks[i].Target = "device:" + device.ID
+				if device.Boot {
+					disks[i].Target = "boot"
+				}
+			}
+		}
+	}
 	return disks, nil
 }
 
@@ -477,7 +494,7 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 		// must abort: continuing would hit CreateFixedIndex, whose re-dial is
 		// blocked by design and reports a misleading "session cannot be
 		// resumed" error that masks the real cause.
-		var authErr *pbscommon.AuthErr
+		var authErr *pbscommon.PBSResponseError
 		if errors.As(err, &authErr) || strings.Contains(err.Error(), "PBS authentication failed") {
 			writeErrorLog(fmt.Sprintf("PBS rejected the backup session: %v", err))
 			return abort(fmt.Errorf("PBS rejected the backup session: %w", err))
@@ -655,7 +672,7 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 // sat at "preparing" in the portal for its entire duration and then jumped
 // straight to success. The scheduled proof run on 2026-09-15 spent three and
 // a half minutes moving 80 GB while every page showed it preparing.
-func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onPhase func(string), onMilestone func(checkpoint, level, message string)) (int64, error) {
+func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onPhase func(string), onMilestone func(checkpoint, level, message string), validateSource func(uintptr, string) error) (int64, error) {
 	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
@@ -679,6 +696,12 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 		return 0, fmt.Errorf("Failed to open %s: %v", diskdev, err)
 	}
 	defer syscall.CloseHandle(volumeHandle)
+	if validateSource == nil {
+		return 0, errors.New("image source identity validator missing")
+	}
+	if err := validateSource(uintptr(volumeHandle), diskdev); err != nil {
+		return 0, err
+	}
 
 	var volumeDiskExtents DRIVE_LAYOUT_INFORMATION_EX
 	var bytesReturned uint32
@@ -796,6 +819,9 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 			return fmt.Errorf("failed to open disk: %v", err)
 		}
 		defer F.Close()
+		if err := validateSource(F.Fd(), diskdev); err != nil {
+			return err
+		}
 
 		// The reader signals its outcome here (buffered so it never blocks).
 		// Any read/seek/snapshot failure MUST abort the whole disk backup:
@@ -890,34 +916,28 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 						return
 					}
 
-					if uint64(P.EndByte) != uint64(P.StartByte)+uint64(l) {
-						writeWarnLog("VSS snapshot is smaller than the partition — padding with zeros")
+					npad, err := snapshotPadding(P.EndByte-P.StartByte, l)
+					if err != nil {
+						failRead(err)
+						return
 					}
-
-					npad := P.EndByte - (uint64(P.StartByte) + uint64(l))
+					if npad > 0 {
+						writeWarnLog("VSS volume is smaller than the partition; padding only the declared partition tail")
+					}
 					block := make([]byte, pbscommon.PBS_FIXED_CHUNK_SIZE)
-
-					for {
+					remaining := uint64(l)
+					for remaining > 0 {
 						if err := backupCancelled(ctx); err != nil {
 							failRead(err)
 							return
 						}
-						nbytes, err := snapshotFile.Read(block)
-						if err == io.EOF {
-							if pos != P.EndByte {
-								npad = P.EndByte - pos
-							}
-							break
-						}
-						if pos >= P.EndByte {
-							failRead(fmt.Errorf("read past partition end at %d (partition ends %d)", pos, P.EndByte))
-							return
-						}
+						nbytes, err := io.ReadFull(snapshotFile, block[:min(uint64(len(block)), remaining)])
 						if err != nil {
-							failRead(fmt.Errorf("snapshot read at %d failed: %w", pos, err))
+							failRead(fmt.Errorf("snapshot truncated at %d: %w", pos, err))
 							return
 						}
 						pos += uint64(nbytes)
+						remaining -= uint64(nbytes)
 						feed(block[:nbytes])
 					}
 
@@ -1096,7 +1116,7 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnPhase, opts.OnMilestone)
+		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnPhase, opts.OnMilestone, opts.ValidateSource)
 		if err != nil {
 			// A cancelled context means the user pressed Stop; the read abort is
 			// the mechanism, not a fault.

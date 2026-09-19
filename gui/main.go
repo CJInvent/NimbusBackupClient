@@ -477,6 +477,9 @@ func (a *App) DiagnoseConfig() map[string]interface{} {
 func (a *App) GetControlServerStatus() map[string]interface{} {
 	if !a.isServiceProcess && a.mode == api.ModeService && a.apiClient != nil {
 		if st, err := a.apiClient.GetControlPlaneStatus(); err == nil {
+			if storage, ok := st["storage_identity"].(map[string]interface{}); ok {
+				a.updateStorageTray(storage)
+			}
 			return st
 		}
 		// Service unreachable: fall through to the local (config-only) view
@@ -829,7 +832,7 @@ func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {
 // escape hatch for a machine with no control plane is a service-side toggle,
 // not a GUI capability, precisely so that a modified front end cannot reach
 // one.
-func (a *App) StartBackup(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
+func (a *App) StartBackup(backupType string, backupDirs []string, diskTargets []string, excludeList []string, backupID string, useVSS bool, compression string) error {
 	writeDebugLog(fmt.Sprintf("StartBackup() called - VSS: %v, compression: %s", useVSS, compression))
 
 	// The service may have started after the GUI did. Re-probing here rather
@@ -843,7 +846,7 @@ func (a *App) StartBackup(backupType string, backupDirs []string, driveLetters [
 		return errors.New(errServiceUnavailable)
 	}
 
-	return a.startBackupViaService(backupType, backupDirs, driveLetters, excludeList, backupID, useVSS, compression)
+	return a.startBackupViaService(backupType, backupDirs, diskTargets, excludeList, backupID, useVSS, compression)
 }
 
 // StopBackup asks the service to cancel the running backup. The engine aborts
@@ -860,17 +863,17 @@ func (a *App) StopBackup() error {
 }
 
 // startBackupViaService sends backup request to the service via HTTP API
-func (a *App) startBackupViaService(backupType string, backupDirs []string, driveLetters []string, excludeList []string, backupID string, useVSS bool, compression string) error {
+func (a *App) startBackupViaService(backupType string, backupDirs []string, diskTargets []string, excludeList []string, backupID string, useVSS bool, compression string) error {
 	writeDebugLog("[Service Mode] Sending backup request to service")
 
 	req := &api.BackupRequest{
-		BackupType:   backupType,
-		BackupID:     backupID,
-		BackupDirs:   backupDirs,
-		DriveLetters: driveLetters,
-		ExcludeList:  excludeList,
-		UseVSS:       useVSS,
-		Compression:  compression,
+		BackupType:  backupType,
+		BackupID:    backupID,
+		BackupDirs:  backupDirs,
+		DiskTargets: diskTargets,
+		ExcludeList: excludeList,
+		UseVSS:      useVSS,
+		Compression: compression,
 	}
 
 	resp, err := a.apiClient.StartBackup(req)

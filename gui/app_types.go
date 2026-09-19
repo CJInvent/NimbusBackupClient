@@ -2,12 +2,17 @@ package main
 
 import (
 	"context"
+	"controlplane"
+	"sync"
 
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
 // App struct contains the application state
 type App struct {
+	storageMu        sync.Mutex
+	storageOpMu      sync.Mutex
+	storageState     *controlplane.StorageState
 	ctx              context.Context
 	config           *Config
 	stopScheduler    chan struct{}

@@ -146,7 +146,7 @@ func sameManagedJob(x, y controlplane.ManagedJob) bool {
 		return false
 	}
 	return sameStrings(x.BackupDirs, y.BackupDirs) &&
-		sameStrings(x.DriveLetters, y.DriveLetters) &&
+		sameStrings(x.DiskTargets, y.DiskTargets) &&
 		sameStrings(x.ExcludeList, y.ExcludeList)
 }
 
@@ -190,7 +190,7 @@ func managedToScheduledJob(m controlplane.ManagedJob) ScheduledJob {
 		ScheduleTime: "",
 		RunAtStartup: false,
 		BackupDirs:   m.BackupDirs,
-		DriveLetters: m.DriveLetters,
+		DiskTargets:  m.DiskTargets,
 		BackupID:     "",
 		UseVSS:       m.UseVSS,
 		BackupType:   m.BackupType,

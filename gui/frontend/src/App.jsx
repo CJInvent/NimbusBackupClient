@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from './i18n/i18nContext'
 import StatusPanel from './StatusPanel'
+import StorageIdentityPanel from './components/StorageIdentityPanel'
 
 import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
@@ -236,6 +237,7 @@ function App() {
     const load = async () => {
       try {
         const st = await GetControlServerStatus()
+        if (window.go?.main?.App?.GetStorageIdentityStatus) st.storage_identity = await window.go.main.App.GetStorageIdentityStatus()
         if (!alive) return
         setCpStatus(st)
         setCpForm(f => f.url === '' && st && st.server_host ? { ...f, url: (st.server_host.startsWith('http') ? st.server_host : 'https://' + st.server_host) } : f)
@@ -307,9 +309,10 @@ function App() {
     setDisksLoading(true)
     ListPhysicalDisks().then(disks => {
       setPhysicalDisks(disks || [])
-      // Select first disk by default
+      // Boot Drive is semantic; never assume the first enumerated disk.
       if (disks && disks.length > 0 && selectedDrives.length === 0) {
-        setSelectedDrives([disks[0].path])
+        const boot = disks.find(d => d.target === 'boot')
+        if (boot) setSelectedDrives(['boot'])
       }
     }).catch(err => {
       setDisksError(String(err))
@@ -1064,7 +1067,7 @@ function App() {
         scheduleTime: scheduleTime,
         runAtStartup: runAtStartup,
         backupDirs: dirList,
-        driveLetters: selectedDrives,
+        diskTargets: selectedDrives,
         backupId: config['backup-id'],
         useVSS: config.usevss,
         backupType: backupType,
@@ -1888,7 +1891,7 @@ function App() {
   // UI for a frame on a machine that turns out to be locked.
   if (readOnly === null) return null
   if (readOnly) {
-    return <StatusPanel version={appVersion} hostname={config['backup-id']} />
+    return <><StatusPanel version={appVersion} hostname={config['backup-id']} /><StorageIdentityPanel status={cpStatus?.storage_identity} readOnly /></>
   }
 
   return (
@@ -1902,6 +1905,8 @@ function App() {
           <HeaderControls />
         </div>
       </div>
+
+      <StorageIdentityPanel status={cpStatus?.storage_identity} onChanged={st => setCpStatus(s => ({ ...s, storage_identity: st }))} />
 
       {picker && (
         <PathPicker
@@ -2037,7 +2042,6 @@ function App() {
                   ))}
                 </tbody>
               </table>
-            )}
           </div>
 
           {/* Add/Edit Server Form */}
@@ -2479,16 +2483,16 @@ function App() {
                       <label key={disk.path} style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
                         <input
                           type="checkbox"
-                          checked={selectedDrives.includes(disk.path)}
+                          checked={selectedDrives.includes(disk.target)}
                           onChange={(e) => {
                             if (e.target.checked) {
-                              setSelectedDrives([...selectedDrives, disk.path])
+                              setSelectedDrives([...selectedDrives, disk.target])
                             } else {
-                              setSelectedDrives(selectedDrives.filter(d => d !== disk.path))
+                              setSelectedDrives(selectedDrives.filter(d => d !== disk.target))
                             }
                           }}
                         />
-                        {disk.label}
+                        {disk.target === 'boot' ? t('storageBoot') : t('storageDevice')} {disk.sizeText}
                       </label>
                     ))}
                   </div>
@@ -2716,7 +2720,7 @@ function App() {
                           setScheduleTime(job.scheduleTime)
                           setRunAtStartup(job.runAtStartup)
                           setBackupDirs(job.backupDirs.join('\n'))
-                          setSelectedDrives(job.driveLetters || [])
+                          setSelectedDrives(job.diskTargets || [])
                           setConfig({...config, 'backup-id': job.backupId, usevss: job.useVSS})
                           setBackupType(job.backupType)
                           setExcludeList(job.excludeList.join('\n'))

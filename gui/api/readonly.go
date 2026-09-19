@@ -28,7 +28,8 @@ import (
 
 // readOnlyExactPaths are served in full while the agent is locked.
 var readOnlyExactPaths = map[string]struct{}{
-	"/status":              {}, // version, active job count, connections
+	"/status":              {},
+	"/storage/identity":    {}, // version, active job count, connections
 	"/runs/active":         {}, // what is running now
 	"/runs/recent":         {}, // the seven-day panel
 	"/controlplane/status": {}, // whether the server is reachable, and the policy

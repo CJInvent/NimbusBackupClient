@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+var storageTrayFault atomic.Bool
 
 var (
 	trayInitialized = false
@@ -56,21 +59,24 @@ func trayText(lang string) map[string]string {
 			"show": "🖥️ Show window", "showTip": "Open the Nimbus Backup interface",
 			"status": "📊 Backup status", "statusTip": "View scheduled backup status",
 			"quit": "❌ Quit", "quitTip": "Close Nimbus Backup",
-			"tooltip": "Nimbus Backup — scheduled backups active",
+			"tooltip":      "Nimbus Backup — scheduled backups active",
+			"storageError": "Storage identity error — manual intervention required",
 		}
 	case "es":
 		return map[string]string{
 			"show": "🖥️ Mostrar ventana", "showTip": "Abrir la interfaz de Nimbus Backup",
 			"status": "📊 Estado de las copias", "statusTip": "Ver el estado de las copias programadas",
 			"quit": "❌ Salir", "quitTip": "Cerrar Nimbus Backup",
-			"tooltip": "Nimbus Backup — copias programadas activas",
+			"tooltip":      "Nimbus Backup — copias programadas activas",
+			"storageError": "Error de identidad del almacenamiento — intervención requerida",
 		}
 	default: // fr
 		return map[string]string{
 			"show": "🖥️ Afficher la fenêtre", "showTip": "Ouvrir l'interface Nimbus Backup",
 			"status": "📊 État des sauvegardes", "statusTip": "Voir l'état des sauvegardes planifiées",
 			"quit": "❌ Quitter", "quitTip": "Fermer Nimbus Backup",
-			"tooltip": "Nimbus Backup — sauvegardes planifiées actives",
+			"tooltip":      "Nimbus Backup — sauvegardes planifiées actives",
+			"storageError": "Identité du stockage — intervention requise",
 		}
 	}
 }
@@ -98,6 +104,9 @@ func (a *App) SetTrayLanguage(lang string) {
 	if menuQuit != nil {
 		menuQuit.SetTitle(tt["quit"])
 		menuQuit.SetTooltip(tt["quitTip"])
+	}
+	if storageTrayFault.Load() {
+		a.updateStorageTray(map[string]interface{}{"error": "latched"})
 	}
 }
 
@@ -205,7 +214,7 @@ func (a *App) ShowFromTray() {
 
 // UpdateTrayTooltip updates the tray icon tooltip (e.g., with next backup time)
 func (a *App) UpdateTrayTooltip(message string) {
-	if !trayInitialized {
+	if !trayInitialized || storageTrayFault.Load() {
 		return
 	}
 	systray.SetTooltip(fmt.Sprintf("Nimbus Backup - %s", message))
@@ -227,4 +236,27 @@ func attemptTrayCleanupBeforeCrash() {
 	}
 	systray.Quit()
 	waitForTrayExit(300 * time.Millisecond)
+}
+
+func (a *App) updateStorageTray(status map[string]interface{}) {
+	if !trayInitialized {
+		return
+	}
+	text, _ := status["error"].(string)
+	failed := text != ""
+	storageTrayFault.Store(failed)
+	tt := trayText(trayLang)
+	if failed {
+		systray.SetIcon(storageErrorIcon())
+		systray.SetTooltip("Nimbus Backup — " + tt["storageError"])
+		if menuStatus != nil {
+			menuStatus.SetTitle(tt["storageError"])
+		}
+	} else {
+		systray.SetIcon(TrayIconData)
+		systray.SetTooltip(tt["tooltip"])
+		if menuStatus != nil {
+			menuStatus.SetTitle(tt["status"])
+		}
+	}
 }

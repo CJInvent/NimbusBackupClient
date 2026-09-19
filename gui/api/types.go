@@ -2,13 +2,13 @@ package api
 
 // BackupRequest represents a backup job request
 type BackupRequest struct {
-	BackupType   string   `json:"backup_type"` // "directory" or "machine"
-	BackupID     string   `json:"backup_id"`
-	BackupDirs   []string `json:"backup_dirs"`
-	DriveLetters []string `json:"drive_letters,omitempty"`
-	ExcludeList  []string `json:"exclude_list,omitempty"`
-	UseVSS       bool     `json:"use_vss"`
-	Compression  string   `json:"compression,omitempty"` // "fastest", "default", "better", "best"
+	BackupType  string   `json:"backup_type"` // "directory" or "machine"
+	BackupID    string   `json:"backup_id"`
+	BackupDirs  []string `json:"backup_dirs"`
+	DiskTargets []string `json:"disk_targets,omitempty"`
+	ExcludeList []string `json:"exclude_list,omitempty"`
+	UseVSS      bool     `json:"use_vss"`
+	Compression string   `json:"compression,omitempty"` // "fastest", "default", "better", "best"
 }
 
 // BackupResponse represents the result of a backup operation

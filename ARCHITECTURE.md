@@ -842,3 +842,35 @@ and booted, with the runbook committed.
 Exit = **beta**, aligned with NimbusControl v0.9.0: smoke ledger fully green,
 no known data-safety or security debt, signed artifacts, provisioning
 round-trip demonstrated org-to-agent.
+
+## Persistent storage targeting (v4 development)
+
+Image jobs carry `disk_targets`: `boot` or `device:v1:<sha256>`. Boot Drive
+comes from the running Windows directory cross-referenced with boot/system
+partition evidence. Split boot/system disks are refused pending explicit
+multi-device support. Disk numbers and volume letters are locators only.
+Windows device-associated storage identifiers (or vendor/product/unit serial)
+are canonicalized and hashed; GPT disk and partition IDs plus offsets/sizes
+are independent layout evidence. Devices without sufficient identity cannot
+be approved. Hardware that reports duplicate identities is refused.
+
+The service persists approved bindings and an intervention latch in
+`storage-identity.json`. Discovery never approves replacement media and
+reconnection never clears a refusal. Native identity/layout checks on the
+opened image source run before reading backup bytes. Discovery and approval
+are serialized so an older observation cannot overwrite a fresh approval.
+Joined agents accept approvals only from authenticated control-plane responses;
+standalone GUI approvals use the authenticated service API. A missing service
+never permits a GUI write fallback. Storage errors dominate tray status and
+NimbusControl fleet health, with revisioned approvals and audit records.
+
+Acceptance queued: non-C Windows boot, external disk renumbering, replacement
+and cloned partition identities, ambiguous hardware IDs, durable refusal across
+restart/reconnection, joined dashboard-only resolution, standalone GUI/service
+resolution, and VSS hot-plug refusal. Live read-only disk/partition/handle
+checks run on DESKTOP-ND3EQI2; full installed feature acceptance follows its MSI.
+
+Directory-run logical byte totals come from finalized PXAR manifest entries,
+including jobs below the progress callback threshold. The asynchronous size
+scan is only a progress estimate; it cannot supply completion/audit totals.
+PBS session errors distinguish HTTP 401/403 from storage/session rejections.

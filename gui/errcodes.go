@@ -34,8 +34,9 @@ const (
 	// A job named a drive this machine cannot resolve to a disk. Distinct
 	// from NB-2002, which means the job named no disk at all: this one means
 	// the operator asked for something specific and it is not here.
-	errDiskUnresolved = "[NB-2012] backup target is not a disk on this machine"
-	errServerIDExists = "[NB-1007] a PBS server with this ID already exists"
+	errStorageIdentity = "[NB-2013] storage identity requires manual intervention"
+	errDiskUnresolved  = "[NB-2012] backup target is not a disk on this machine"
+	errServerIDExists  = "[NB-1007] a PBS server with this ID already exists"
 
 	errSnapshotList       = "[NB-3001] listing snapshots failed"
 	errFolderPickerSvc    = "[NB-3002] folder picker unavailable in service mode - enter the destination path manually"

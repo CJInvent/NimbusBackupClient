@@ -40,7 +40,7 @@ type Server struct {
 // BackupHandler interface that the service must implement
 // NOTE: StartBackup will be called in a goroutine (async), so it must be thread-safe
 type BackupHandler interface {
-	StartBackup(backupType string, backupDirs, driveLetters, excludeList []string, backupID string, useVSS bool, compression string) error
+	StartBackup(backupType string, backupDirs, diskTargets, excludeList []string, backupID string, useVSS bool, compression string) error
 	GetConfigWithHostname() map[string]interface{}
 	GetScheduledJobsForAPI() []map[string]interface{}
 	SaveScheduledJobFromMap(job map[string]interface{}) error
@@ -86,6 +86,7 @@ func (s *Server) SetVersion(v string) { s.version = v }
 
 func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/status", s.handleStatus)
+	s.mux.HandleFunc("/storage/identity", s.handleStorageIdentity)
 	s.mux.HandleFunc("/backup", s.handleBackup)
 	s.mux.HandleFunc("/backup/status/", s.handleBackupStatus)
 	s.mux.HandleFunc("/connections", s.handleConnections)
@@ -217,7 +218,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		err := s.app.StartBackup(
 			req.BackupType,
 			req.BackupDirs,
-			req.DriveLetters,
+			req.DiskTargets,
 			req.ExcludeList,
 			req.BackupID,
 			req.UseVSS,

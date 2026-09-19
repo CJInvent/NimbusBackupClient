@@ -113,7 +113,7 @@ func (h *stubHandler) SetProgressCallbacks(
 	}
 }
 
-func (h *stubHandler) StartBackup(backupType string, backupDirs, driveLetters, excludeList []string, backupID string, useVSS bool, compression string) error {
+func (h *stubHandler) StartBackup(backupType string, backupDirs, diskTargets, excludeList []string, backupID string, useVSS bool, compression string) error {
 	h.record("StartBackup:" + backupType + ":" + backupID + ":" + compression)
 	select {
 	case h.started <- backupID:

@@ -28,6 +28,7 @@ import (
 
 // BackupOptions contains all parameters for a backup operation
 type BackupOptions struct {
+	ValidateSource  func(uintptr, string) error
 	BaseURL         string
 	AuthID          string
 	Secret          string
@@ -877,6 +878,9 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			dirResults = append(dirResults, DirResult{Path: dir, OK: false, Error: finishErr.Error()})
 			continue
 		}
+		// Count committed archive bytes, not the unrelated asynchronous sizing
+		// estimate. Small jobs may never emit a progress callback at all.
+		totalSize.Add(directoryManifestBytes(client.Manifest.Files))
 		writeBackupLog(fmt.Sprintf("Directory %d/%d finalized: %s", idx+1, len(opts.BackupDirs), dir))
 		dirResults = append(dirResults, DirResult{Path: dir, OK: true})
 		successfulDirs++
@@ -1278,4 +1282,16 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 	}
 
 	return nil
+}
+
+// directoryManifestBytes is the logical PXAR payload recorded by PBS at close.
+// Catalogs and sidecars are metadata, not additional backed-up file content.
+func directoryManifestBytes(files []pbscommon.File) uint64 {
+	var total uint64
+	for _, f := range files {
+		if strings.HasSuffix(f.Filename, ".pxar.didx") && f.Size > 0 {
+			total += uint64(f.Size)
+		}
+	}
+	return total
 }

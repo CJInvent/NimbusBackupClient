@@ -77,7 +77,8 @@ type Agent struct {
 	//
 	// The slice is the COMPLETE set. A handler must replace what it holds,
 	// not merge — deletion has no representation other than absence.
-	OnManagedJobs func([]ManagedJob)
+	OnManagedJobs     func([]ManagedJob)
+	OnStorageApproval func(*StorageApproval)
 
 	// OnPBSTarget is invoked whenever a check-in delivers `pbs_target` --
 	// every cycle, INCLUDING the cycles where it is nil, and for exactly the
@@ -335,6 +336,9 @@ func (a *Agent) CheckinNow() {
 	// Managed jobs land with policy, before commands, for the same reason:
 	// a run_backup command naming a managed job must find that job already
 	// applied rather than racing the check-in that delivered it.
+	if a.OnStorageApproval != nil {
+		a.OnStorageApproval(resp.StorageApproval)
+	}
 	if a.OnManagedJobs != nil {
 		a.OnManagedJobs(resp.ManagedJobs)
 	}

@@ -30,7 +30,8 @@ type InventoryJob struct {
 // Inventory is display + expectation telemetry. Server-side it is bounded
 // (64 KB / depth 6 / 2000 elements) and sanitized; keep it lean regardless.
 type Inventory struct {
-	Jobs []InventoryJob `json:"jobs"`
+	Jobs            []InventoryJob `json:"jobs"`
+	StorageIdentity *StorageStatus `json:"storage_identity,omitempty"`
 
 	// BreakGlassFileRestore reports that this agent is honouring its LOCAL
 	// emergency override (see breakglass.go) because the control plane has
@@ -105,10 +106,8 @@ type Inventory struct {
 }
 
 // InventoryDisk is one physical disk as the portal needs it: which disk,
-// how big, and which drive letters live on it. Letters are what a job
-// stores (docs/V4-JOB-TARGETS.md section 1), so they are what the picker
-// offers; the device path is NOT reported, because a job that named one
-// would be pinned to a disk number that moves.
+// how big, and which drive letters live on it. Letters are display-only. StorageIdentity reports the independently
+// verified device and partition evidence used for persistent target binding.
 type InventoryDisk struct {
 	DiskNumber int   `json:"disk_number"`
 	SizeBytes  int64 `json:"size_bytes"`
@@ -180,13 +179,13 @@ type ManagedJob struct {
 	// Scope is informational: "org", "group" or "agent". The agent runs
 	// every job it is sent regardless of scope -- see the accumulation note
 	// on CheckinResponse.ManagedJobs.
-	Scope        string   `json:"scope"`
-	BackupType   string   `json:"backup_type"` // "directory" | "machine"
-	BackupDirs   []string `json:"backup_dirs"`
-	DriveLetters []string `json:"drive_letters"`
-	ExcludeList  []string `json:"exclude_list"`
-	UseVSS       bool     `json:"use_vss"`
-	Compression  string   `json:"compression"`
+	Scope       string   `json:"scope"`
+	BackupType  string   `json:"backup_type"` // "directory" | "machine"
+	BackupDirs  []string `json:"backup_dirs"`
+	DiskTargets []string `json:"disk_targets"`
+	ExcludeList []string `json:"exclude_list"`
+	UseVSS      bool     `json:"use_vss"`
+	Compression string   `json:"compression"`
 	// Schedule is a PVE/systemd calendar event, or empty for a job that
 	// runs only when the server triggers it.
 	Schedule string `json:"schedule"`
@@ -196,9 +195,10 @@ type ManagedJob struct {
 }
 
 type CheckinResponse struct {
-	Commands       []Command `json:"commands"`
-	CheckinSeconds int       `json:"checkin_seconds"`
-	Policy         Policy    `json:"policy"`
+	StorageApproval *StorageApproval `json:"storage_approval,omitempty"`
+	Commands        []Command        `json:"commands"`
+	CheckinSeconds  int              `json:"checkin_seconds"`
+	Policy          Policy           `json:"policy"`
 
 	// CheckinOffsetSeconds is this agent's assigned slot within the
 	// check-in interval's epoch-aligned grid (see NextAligned in
