@@ -874,3 +874,9 @@ Directory-run logical byte totals come from finalized PXAR manifest entries,
 including jobs below the progress callback threshold. The asynchronous size
 scan is only a progress estimate; it cannot supply completion/audit totals.
 PBS session errors distinguish HTTP 401/403 from storage/session rejections.
+
+Storage-state read/ACL/write failures also produce bounded, valid check-in evidence
+and remain visible to the local tray/status path. The service retains the first
+failure until a successful state write durably latches it; only explicit approval
+clears that latch. VSS reads require the declared snapshot length: unexpected EOF
+or a snapshot larger than its partition aborts before index commit.

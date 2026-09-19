@@ -13,6 +13,7 @@ type App struct {
 	storageMu        sync.Mutex
 	storageOpMu      sync.Mutex
 	storageState     *controlplane.StorageState
+	storageFailure   string
 	ctx              context.Context
 	config           *Config
 	stopScheduler    chan struct{}

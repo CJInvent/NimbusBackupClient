@@ -1,8 +1,10 @@
 package main
 
 import (
+	"controlplane"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestStorageJoinedApprovalRefused(t *testing.T) {
@@ -19,5 +21,23 @@ func TestStorageGUIWithoutServiceCannotApproveOrWriteState(t *testing.T) {
 	}
 	if _, err := a.storageController(); err == nil {
 		t.Fatal("GUI acquired state writer")
+	}
+}
+
+func TestStorageFailureRemainsVisibleAndValidTelemetry(t *testing.T) {
+	a := &App{config: &Config{}}
+	fault := "state ACL failed\n" + strings.Repeat("é", 600)
+	st := a.rememberStorageFailure(controlplane.StorageStatus{}, fault)
+	if len(st.Observation) != 64 || len(st.Error) > 512 || strings.Contains(st.Error, "\n") || !utf8.ValidString(st.Error) {
+		t.Fatalf("invalid fault telemetry: %#v", st)
+	}
+	// GUI/status reads must not turn a failed refresh into an apparently healthy snapshot.
+	status := a.StorageIdentityStatusMap()
+	if status["error"] != st.Error || status["observation"] != st.Observation {
+		t.Fatal("status lost pending persistence failure")
+	}
+	again := a.rememberStorageFailure(controlplane.StorageStatus{}, "second failure")
+	if again.Error != st.Error {
+		t.Fatal("original unresolved fault was replaced")
 	}
 }
