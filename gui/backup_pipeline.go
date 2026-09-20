@@ -85,8 +85,8 @@ type resolvedBackup struct {
 // resolveBackupRequest normalizes and validates one request.
 //
 // Separate from execution so the request is fully resolved before any hook is
-// attached or any engine is entered: a bad request fails with a reason and
-// leaves no run record, no reporter and no PBS connection behind it.
+// attached or any engine is entered. Rejected requests still finalize any
+// announced run so validation cannot leave the portal stuck in preparing.
 func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 	if a.config == nil {
 		return nil, errors.New("configuration not loaded")
@@ -174,6 +174,17 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	r, err := a.resolveBackupRequest(req)
 	if err != nil {
+		// Scheduler/portal callers may already have announced this run.
+		// Consume that handoff even when validation never reaches the engine.
+		kind := "host"
+		if req.BackupType == "machine" {
+			kind = "vm"
+		}
+		rejected := BackupOptions{BackupID: req.BackupID, BackupType: kind}
+		cpFinish, _ := attachControlPlaneHooks(&rejected)
+		runFinish, _ := attachRunRegistry(&rejected)
+		cpFinish(err)
+		runFinish(err)
 		return err
 	}
 	backupID, compression, targetDirs, pbsCfg := r.backupID, r.compression, r.targetDirs, r.pbs

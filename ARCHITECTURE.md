@@ -885,3 +885,7 @@ Storage approvals are bound to their management authority. Joining, leaving, or
 changing server/agent enrollment invalidates the prior bindings and resets the
 approval revision; it requires approval through the new authority. An unchanged
 authority survives restart without discarding a valid approval.
+
+Backup validation failures finalize the announced control-plane and local registry
+run before returning, even when no engine or PBS connection is entered. A missing
+or unapproved source cannot leave a scheduled/portal run stuck in preparing.
