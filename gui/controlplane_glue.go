@@ -31,6 +31,19 @@ var (
 	cpAgent  *controlplane.Agent
 	cpClient *controlplane.Client
 
+	// Last-logged values for the level-triggered check-in callbacks, so they
+	// log a CHANGE rather than a heartbeat. See OnPolicy / OnPBSPollSchedule.
+	//
+	// Their own mutex, not cpMu: the callbacks fire on the check-in goroutine
+	// while StartControlPlane holds cpMu to reset them, so sharing cpMu would
+	// mean a callback blocking on a lifecycle operation, and sharing nothing
+	// would be a data race the detector is right to flag.
+	cpLogMu                sync.Mutex
+	lastPolicyLogged       *bool
+	lastPollLogged         bool
+	lastPollIntervalLogged int
+	lastPollOffsetLogged   int
+
 	// Reporter hand-off between the code that KNOWS the job name
 	// (executeScheduledJob) and the code that builds BackupOptions.
 	// Keyed by BackupID; jobs without a fixed BackupID fall back to the
@@ -106,6 +119,7 @@ func (a *App) StartControlPlane() {
 		}
 	}
 
+	resetCheckinLogState()
 	cpAgent = &controlplane.Agent{
 		Client:            cpClient,
 		AgentVersion:      appVersion,
@@ -115,17 +129,81 @@ func (a *App) StartControlPlane() {
 		OnStorageApproval: a.applyStorageApproval,
 		OnBackupKey:       applyBackupKeyFromCheckin,
 		OnPBSTarget:       a.applyPBSTargetFromCheckin,
+		// BOTH OF THESE LOG ON CHANGE ONLY.
+		//
+		// They are level-triggered callbacks: the server sends policy and the
+		// poll schedule on EVERY check-in so a retune propagates within one
+		// cycle, which is the right wire design and means these fire every two
+		// minutes whether or not anything moved. Logging each one wrote about
+		// 1,400 identical lines a day between them, and the cost is not disk
+		// -- it is that the service log stops being readable, so the line that
+		// does matter scrolls past in a wall of lines that never change.
+		//
+		// The codebase already had this idiom and it simply had not been
+		// applied here; see CredentialStorage on the server, which writes only
+		// on change so that its timestamp means "when it changed" rather than
+		// "when we last looked".
+		//
+		// A change is still logged at once, and the FIRST value after a
+		// restart always logs because the remembered value starts unset --
+		// which is what keeps "what is this agent configured with" answerable
+		// from the log after any restart.
 		OnPolicy: func(p controlplane.Policy) {
-			writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
+			if policyLogChanged(p.FileRestore) {
+				writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
+			}
 		},
 		OnPBSPollSchedule: func(intervalSeconds, offsetSeconds int) {
 			updatePBSPollSchedule(intervalSeconds, offsetSeconds)
-			writeDebugLog(fmt.Sprintf("[controlplane] PBS poll schedule: interval=%ds offset=%ds", intervalSeconds, offsetSeconds))
+			if pollScheduleLogChanged(intervalSeconds, offsetSeconds) {
+				writeDebugLog(fmt.Sprintf("[controlplane] PBS poll schedule: interval=%ds offset=%ds", intervalSeconds, offsetSeconds))
+			}
 		},
 	}
 	cpStop = make(chan struct{})
 	go cpAgent.Run(cpStop)
 	a.startPBSPoller()
+}
+
+// policyLogChanged reports whether the applied policy differs from the last
+// one logged, recording the new value. Separated from the callback so the
+// change test is unit-testable without a running check-in loop.
+func policyLogChanged(fileRestore bool) bool {
+	cpLogMu.Lock()
+	defer cpLogMu.Unlock()
+	if lastPolicyLogged != nil && *lastPolicyLogged == fileRestore {
+		return false
+	}
+	v := fileRestore
+	lastPolicyLogged = &v
+	return true
+}
+
+// pollScheduleLogChanged is the same test for the PBS poll schedule. Zero is
+// not used as "unset": an interval of 0 is a real value the server can send,
+// so the first call after a reset always reports a change via the sentinel
+// below rather than by comparing against a zero value.
+func pollScheduleLogChanged(intervalSeconds, offsetSeconds int) bool {
+	cpLogMu.Lock()
+	defer cpLogMu.Unlock()
+	if lastPollLogged && lastPollIntervalLogged == intervalSeconds && lastPollOffsetLogged == offsetSeconds {
+		return false
+	}
+	lastPollLogged = true
+	lastPollIntervalLogged, lastPollOffsetLogged = intervalSeconds, offsetSeconds
+	return true
+}
+
+// resetCheckinLogState makes the next check-in log its values again. Called
+// when the control plane starts or restarts, so "what is this agent
+// configured with" stays answerable from the log after a restart or a
+// config change rather than only from the run that first set it.
+func resetCheckinLogState() {
+	cpLogMu.Lock()
+	defer cpLogMu.Unlock()
+	lastPolicyLogged = nil
+	lastPollLogged = false
+	lastPollIntervalLogged, lastPollOffsetLogged = 0, 0
 }
 
 // StopControlPlane halts the check-in loop (config change / shutdown).

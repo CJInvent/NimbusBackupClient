@@ -372,7 +372,7 @@ func ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 		sort.Strings(letters)
 
 		// Build label
-		label := fmt.Sprintf("Disque %d", i)
+		label := fmt.Sprintf("Disk %d", i)
 		if len(letters) > 0 {
 			label += fmt.Sprintf(" (%s)", strings.Join(letters, ", "))
 		}

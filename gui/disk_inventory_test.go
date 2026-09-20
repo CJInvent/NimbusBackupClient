@@ -10,8 +10,8 @@ import (
 
 func fixedDisks() []PhysicalDiskInfo {
 	return []PhysicalDiskInfo{
-		{DiskNumber: 0, SizeBytes: 500, Letters: []string{"C:"}, Label: "Disque 0"},
-		{DiskNumber: 1, SizeBytes: 900, Letters: nil, Label: "Disque 1"},
+		{DiskNumber: 0, SizeBytes: 500, Letters: []string{"C:"}, Label: "Disk 0"},
+		{DiskNumber: 1, SizeBytes: 900, Letters: nil, Label: "Disk 1"},
 	}
 }
 

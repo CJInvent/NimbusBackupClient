@@ -8,7 +8,6 @@ type EnrollRequest struct {
 	Hostname     string `json:"hostname"`
 	OSInfo       string `json:"os_info,omitempty"`
 	AgentVersion string `json:"agent_version,omitempty"`
-	MachineFP    string `json:"machine_fp,omitempty"`
 }
 
 // EnrollResponse — the ONLY time the secret crosses the wire. Callers must
