@@ -131,7 +131,7 @@ func loadOrCreateDEK() ([]byte, string, error) {
 func wrapDEK(dek []byte) (string, []byte) {
 	if blob, err := tpmProtect(dek); err == nil {
 		if check, err2 := tpmUnprotect(blob); err2 == nil && string(check) == string(dek) {
-			writeDebugLog("[Secrets] Master key wrapped by the TPM protector (Platform Crypto Provider)")
+			writeInfoLog("[Secrets] Master key wrapped by the TPM protector (Platform Crypto Provider)")
 			return "tpm", blob
 		} else {
 			writeWarnLog(fmt.Sprintf("[Secrets] TPM wrap round-trip verification failed (%v) - falling back", err2))
@@ -141,7 +141,7 @@ func wrapDEK(dek []byte) (string, []byte) {
 	}
 
 	if blob, err := dpapiProtect(dek); err == nil {
-		writeDebugLog("[Secrets] Master key wrapped by the DPAPI (machine) protector")
+		writeInfoLog("[Secrets] Master key wrapped by the DPAPI (machine) protector")
 		return "dpapi", blob
 	} else {
 		writeWarnLog(fmt.Sprintf("[Secrets] WARNING: DPAPI unavailable (%v) - falling back to PLAINTEXT protector; stored secrets will only be obfuscated", err))
@@ -176,7 +176,7 @@ func upgradeDEKProtector(path string, dek []byte, current string) ([]byte, strin
 		writeWarnLog(fmt.Sprintf("[Secrets] WARNING: failed to persist protector upgrade %s -> %s: %v", current, newProtector, err))
 		return dek, current, nil
 	}
-	writeDebugLog(fmt.Sprintf("[Secrets] Master key protector upgraded: %s -> %s", current, newProtector))
+	writeInfoLog(fmt.Sprintf("[Secrets] Master key protector upgraded: %s -> %s", current, newProtector))
 	return dek, newProtector, nil
 }
 

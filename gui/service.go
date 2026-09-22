@@ -25,7 +25,7 @@ type NimbusService struct {
 
 // Start is called when the service starts
 func (s *NimbusService) Start(svc service.Service) error {
-	writeDebugLog("NimbusBackup service starting...")
+	writeInfoLog("NimbusBackup service starting...")
 	s.stopChan = make(chan struct{})
 	go s.run()
 	return nil
@@ -33,7 +33,7 @@ func (s *NimbusService) Start(svc service.Service) error {
 
 // run contains the main service loop
 func (s *NimbusService) run() {
-	writeDebugLog("NimbusBackup service running")
+	writeInfoLog("NimbusBackup service running")
 
 	// Initialize app with background context (service has no Wails runtime)
 	// IMPORTANT: Service App must be in Standalone mode to execute backups directly
@@ -49,9 +49,9 @@ func (s *NimbusService) run() {
 	// Load configuration (service will read config from file when needed)
 	configMap := s.app.GetConfigWithHostname()
 	if hostname, ok := configMap["hostname"].(string); ok {
-		writeDebugLog(fmt.Sprintf("Service: Running for %s", hostname))
+		writeInfoLog(fmt.Sprintf("Service: Running for %s", hostname))
 	} else {
-		writeDebugLog("Service: Running in background")
+		writeInfoLog("Service: Running in background")
 	}
 
 	// Config will be loaded from file by each scheduled job when needed
@@ -149,7 +149,7 @@ func (s *NimbusService) run() {
 	// moment, and in a goroutine so a long startup backup does not hold up
 	// the API server coming online.
 	go s.app.HandleStartupRun()
-	writeDebugLog("Starting HTTP API server on 127.0.0.1:18765")
+	writeInfoLog("Starting HTTP API server on 127.0.0.1:18765")
 
 	go func() {
 		if err := s.apiServer.Start(); err != nil {
@@ -158,14 +158,14 @@ func (s *NimbusService) run() {
 	}()
 
 	// Keep the service running (scheduler and API server run in background goroutines)
-	writeDebugLog("Service main loop started, waiting for stop signal")
+	writeInfoLog("Service main loop started, waiting for stop signal")
 	<-s.stopChan // Block until stop signal received
-	writeDebugLog("Stop signal received, service main loop exiting")
+	writeInfoLog("Stop signal received, service main loop exiting")
 }
 
 // Stop is called when the service stops
 func (s *NimbusService) Stop(svc service.Service) error {
-	writeDebugLog("NimbusBackup service stopping...")
+	writeInfoLog("NimbusBackup service stopping...")
 
 	// Close any live PBS backup session before we return, so the server
 	// releases the writer / snapshot lock instead of waiting for TCP
@@ -185,13 +185,13 @@ func (s *NimbusService) Stop(svc service.Service) error {
 	// Give it a moment to finish current operations
 	time.Sleep(2 * time.Second)
 
-	writeDebugLog("NimbusBackup service stopped")
+	writeInfoLog("NimbusBackup service stopped")
 	return nil
 }
 
 // RunAsService starts the application as a Windows Service
 func RunAsService() {
-	writeDebugLog("Attempting to run as Windows Service")
+	writeInfoLog("Attempting to run as Windows Service")
 
 	svcConfig := &service.Config{
 		Name:        "NimbusBackup",

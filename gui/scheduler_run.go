@@ -24,7 +24,7 @@ import (
 // RecalculateNextRuns recalculates nextRun for all jobs whose nextRun is stale (in the past).
 // This prevents jobs from being permanently stuck after a service restart or missed window.
 func (a *App) RecalculateNextRuns() {
-	writeDebugLog("RecalculateNextRuns called - fixing stale nextRun values")
+	writeInfoLog("RecalculateNextRuns called - fixing stale nextRun values")
 
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
@@ -49,7 +49,7 @@ func (a *App) RecalculateNextRuns() {
 		// If nextRun is more than 2 minutes in the past, recalculate it
 		if now.After(nextRun.Add(2 * time.Minute)) {
 			newNextRun := calculateNextRun(job.ScheduleTime)
-			writeDebugLog(fmt.Sprintf("[RecalculateNextRuns] Job %s: nextRun was stale (%s), recalculated to %s",
+			writeInfoLog(fmt.Sprintf("[RecalculateNextRuns] Job %s: nextRun was stale (%s), recalculated to %s",
 				job.Name, job.NextRun, newNextRun))
 			jobs[i].NextRun = newNextRun
 			modified = true
@@ -72,14 +72,14 @@ func (a *App) RecalculateNextRuns() {
 		if err := atomicWriteFile(jobsPath, data, 0600); err != nil {
 			writeErrorLog(fmt.Sprintf("Error saving recalculated jobs: %v", err))
 		} else {
-			writeDebugLog("Successfully recalculated stale nextRun values")
+			writeInfoLog("Successfully recalculated stale nextRun values")
 		}
 	}
 }
 
 // StartScheduler starts the background job scheduler
 func (a *App) StartScheduler() {
-	writeDebugLog("Starting background job scheduler")
+	writeInfoLog("Starting background job scheduler")
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
@@ -90,7 +90,7 @@ func (a *App) StartScheduler() {
 			case <-ticker.C:
 				a.checkAndRunScheduledJobs()
 			case <-a.stopScheduler:
-				writeDebugLog("Scheduler stopped")
+				writeInfoLog("Scheduler stopped")
 				return
 			}
 		}
@@ -99,13 +99,13 @@ func (a *App) StartScheduler() {
 
 // StopScheduler stops the background job scheduler
 func (a *App) StopScheduler() {
-	writeDebugLog("Stopping background job scheduler")
+	writeInfoLog("Stopping background job scheduler")
 	close(a.stopScheduler)
 }
 
 // CleanupAbandonedJobs marks any "running" jobs as abandoned on app startup
 func (a *App) CleanupAbandonedJobs() {
-	writeDebugLog("CleanupAbandonedJobs called - cleaning up stale running jobs")
+	writeInfoLog("CleanupAbandonedJobs called - cleaning up stale running jobs")
 
 	history, err := a.GetJobHistory()
 	if err != nil {
@@ -141,14 +141,14 @@ func (a *App) CleanupAbandonedJobs() {
 		if err := atomicWriteFile(historyPath, data, 0600); err != nil {
 			writeErrorLog(fmt.Sprintf("Error saving updated history: %v", err))
 		} else {
-			writeDebugLog("Successfully cleaned up abandoned jobs")
+			writeInfoLog("Successfully cleaned up abandoned jobs")
 		}
 	}
 }
 
 // HandleStartupRun executes scheduled jobs that have runAtStartup enabled
 func (a *App) HandleStartupRun() {
-	writeDebugLog("HandleStartupRun called - checking for startup jobs")
+	writeInfoLog("HandleStartupRun called - checking for startup jobs")
 
 	// Wait a bit to avoid conflict with scheduler if app starts at scheduled time
 	time.Sleep(5 * time.Second)
@@ -166,7 +166,7 @@ func (a *App) HandleStartupRun() {
 
 		// Check if this job is already running (mutex protection)
 		// If scheduler already started it, the mutex will prevent duplicate execution
-		writeDebugLog(fmt.Sprintf("Executing startup job: %s", job.Name))
+		writeInfoLog(fmt.Sprintf("Executing startup job: %s", job.Name))
 		go a.executeScheduledJob(job, "") // cron/startup-triggered: no server request
 	}
 }
@@ -195,14 +195,14 @@ func (a *App) checkAndRunScheduledJobs() {
 
 	if len(jobs) == 0 {
 		if verbose {
-			writeDebugLog("[Scheduler] No scheduled jobs found")
+			writeInfoLog("[Scheduler] No scheduled jobs found")
 		}
 		return
 	}
 
 	now := time.Now()
 	if verbose {
-		writeDebugLog(fmt.Sprintf("[Scheduler] Checking %d jobs at %s", len(jobs), now.Format("15:04:05")))
+		writeInfoLog(fmt.Sprintf("[Scheduler] Checking %d jobs at %s", len(jobs), now.Format("15:04:05")))
 	}
 
 	for _, job := range jobs {
@@ -224,13 +224,13 @@ func (a *App) checkAndRunScheduledJobs() {
 		shouldRun := now.After(nextRun) && now.Before(nextRun.Add(2*time.Minute))
 
 		if verbose {
-			writeDebugLog(fmt.Sprintf("[Scheduler] Job %s: NextRun=%s, Now=%s, ShouldRun=%v",
+			writeInfoLog(fmt.Sprintf("[Scheduler] Job %s: NextRun=%s, Now=%s, ShouldRun=%v",
 				job.Name, nextRun.Format("15:04:05"), now.Format("15:04:05"), shouldRun))
 		}
 
 		// Check if it's time to run (within 2 minute window to avoid missing)
 		if shouldRun {
-			writeDebugLog(fmt.Sprintf("[Scheduler] Executing scheduled job: %s", job.Name))
+			writeInfoLog(fmt.Sprintf("[Scheduler] Executing scheduled job: %s", job.Name))
 			go a.executeScheduledJob(job, "") // cron-triggered: no server request
 		}
 	}

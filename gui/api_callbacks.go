@@ -38,7 +38,7 @@ type progressCallbacks struct {
 // API server asserts, the progress map never updated during a run, and the GUI
 // showed a frozen "Starting backup..." for the entire backup.
 func (a *App) SetProgressCallbacks(jobID string, onProgress func(string, float64, string), onStats func(string, uint64, uint64, uint64, uint64), onComplete func(string, bool, string)) {
-	writeDebugLog(fmt.Sprintf("[SetProgressCallbacks] Registered callbacks for jobID: %s", jobID))
+	writeInfoLog(fmt.Sprintf("[SetProgressCallbacks] Registered callbacks for jobID: %s", jobID))
 	callbacksMutex.Lock()
 	callbacksMap[jobID] = &progressCallbacks{
 		onProgress: onProgress,

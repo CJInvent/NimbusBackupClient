@@ -84,7 +84,7 @@ func (a *App) cpHandleRunLogCommand(cmd controlplane.Command) (controlplane.Comm
 	if err := cpClient.PostCommandArtifact(cmd.ID, tmpPath); err != nil {
 		return cpErr("artifact upload: " + err.Error()), true
 	}
-	writeDebugLog(fmt.Sprintf("[controlplane] run %s log fetch: %d line(s) uploaded for command %d", runUUID, kept, cmd.ID))
+	writeInfoLog(fmt.Sprintf("[controlplane] run %s log fetch: %d line(s) uploaded for command %d", runUUID, kept, cmd.ID))
 	return controlplane.CommandResult{OK: true, Result: map[string]interface{}{
 		"artifact": true, "lines": kept,
 	}}, true

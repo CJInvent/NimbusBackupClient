@@ -96,6 +96,10 @@ func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 		return func(error) {}, "" // control plane not configured
 	}
 	rep.SetPBSTarget(opts.BaseURL, opts.Datastore, opts.Namespace)
+	// WARN/ERROR lines written while this run is the only one active carry its
+	// run_uuid to the server (logqueue.go). Ended by the finalizer on every
+	// path, including when the engine reported its own outcome.
+	endLogCtx := beginRunLogContext(rep.RunUUID())
 
 	var runningOnce sync.Once
 	prevPhase := opts.OnPhase
@@ -160,6 +164,7 @@ func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 	}
 
 	return func(err error) {
+		defer endLogCtx()
 		reportedMu.Lock()
 		already := reported
 		reportedMu.Unlock()

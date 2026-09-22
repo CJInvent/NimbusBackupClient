@@ -17,7 +17,7 @@ func main() {
 	// this process — ours and our dependencies' — lands nowhere.
 	redirectStdlibLog()
 
-	writeDebugLog("NimbusBackupSVC starting...")
+	writeInfoLog("NimbusBackupSVC starting...")
 
 	// Command-line flags for service control
 	svcFlag := flag.String("service", "", "Control the system service: install, uninstall, start, stop, restart")
@@ -43,12 +43,12 @@ func main() {
 			log.Printf("Valid actions: %q\n", service.ControlAction)
 			log.Fatal(err)
 		}
-		writeDebugLog(fmt.Sprintf("Service control action '%s' completed", *svcFlag))
+		writeInfoLog(fmt.Sprintf("Service control action '%s' completed", *svcFlag))
 		return
 	}
 
 	// Run service
-	writeDebugLog("Starting service...")
+	writeInfoLog("Starting service...")
 	err = s.Run()
 	if err != nil {
 		log.Fatal(err)

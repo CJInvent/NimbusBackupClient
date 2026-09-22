@@ -1,7 +1,7 @@
 package controlplane
 
 import (
-	"log"
+	"sync"
 	"time"
 )
 
@@ -15,16 +15,70 @@ import (
 //	... upload ...
 //	rep.Success(type, id, time, totals, tail)   // or VSSFailed / Failed
 //
-// Every post is fire-and-forget on a goroutine (Client.post already retries
+// Every post is fire-and-forget for the CALLER (Client.post already retries
 // with backoff); a lost non-terminal report is harmless — the server's
 // state machine is forward-only and the terminal report carries everything.
 // A lost TERMINAL report leaves the run 'running' server-side until the
 // missed-backup expectation flags the job — acceptable and visible, never
 // silently wrong.
+//
+// DELIVERY IS ORDERED. Every post used to be its own goroutine, so a
+// milestone emitted right after Preparing() routinely reached the server
+// BEFORE the report that creates the run row, got a 404 and was dropped --
+// the timeline of runs 63/66 is missing lines for exactly this reason -- and
+// two events emitted in order could be stored in the opposite order. Posts
+// now go through one per-run queue drained by a single goroutine, so the
+// server receives them in the order they were emitted, which is also the
+// order it numbers them in (V4-RUN-AUDIT §3).
 type RunReporter struct {
-	c        *Client
-	base     RunReport
+	c    *Client
+	base RunReport
+
+	mu       sync.Mutex
 	terminal bool
+	pending  []func()
+	draining bool
+	// last is the most recent status report accepted for sending. If the
+	// server has never heard of this run when an event arrives (the
+	// creating report itself failed), it is re-sent once before the event
+	// is retried -- re-asserting a status is always permitted server-side.
+	last *RunReport
+}
+
+// enqueue appends one delivery and starts the drainer if it is idle. The
+// drainer exits when the queue empties, so an idle reporter holds no
+// goroutine.
+func (r *RunReporter) enqueue(f func()) {
+	r.mu.Lock()
+	r.pending = append(r.pending, f)
+	if !r.draining {
+		r.draining = true
+		go r.drain()
+	}
+	r.mu.Unlock()
+}
+
+func (r *RunReporter) drain() {
+	for {
+		r.mu.Lock()
+		if len(r.pending) == 0 {
+			r.draining = false
+			r.mu.Unlock()
+			return
+		}
+		f := r.pending[0]
+		r.pending = r.pending[1:]
+		r.mu.Unlock()
+		f()
+	}
+}
+
+// idle reports whether every enqueued delivery has been attempted. Tests use
+// it; production code never waits on delivery.
+func (r *RunReporter) idle() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.draining && len(r.pending) == 0
 }
 
 // RunTotals is what a terminal report measured.
@@ -62,7 +116,9 @@ func (c *Client) NewRun(jobName, backupType string) *RunReporter {
 // SetPBSTarget records where this run lands; call before Success so the
 // server can later reconcile the snapshot against PBS GC/prune.
 func (r *RunReporter) SetPBSTarget(server, datastore, namespace string) {
+	r.mu.Lock()
 	r.base.PBSServer, r.base.PBSDatastore, r.base.PBSNamespace = server, datastore, namespace
+	r.mu.Unlock()
 }
 
 // RunUUID returns this run's Backup Job ID — the same value every
@@ -80,7 +136,9 @@ func (r *RunReporter) RunUUID() string {
 // unattributed-manual runs; the server treats an absent request_id as a
 // legitimate origin, not missing data.
 func (r *RunReporter) SetRequestID(requestID string) {
+	r.mu.Lock()
 	r.base.RequestID = requestID
+	r.mu.Unlock()
 }
 
 // SetTrigger records what STARTED this run -- call before the first post, so
@@ -89,14 +147,18 @@ func (r *RunReporter) SetRequestID(requestID string) {
 // The server stores an absent trigger as "service" rather than guessing, so
 // the cost of not calling this is an honest "nobody said", not a wrong answer.
 func (r *RunReporter) SetTrigger(trigger string) {
+	r.mu.Lock()
 	r.base.Trigger = trigger
+	r.mu.Unlock()
 }
 
 // SetJobID links this run to the SERVER's managed job -- backup_jobs.id, as
 // delivered in the check-in that handed this machine the job. Call before the
 // first post. Leave unset for a run that belongs to no managed job.
 func (r *RunReporter) SetJobID(jobID int64) {
+	r.mu.Lock()
 	r.base.JobID = jobID
+	r.mu.Unlock()
 }
 
 // i64 is the "measured, and it is this" pointer. Its whole purpose is to make
@@ -183,17 +245,34 @@ const (
 // already covers the run's overall outcome regardless), so this never
 // blocks the caller on network I/O.
 func (r *RunReporter) Event(checkpoint, level, message string) {
-	go func() {
-		if err := r.c.PostRunEvent(r.base.RunUUID, RunEvent{
-			Checkpoint: checkpoint, Level: level, Message: clip(message, 2000),
-		}); err != nil {
-			log.Printf("[controlplane] run %s milestone event (%s) failed: %v", r.base.RunUUID, checkpoint, err)
+	ev := RunEvent{Checkpoint: checkpoint, Level: level, Message: clip(message, 2000)}
+	r.enqueue(func() {
+		err := r.c.PostRunEvent(r.base.RunUUID, ev)
+		var he *httpError
+		if asHTTPError(err, &he) && he.status == 404 {
+			// The server does not know this run: the report that creates the
+			// row failed or has not landed. Re-assert the latest status once
+			// (idempotent server-side) and retry the event, rather than
+			// dropping the line.
+			r.mu.Lock()
+			last := r.last
+			r.mu.Unlock()
+			if last != nil {
+				if rerr := r.c.ReportRun(*last); rerr == nil {
+					err = r.c.PostRunEvent(r.base.RunUUID, ev)
+				}
+			}
 		}
-	}()
+		if err != nil {
+			logf(LogWarn, "run %s milestone event (%s) not delivered: %v", r.base.RunUUID, checkpoint, err)
+		}
+	})
 }
 
 func (r *RunReporter) post(status RunStatus, mutate func(*RunReport)) {
+	r.mu.Lock()
 	if r.terminal {
+		r.mu.Unlock()
 		return // never report past a terminal state (mirrors server rule)
 	}
 	switch status {
@@ -207,11 +286,28 @@ func (r *RunReporter) post(status RunStatus, mutate func(*RunReport)) {
 		// Terminal details (PBS triple etc.) belong to the final report
 		// only; keep base clean for the improbable case of reuse.
 	}
-	go func() {
+	r.last = &rep
+	r.mu.Unlock()
+	r.enqueue(func() {
 		if err := r.c.ReportRun(rep); err != nil {
-			log.Printf("[controlplane] run %s report (%s) failed: %v", rep.RunUUID, rep.Status, err)
+			// A lost TERMINAL report leaves the run 'running' on the server,
+			// which an operator will see and chase -- ERROR. A lost
+			// intermediate one is repaired by the next report -- WARN.
+			lvl := LogWarn
+			if r.isTerminal(rep.Status) {
+				lvl = LogError
+			}
+			logf(lvl, "run %s report (%s) not delivered: %v", rep.RunUUID, rep.Status, err)
 		}
-	}()
+	})
+}
+
+func (r *RunReporter) isTerminal(s RunStatus) bool {
+	switch s {
+	case StatusSuccess, StatusWarning, StatusFailed, StatusVSSFailed:
+		return true
+	}
+	return false
 }
 
 func clip(s string, n int) string {

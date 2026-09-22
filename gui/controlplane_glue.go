@@ -58,7 +58,7 @@ func (a *App) StartControlPlane() {
 	defer cpMu.Unlock()
 	cfg := a.config
 	if cfg.ControlServerURL == "" {
-		writeDebugLog("[controlplane] not configured; running standalone")
+		writeInfoLog("[controlplane] not configured; running standalone")
 		return
 	}
 
@@ -84,7 +84,7 @@ func (a *App) StartControlPlane() {
 	// ---- one-time enrollment ------------------------------------------
 	if cpClient.AgentID == 0 {
 		if cfg.ControlEnrollToken == "" {
-			writeDebugLog("[controlplane] no identity and no enrollment token; staying standalone")
+			writeInfoLog("[controlplane] no identity and no enrollment token; staying standalone")
 			return
 		}
 		hostname, _ := os.Hostname()
@@ -106,7 +106,7 @@ func (a *App) StartControlPlane() {
 		if err := a.config.Save(); err != nil {
 			writeWarnLog(fmt.Sprintf("[controlplane] WARNING: enrolled but config save failed: %v", err))
 		}
-		writeDebugLog(fmt.Sprintf("[controlplane] enrolled as agent %d", resp.AgentID))
+		writeInfoLog(fmt.Sprintf("[controlplane] enrolled as agent %d", resp.AgentID))
 
 		// Registering the machine's public key is part of enrolling, not a
 		// later step: every secret endpoint refuses until one exists, so an
@@ -120,6 +120,11 @@ func (a *App) StartControlPlane() {
 	}
 
 	resetCheckinLogState()
+	// The control-plane package's lines keep their severity (WARN/ERROR are
+	// what reach the server), and the service opens its persistent queue of
+	// those lines before the first check-in can ask for them.
+	controlplane.SetLogger(controlplaneLog)
+	enableLogQueue()
 	cpAgent = &controlplane.Agent{
 		Client:            cpClient,
 		AgentVersion:      appVersion,
@@ -129,6 +134,22 @@ func (a *App) StartControlPlane() {
 		OnStorageApproval: a.applyStorageApproval,
 		OnBackupKey:       applyBackupKeyFromCheckin,
 		OnPBSTarget:       a.applyPBSTargetFromCheckin,
+		// V4-RUN-AUDIT §4: queued WARN/ERROR lines ride the check-in, the
+		// server's ack trims the queue, and the server's per-machine debug
+		// deadline sets this process's level. No queue (GUI build, or a
+		// process that never enabled one) means no batch.
+		PendingLogs: func() *controlplane.LogBatch {
+			if q := currentLogQueue(); q != nil {
+				return q.Pending()
+			}
+			return nil
+		},
+		OnLogAck: func(seq int64) {
+			if q := currentLogQueue(); q != nil {
+				q.Ack(seq)
+			}
+		},
+		OnDebugUntil: setServerDebugUntil,
 		// BOTH OF THESE LOG ON CHANGE ONLY.
 		//
 		// They are level-triggered callbacks: the server sends policy and the
@@ -150,13 +171,13 @@ func (a *App) StartControlPlane() {
 		// from the log after any restart.
 		OnPolicy: func(p controlplane.Policy) {
 			if policyLogChanged(p.FileRestore) {
-				writeDebugLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
+				writeInfoLog(fmt.Sprintf("[controlplane] policy applied: file_restore=%v", p.FileRestore))
 			}
 		},
 		OnPBSPollSchedule: func(intervalSeconds, offsetSeconds int) {
 			updatePBSPollSchedule(intervalSeconds, offsetSeconds)
 			if pollScheduleLogChanged(intervalSeconds, offsetSeconds) {
-				writeDebugLog(fmt.Sprintf("[controlplane] PBS poll schedule: interval=%ds offset=%ds", intervalSeconds, offsetSeconds))
+				writeInfoLog(fmt.Sprintf("[controlplane] PBS poll schedule: interval=%ds offset=%ds", intervalSeconds, offsetSeconds))
 			}
 		},
 	}
@@ -204,6 +225,10 @@ func resetCheckinLogState() {
 	lastPolicyLogged = nil
 	lastPollLogged = false
 	lastPollIntervalLogged, lastPollOffsetLogged = 0, 0
+	// A restarted or re-pointed control plane reports its key status afresh.
+	adReport.Lock()
+	adReport.sent, adReport.sig = false, ""
+	adReport.Unlock()
 }
 
 // StopControlPlane halts the check-in loop (config change / shutdown).
@@ -541,7 +566,7 @@ func noteUnmanagedOverrideUse() {
 		"locally-scheduled backup because the control server is unreachable (last successful "+
 		"check-in: %s). Org policy restricts this machine to managed jobs; clear the flag once "+
 		"the server is reachable again.", when)
-	writeDebugLog(msg)
+	writeInfoLog(msg)
 	writeBackupLog(msg)
 }
 

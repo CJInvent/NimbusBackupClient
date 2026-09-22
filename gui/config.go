@@ -249,7 +249,7 @@ func LoadConfig() *Config {
 		if err := config.Save(); err != nil {
 			writeWarnLog(fmt.Sprintf("[Secrets] WARNING: failed to persist secret encryption migration: %v", err))
 		} else {
-			writeDebugLog("[Secrets] Migrated stored secrets to encrypted form (encv1)")
+			writeInfoLog("[Secrets] Migrated stored secrets to encrypted form (encv1)")
 		}
 	}
 

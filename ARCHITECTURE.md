@@ -343,13 +343,41 @@ appearance model as the NimbusControl portal** so both surfaces match:
 
 ## Logging
 
-Writers `logging_gui.go`/`logging_service.go`, rotation in `log_rotation.go`,
-files under `C:\ProgramData\NimbusBackup\` (`service-*.log`, `backup-*.log`).
-`writeDebugLog`/`writeBackupLog`; verbose per-category lines via
-`writeCatLog` behind `-logcat pbs,chunks,security,api|all` (default quiet — a
-931 GB machine backup is ~240k chunks; chunk logging is additionally throttled
-to 1/256). `pbscommon.DebugLogFn` and `snapshot.LogFn` route shared-package
+One module, `gui/logging.go` (the per-build file name is the only thing
+`logging_variant_*.go` decides); files under `C:\ProgramData\NimbusBackup\`
+(`service-*.log`, `backup-*.log`, per-run `backup-<ts>-<id>.log`).
+
+Levels, same names and order as the server's `Core\Log`:
+
+| Writer | Label | Suppressed by |
+|---|---|---|
+| `writeCatLog` / `writeDebugLevelLog` | `DEBUG` | level above DEBUG, unless the category was enabled at launch (`-logcat pbs,chunks,security,api\|all`) |
+| `writeInfoLog` | `SERVICE` | never below INFO (the settable floor) |
+| `writeWarnLog` | `WARN` | never |
+| `writeErrorLog` | `ERROR` | never |
+| `writeBackupLog` | `BACKUP` | never -- it is the run's own record |
+
+The level comes from `HKLM\SOFTWARE\NimbusBackup\LogLevel` (TRACE, DEBUG,
+INFO; default INFO), and is lowered to DEBUG while the control server's
+per-machine debug deadline is in the future (`debug_until` on check-in,
+V4-RUN-AUDIT §4.3). The deadline is enforced here, so debug ends on time with
+no server contact. `writeInfoLog` was called `writeDebugLog` while writing at
+INFO; renamed 2026-09-22.
+
+WARN and ERROR lines are also queued for the control plane
+(`gui/logqueue.go`, service build only; V4-RUN-AUDIT §4.1): persistent,
+bounded by count and bytes with a reported drop count, rate-capped per
+component, delivered with the check-in and trimmed by the server's ack. Lines
+are redacted (`redactLogLine`) before they are written or queued.
+
+The `controlplane` package logs through `controlplane.SetLogger`, installed as
+`controlplaneLog`, so its lines keep their severity; the stdlib `log`
+redirect (`logredirect.go`) remains the catch-all for third-party output, at
+INFO. `pbscommon.DebugLogFn` and `snapshot.LogFn` route shared-package
 diagnostics into the same log so nothing prints into the void in a service.
+
+Emission discipline is `docs/V4-RUN-AUDIT.md` §5 in the server repository: log
+changes, not polls; collapse repeats (`controlplane.repeatGate`, `sayOnce`).
 
 ## Build & release
 
@@ -598,7 +626,7 @@ code CI had never executed:
   to the original destination with no error anywhere. `Init` now rebinds, with
   the global held in an `atomic.Pointer` so `Get()` racing `Init()` is
   race-clean. Nothing in the workspace imported this package; it was deleted in Phase 4,
-  logging being `writeDebugLog`/`writeBackupLog`/`writeCatLog` in `gui/`. The
+  logging being `writeInfoLog`/`writeBackupLog`/`writeCatLog` in `gui/`. The
   fix still mattered on the way out — shipping a helper whose entry point
   ignores its arguments is worse than either adopting or removing it.
 
@@ -814,7 +842,7 @@ and booted, with the runbook committed.
    provider's own signing step. Retire the release-notes false-positive
    banner once it lands.
 2. **`pkg/logger` deleted** — it was imported by nothing; logging is
-   `writeDebugLog`/`writeBackupLog`/`writeCatLog` in `gui/`. Shipping a
+   `writeInfoLog`/`writeBackupLog`/`writeCatLog` in `gui/`. Shipping a
    helper whose entry point silently ignored its arguments (fixed in Phase 1)
    and which nothing called was debt in both directions.
 3. **`FEATURES_STATUS.md` resolved — deleted.** README (both languages)

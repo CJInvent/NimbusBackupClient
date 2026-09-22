@@ -1,12 +1,14 @@
 package main
 
 import (
+	"controlplane"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,7 +58,7 @@ import (
 // offer WARN and ERROR as settable levels. Classification was done — see
 // writeWarnLog and writeErrorLog below — but it CANNOT BE CERTIFIED COMPLETE,
 // for a reason that is structural rather than a matter of effort: eight call
-// sites pass a VARIABLE, `writeDebugLog(msg)`. Whether that line is narration
+// sites pass a VARIABLE, `writeInfoLog(msg)`. Whether that line is narration
 // or a failure depends on what the caller put in it, and no amount of reading
 // this file tells you.
 //
@@ -169,8 +171,39 @@ func resolveLogLevel(name string) logLevel {
 	return levelInfo
 }
 
+// debugUntil is the server's per-machine debug deadline (unix seconds; 0 =
+// off), delivered on every check-in (V4-RUN-AUDIT §4.3). While it is in the
+// future the effective level is DEBUG, whatever the registry says; once it
+// passes the machine is back at its own level on the very next line, even if
+// the server never speaks again -- debug left on is how a disk fills.
+var debugUntil atomic.Int64
+
+// effectiveLevel is the registry level, lowered to DEBUG while a server debug
+// window is open. Never raised: the server can ask for MORE detail, not less.
+func effectiveLevel() logLevel {
+	if u := debugUntil.Load(); u > 0 && time.Now().Unix() < u && activeLevel > levelDebug {
+		return levelDebug
+	}
+	return activeLevel
+}
+
 // logLevelEnabled reports whether a level is written.
-func logLevelEnabled(l logLevel) bool { return l >= activeLevel }
+func logLevelEnabled(l logLevel) bool { return l >= effectiveLevel() }
+
+// setServerDebugUntil applies the deadline from a check-in and logs the
+// transition -- on change only, since it arrives every cycle.
+func setServerDebugUntil(until int64) {
+	prev := debugUntil.Swap(until)
+	now := time.Now().Unix()
+	wasOn, isOn := prev > now, until > now
+	switch {
+	case isOn && (!wasOn || prev != until):
+		writeInfoLog(fmt.Sprintf("[logging] control server enabled DEBUG logging until %s",
+			time.Unix(until, 0).UTC().Format(time.RFC3339)))
+	case !isOn && wasOn:
+		writeInfoLog("[logging] control server turned DEBUG logging off")
+	}
+}
 
 // GetServiceLogPath returns the path to the service log file
 func GetServiceLogPath() string {
@@ -228,12 +261,18 @@ func EndBackupRunLog(logger *RotatingLogger) {
 	}
 }
 
-// writeDebugLog writes to the service log (scheduler, general operations).
+// writeInfoLog writes to the service log (scheduler, general operations).
 //
 // INFO by level, which is what its ~280 call sites are: operational lines
 // somebody reading a support bundle expects to find. Verbose diagnostics go
 // through writeCatLog instead, and are DEBUG.
-func writeDebugLog(message string) {
+//
+// This function was called writeDebugLog while writing at INFO, which is the
+// spelling-versus-behavior mismatch rule 29 names: every reader assumed its
+// lines were suppressed by default, and they never were. Renamed, not
+// re-levelled, because INFO is what these lines are. The file label stays
+// [SERVICE]: log readers and the run-window extractor already parse it.
+func writeInfoLog(message string) {
 	if !logLevelEnabled(levelInfo) {
 		return
 	}
@@ -246,17 +285,50 @@ func writeDebugLog(message string) {
 // Never suppressed. WARN is above INFO and the settable level stops at INFO,
 // so raising the level cannot hide these — which is what makes labelling them
 // safe even though the classification is incomplete.
+//
+// Also queued for delivery to the control plane (logqueue.go), because a
+// warning that never leaves the machine is one nobody reads until it is too
+// late.
 func writeWarnLog(message string) {
 	writeLogToLogger(serviceLogger, "WARN", message)
+	queueForServer("warn", redactLogLine(message))
 }
 
 // writeErrorLog records an operational failure.
 //
 // Never suppressed, for the same reason as writeWarnLog. If a line that
-// belongs here is still going through writeDebugLog, the consequence is that
+// belongs here is still going through writeInfoLog, the consequence is that
 // it is labelled SERVICE rather than ERROR — mislabelled, not lost.
 func writeErrorLog(message string) {
 	writeLogToLogger(serviceLogger, "ERROR", message)
+	queueForServer("error", redactLogLine(message))
+}
+
+// writeDebugLevelLog writes a DEBUG line: suppressed unless the registry level
+// is DEBUG or lower, or a server debug window is open. The one writer for the
+// DEBUG label, used by writeCatLog and by the control-plane package's
+// LogDebug lines.
+func writeDebugLevelLog(message string) {
+	if !logLevelEnabled(levelDebug) {
+		return
+	}
+	writeLogToLogger(serviceLogger, "DEBUG", message)
+}
+
+// controlplaneLog is installed with controlplane.SetLogger, so the control
+// plane package's lines keep their severity instead of all arriving at INFO
+// through the stdlib redirect.
+func controlplaneLog(level controlplane.LogLevel, message string) {
+	switch level {
+	case controlplane.LogDebug:
+		writeDebugLevelLog(message)
+	case controlplane.LogInfo:
+		writeInfoLog(message)
+	case controlplane.LogWarn:
+		writeWarnLog(message)
+	default:
+		writeErrorLog(message)
+	}
 }
 
 // writeBackupLog writes to backup log (backup operations).

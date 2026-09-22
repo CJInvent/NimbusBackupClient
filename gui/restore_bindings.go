@@ -60,7 +60,7 @@ func (a *App) requireService() error {
 		return errors.New(errServiceUnavailable)
 	}
 	if a.mode != api.ModeService && a.apiClient.IsServiceAvailable() {
-		writeDebugLog("[Mode] Service now reachable")
+		writeInfoLog("[Mode] Service now reachable")
 		a.mode = api.ModeService
 	}
 	if a.mode != api.ModeService {
@@ -170,7 +170,7 @@ func (a *App) emitRestoreComplete(err error) {
 // pbsID selects the PBS server. Empty means "use the default server" — kept
 // for backward compatibility with the legacy single-PBS UI.
 func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, error) {
-	writeDebugLog(fmt.Sprintf("ListSnapshots(pbs=%s, backupID=%s)", pbsID, backupID))
+	writeInfoLog(fmt.Sprintf("ListSnapshots(pbs=%s, backupID=%s)", pbsID, backupID))
 
 	var snaps []SnapshotInfo
 	if err := a.restoreQuery(opSnapshots, ListSnapshotsParams{PBSID: pbsID, BackupID: backupID}, &snaps); err != nil {
@@ -192,7 +192,7 @@ func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, e
 			"files":       s.Files,
 		})
 	}
-	writeDebugLog(fmt.Sprintf("Returning %d snapshots", len(result)))
+	writeInfoLog(fmt.Sprintf("Returning %d snapshots", len(result)))
 	return result, nil
 }
 
@@ -204,7 +204,7 @@ func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, e
 // returned by ListSnapshots). Set forceRefresh to bypass the service's listing
 // cache — useful for a manual "Reload" action.
 func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, forceRefresh bool) ([]SnapshotEntry, error) {
-	writeDebugLog(fmt.Sprintf("ListSnapshotContents(pbs=%s, backupID=%s, unix=%d, force=%v)",
+	writeInfoLog(fmt.Sprintf("ListSnapshotContents(pbs=%s, backupID=%s, unix=%d, force=%v)",
 		pbsID, backupID, snapshotUnix, forceRefresh))
 
 	var entries []SnapshotEntry
@@ -219,7 +219,7 @@ func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, f
 // snapshot. Returns nil (not an error) when the snapshot predates the sidecar
 // — the frontend should fall back to a generic banner in that case.
 func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*BackupMeta, error) {
-	writeDebugLog(fmt.Sprintf("GetSnapshotMeta(pbs=%s, backupID=%s, unix=%d)",
+	writeInfoLog(fmt.Sprintf("GetSnapshotMeta(pbs=%s, backupID=%s, unix=%d)",
 		pbsID, backupID, snapshotUnix))
 
 	var meta *BackupMeta
@@ -249,7 +249,7 @@ func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*Back
 // "restore:progress" and the outcome on "restore:complete", exactly as before.
 func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string,
 	includePaths []string, allowCrossHost, restoreACLs, restoreADS, restoreTimestamps, overwrite bool) error {
-	writeDebugLog(fmt.Sprintf("RestoreSnapshot(pbs=%s, backupID=%s, snap=%s, mode=%s, dest=%s, includes=%d, crossHost=%v, acl=%v, ads=%v, ts=%v, overwrite=%v)",
+	writeInfoLog(fmt.Sprintf("RestoreSnapshot(pbs=%s, backupID=%s, snap=%s, mode=%s, dest=%s, includes=%d, crossHost=%v, acl=%v, ads=%v, ts=%v, overwrite=%v)",
 		pbsID, backupID, snapshotID, mode, destPath, len(includePaths), allowCrossHost, restoreACLs, restoreADS, restoreTimestamps, overwrite))
 
 	if backupID == "" {
@@ -307,7 +307,7 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 // call, so a console restarted mid-search loses its view of the search and not
 // the search itself.
 func (a *App) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUnix int64, assembleMissing bool) (*SearchResult, error) {
-	writeDebugLog(fmt.Sprintf("SearchFiles(pbs=%s, prefix=%s, query=%q, mode=%s, from=%d, to=%d, assemble=%v)",
+	writeInfoLog(fmt.Sprintf("SearchFiles(pbs=%s, prefix=%s, query=%q, mode=%s, from=%d, to=%d, assemble=%v)",
 		pbsID, hostPrefix, query, mode, fromUnix, toUnix, assembleMissing))
 
 	raw, err := a.awaitRestoreJob(opSearch, SearchParams{
@@ -341,7 +341,7 @@ func (a *App) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUni
 // boundary. The call returning does not mean the search has stopped yet — the
 // search returns its partial result with Cancelled=true.
 func (a *App) CancelSearch() {
-	writeDebugLog("CancelSearch requested")
+	writeInfoLog("CancelSearch requested")
 	if err := a.requireService(); err != nil {
 		return
 	}
@@ -361,7 +361,7 @@ func (a *App) CancelSearch() {
 func (a *App) DownloadSelection(pbsID, backupID, snapshotID string,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("DownloadSelection(pbs=%s, backup=%s, snap=%s, includes=%d, dest=%s, zip=%v, needed=%d)",
+	writeInfoLog(fmt.Sprintf("DownloadSelection(pbs=%s, backup=%s, snap=%s, includes=%d, dest=%s, zip=%v, needed=%d)",
 		pbsID, backupID, snapshotID, len(includePaths), destPath, asZip, neededBytes))
 
 	_, err := a.awaitRestoreJob(opDownload, DownloadParams{
@@ -437,7 +437,7 @@ func (a *App) LastVolumeListTruncated() bool { return a.lastVolumeTruncated }
 func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
+	writeInfoLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
 		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
 
 	_, err := a.awaitRestoreJob(opVolumeDownload, VolumeDownloadParams{
@@ -461,7 +461,7 @@ func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, di
 	includePaths []string, destDir string, keepStructure, overwrite bool,
 	restoreMtimes, restoreACLs, restoreADS bool, neededBytes int64) error {
 
-	writeDebugLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
+	writeInfoLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
 		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
 
 	_, err := a.awaitRestoreJob(opVolumeFileRestore, VolumeFileRestoreParams{

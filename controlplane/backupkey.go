@@ -289,6 +289,18 @@ func BackupKeyDecision(ad *BackupKeyAd, st KeyStorage, alreadyFetched bool) (Bac
 // only this machine has.
 func KeyStatusFor(ad *BackupKeyAd, st KeyStorage) KeyStatusReport {
 	switch {
+	case ad == nil:
+		// NO KEY IS ASSIGNED, so nothing this machine holds -- or lacks, or
+		// cannot open -- is a fault. Reported as ok, naming whatever key is
+		// still stored so the server can see it, and it is what clears a
+		// verdict judged against an assignment that no longer exists: a
+		// machine moved from an encrypted scope to none used to keep its
+		// stale 'mismatch' forever, because this case was never reported.
+		return KeyStatusReport{
+			Status: KeyStorageOK,
+			KeyID:  st.StoredKeyID,
+			Detail: "no backup key is assigned to this machine",
+		}
 	case ad != nil && (ad.Unavailable || strings.TrimSpace(ad.KeyID) == ""):
 		return KeyStatusReport{Status: KeyStorageUnavailable, Detail: "server-required backup key is unavailable"}
 	case st.Err != nil:

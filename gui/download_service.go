@@ -37,7 +37,7 @@ import (
 // itself. The numbers were chosen from how long each phase actually takes;
 // they are kept rather than re-derived so the bar behaves as users expect.
 func (a *App) downloadSelection(p DownloadParams, progress api.RestoreProgress) error {
-	writeDebugLog(fmt.Sprintf("downloadSelection(pbs=%s, backup=%s, includes=%d, dest=%s, zip=%v, needed=%d)",
+	writeInfoLog(fmt.Sprintf("downloadSelection(pbs=%s, backup=%s, includes=%d, dest=%s, zip=%v, needed=%d)",
 		p.PBSID, p.BackupID, len(p.IncludePaths), p.DestPath, p.AsZip, p.NeededBytes))
 
 	if p.DestPath == "" {
@@ -120,6 +120,6 @@ func (a *App) downloadSelection(p DownloadParams, progress api.RestoreProgress) 
 		}
 	}
 	progress(100, "Download complete", 0, 0, 0, -1)
-	writeDebugLog(fmt.Sprintf("downloadSelection: wrote %s", p.DestPath))
+	writeInfoLog(fmt.Sprintf("downloadSelection: wrote %s", p.DestPath))
 	return nil
 }

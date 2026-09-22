@@ -144,7 +144,7 @@ func (a *App) CreateFolder(parent, name string) (string, error) {
 	if err := os.Mkdir(full, 0o755); err != nil {
 		return "", fmt.Errorf("cannot create folder: %v", err)
 	}
-	writeDebugLog("PathPicker: created folder " + full)
+	writeInfoLog("PathPicker: created folder " + full)
 	return full, nil
 }
 

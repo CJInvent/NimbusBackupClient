@@ -83,7 +83,7 @@ func sayOnce(state string, emit func()) bool {
 func (a *App) applyPBSTargetFromCheckin(t *controlplane.PBSTarget) {
 	if t == nil {
 		sayOnce("none", func() {
-			writeDebugLog("[PBS] the control server provisions no PBS target for this machine; " +
+			writeInfoLog("[PBS] the control server provisions no PBS target for this machine; " +
 				"keeping the settings already configured here")
 		})
 		return
@@ -118,7 +118,7 @@ func (a *App) applyPBSTargetFromCheckin(t *controlplane.PBSTarget) {
 			writeErrorLog(fmt.Sprintf("[PBS] ERROR: could not persist the server-provisioned PBS target: %v", err))
 			return
 		}
-		writeDebugLog(fmt.Sprintf(
+		writeInfoLog(fmt.Sprintf(
 			"[PBS] control server provisioned this machine: %s datastore=%q namespace=%q as %s",
 			t.BaseURL, t.Datastore, t.Namespace, t.AuthID))
 	}
@@ -128,7 +128,7 @@ func (a *App) applyPBSTargetFromCheckin(t *controlplane.PBSTarget) {
 	// until the first backup fails.
 	if cfg.Secret != "" && cfg.AuthID == t.AuthID {
 		sayOnce("held:"+t.AuthID, func() {
-			writeDebugLog("[PBS] the credential this machine holds matches the one the server provisioned")
+			writeInfoLog("[PBS] the credential this machine holds matches the one the server provisioned")
 		})
 		return
 	}
@@ -187,7 +187,7 @@ func (a *App) fetchPBSCredential(client *controlplane.Client, authID string) {
 			// acts, with nothing for this machine to do but ask again later --
 			// which the cooldown above already schedules.
 			sayOnce("unprovisioned:"+authID, func() {
-				writeDebugLog("[PBS] the control server has no credential provisioned for this machine yet")
+				writeInfoLog("[PBS] the control server has no credential provisioned for this machine yet")
 			})
 		case errors.Is(err, controlplane.ErrKeyRequired):
 			// withAgentKey already registered and retried once. Reaching here
@@ -229,7 +229,7 @@ func (a *App) fetchPBSCredential(client *controlplane.Client, authID string) {
 		writeErrorLog(fmt.Sprintf("[PBS] ERROR: could not store the PBS credential: %v", err))
 		return
 	}
-	writeDebugLog(fmt.Sprintf("[PBS] stored the PBS credential the control server issued for %s", cred.AuthID))
+	writeInfoLog(fmt.Sprintf("[PBS] stored the PBS credential the control server issued for %s", cred.AuthID))
 
 	pbsTargetMu.Lock()
 	pbsTargetLastSaid = "held:" + cred.AuthID

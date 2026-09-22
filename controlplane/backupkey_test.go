@@ -220,6 +220,14 @@ func TestKeyStatusMatchesTheDecision(t *testing.T) {
 		// EPHEMERAL IS NOT A FAULT. Reporting it as one would fill a fleet view
 		// with red for machines working exactly as designed.
 		{"ephemeral", adFor(assigned), weak(), KeyStorageOK, assigned},
+		// NO KEY ASSIGNED IS NOT A FAULT, whatever storage holds. These are
+		// the reports that clear a stale verdict when a machine is moved out
+		// of an encrypted scope; before, nothing was reported at all and the
+		// server kept 'mismatch' forever.
+		{"unassigned, old key still stored", nil, durable(other), KeyStorageOK, other},
+		{"unassigned, nothing stored", nil, durable(""), KeyStorageOK, ""},
+		{"unassigned, storage unreadable", nil, broken(errors.New("nope")), KeyStorageOK, ""},
+		{"unassigned, ephemeral machine", nil, weak(), KeyStorageOK, ""},
 	}
 
 	for _, c := range cases {

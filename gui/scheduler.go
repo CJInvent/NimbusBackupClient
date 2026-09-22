@@ -100,7 +100,7 @@ func getJobHistoryPath() (string, error) {
 
 // SaveScheduledJob saves a new scheduled job
 func (a *App) SaveScheduledJob(job ScheduledJob) error {
-	writeDebugLog(fmt.Sprintf("SaveScheduledJob called for: %s", job.Name))
+	writeInfoLog(fmt.Sprintf("SaveScheduledJob called for: %s", job.Name))
 
 	// Load existing jobs
 	jobs, err := a.GetScheduledJobs()
@@ -132,7 +132,7 @@ func (a *App) SaveScheduledJob(job ScheduledJob) error {
 		return fmt.Errorf("failed to write jobs file: %w", err)
 	}
 
-	writeDebugLog(fmt.Sprintf("Scheduled job saved: %s (next run: %s)", job.Name, job.NextRun))
+	writeInfoLog(fmt.Sprintf("Scheduled job saved: %s (next run: %s)", job.Name, job.NextRun))
 
 	// Note: For automatic execution after reboot, use the MSI installer
 	// which installs NimbusBackup as a Windows Service
@@ -193,7 +193,7 @@ func (a *App) GetScheduledJobsForAPI() []map[string]interface{} {
 
 // UpdateScheduledJob updates an existing scheduled job
 func (a *App) UpdateScheduledJob(job ScheduledJob) error {
-	writeDebugLog(fmt.Sprintf("UpdateScheduledJob called for: %s", job.Name))
+	writeInfoLog(fmt.Sprintf("UpdateScheduledJob called for: %s", job.Name))
 
 	// Load existing jobs
 	jobs, err := a.GetScheduledJobs()
@@ -234,13 +234,13 @@ func (a *App) UpdateScheduledJob(job ScheduledJob) error {
 		return fmt.Errorf("failed to write jobs file: %w", err)
 	}
 
-	writeDebugLog(fmt.Sprintf("Scheduled job updated: %s (next run: %s)", job.Name, job.NextRun))
+	writeInfoLog(fmt.Sprintf("Scheduled job updated: %s (next run: %s)", job.Name, job.NextRun))
 	return nil
 }
 
 // DeleteScheduledJob removes a scheduled job by ID
 func (a *App) DeleteScheduledJob(jobID string) error {
-	writeDebugLog(fmt.Sprintf("DeleteScheduledJob called for ID: %s", jobID))
+	writeInfoLog(fmt.Sprintf("DeleteScheduledJob called for ID: %s", jobID))
 
 	jobs, err := a.GetScheduledJobs()
 	if err != nil {
@@ -359,7 +359,7 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	// set restrict_unmanaged_backups would silently stop its OWN jobs on
 	// every machine it restricted — turning a lockdown into an outage.
 	if requestID == "" && !isManagedJobID(job.ID) && !UnmanagedBackupsPermitted() {
-		writeDebugLog(fmt.Sprintf("Job %s not started: %v", job.Name, ErrUnmanagedBackupsDisabled))
+		writeInfoLog(fmt.Sprintf("Job %s not started: %v", job.Name, ErrUnmanagedBackupsDisabled))
 		return
 	}
 
@@ -380,10 +380,10 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 		runningJobsMutex.Unlock()
 	}()
 
-	writeDebugLog(fmt.Sprintf("Executing scheduled job: %s", job.Name))
+	writeInfoLog(fmt.Sprintf("Executing scheduled job: %s", job.Name))
 
 	// Use StartBackup to route through mode detection (service or direct)
-	writeDebugLog(fmt.Sprintf("[Scheduled Job] Executing via StartBackup (mode: %s)", a.mode.String()))
+	writeInfoLog(fmt.Sprintf("[Scheduled Job] Executing via StartBackup (mode: %s)", a.mode.String()))
 
 	// Default to "fastest" if compression not set in job
 	compression := job.Compression

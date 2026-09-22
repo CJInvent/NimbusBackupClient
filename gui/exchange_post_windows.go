@@ -73,7 +73,7 @@ func runExchangeLogTruncation() {
 	}
 	_ = tmp.Close()
 
-	writeDebugLog(fmt.Sprintf("[Exchange] log truncation: running diskshadow for volumes %v", vols))
+	writeInfoLog(fmt.Sprintf("[Exchange] log truncation: running diskshadow for volumes %v", vols))
 	runExchangeCommand("log truncation (diskshadow)", "diskshadow.exe", "/s", tmpPath)
 }
 
@@ -111,11 +111,11 @@ func runExchangeCommand(label, name string, args ...string) {
 		}
 		writeErrorLog(fmt.Sprintf("[Exchange] TASK FAILED: %s%s: %v", label, code, err))
 		if trimmed != "" {
-			writeDebugLog(fmt.Sprintf("[Exchange] %s output: %s", label, truncateForLog(trimmed, 3000)))
+			writeInfoLog(fmt.Sprintf("[Exchange] %s output: %s", label, truncateForLog(trimmed, 3000)))
 		}
 		return
 	}
-	writeDebugLog(fmt.Sprintf("[Exchange] task OK: %s", label))
+	writeInfoLog(fmt.Sprintf("[Exchange] task OK: %s", label))
 	if trimmed != "" {
 		writeCatLog(catSecurity, fmt.Sprintf("[Exchange] %s output: %s", label, truncateForLog(trimmed, 3000)))
 	}

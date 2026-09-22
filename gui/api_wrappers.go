@@ -72,7 +72,7 @@ func (a *App) pinFingerprintLocal(id, fingerprint string) error {
 	normalize := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, ":", "")) }
 	if verify := LoadConfig(); verify != nil {
 		if s, gerr := verify.GetPBSServer(id); gerr == nil && s != nil && normalize(s.CertFingerprint) == normalize(fingerprint) {
-			writeDebugLog(fmt.Sprintf("pinFingerprintLocal: fingerprint for %q persisted to disk OK", id))
+			writeInfoLog(fmt.Sprintf("pinFingerprintLocal: fingerprint for %q persisted to disk OK", id))
 		} else {
 			onDisk := ""
 			if s != nil {
@@ -89,7 +89,7 @@ func (a *App) pinFingerprintLocal(id, fingerprint string) error {
 // keeping the service the single writer of config.json. It performs the write in
 // this (service) process.
 func (a *App) PinServerFingerprint(id, fingerprint string) error {
-	writeDebugLog(fmt.Sprintf("PinServerFingerprint(%s) called (service-side write)", id))
+	writeInfoLog(fmt.Sprintf("PinServerFingerprint(%s) called (service-side write)", id))
 	return a.pinFingerprintLocal(id, fingerprint)
 }
 
@@ -109,7 +109,7 @@ func (a *App) SavePBSServerFromMap(server map[string]interface{}) error {
 	if pbs.Secret == "" && existing != nil {
 		pbs.Secret = existing.Secret
 	}
-	writeDebugLog(fmt.Sprintf("SavePBSServerFromMap(%s) called (service-side write)", pbs.ID))
+	writeInfoLog(fmt.Sprintf("SavePBSServerFromMap(%s) called (service-side write)", pbs.ID))
 	if existing != nil {
 		return a.config.UpdatePBSServer(&pbs)
 	}
@@ -118,13 +118,13 @@ func (a *App) SavePBSServerFromMap(server map[string]interface{}) error {
 
 // DeletePBSServerByID is the service-side write for a delegated PBS server delete.
 func (a *App) DeletePBSServerByID(id string) error {
-	writeDebugLog(fmt.Sprintf("DeletePBSServerByID(%s) called (service-side write)", id))
+	writeInfoLog(fmt.Sprintf("DeletePBSServerByID(%s) called (service-side write)", id))
 	return a.config.DeletePBSServer(id)
 }
 
 // SetDefaultPBSByID is the service-side write for a delegated default-server set.
 func (a *App) SetDefaultPBSByID(id string) error {
-	writeDebugLog(fmt.Sprintf("SetDefaultPBSByID(%s) called (service-side write)", id))
+	writeInfoLog(fmt.Sprintf("SetDefaultPBSByID(%s) called (service-side write)", id))
 	return a.config.SetDefaultPBS(id)
 }
 
@@ -148,7 +148,7 @@ func (a *App) SaveConfigFromMap(configData map[string]interface{}) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	writeDebugLog("SaveConfigFromMap() called (service-side write)")
+	writeInfoLog("SaveConfigFromMap() called (service-side write)")
 	if err := cfg.Save(); err != nil {
 		return err
 	}

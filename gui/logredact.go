@@ -7,7 +7,7 @@ import "regexp"
 // authorization headers).
 //
 // APPLIED TO THE WHOLE RENDERED LINE, in writeLogToLogger, so it cannot be
-// bypassed by a caller. That is the point: this agent has ~280 writeDebugLog
+// bypassed by a caller. That is the point: this agent has ~280 writeInfoLog
 // call sites, and the history of secrets in logs is entirely callers who did
 // not think to name the field. A per-call-site opt-in would be a list somebody
 // has to keep complete forever.

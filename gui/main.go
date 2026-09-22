@@ -51,7 +51,7 @@ func init() {
 	defer func() {
 		if r := recover(); r != nil {
 			crashMsg := fmt.Sprintf("PANIC during init: %v\n%s", r, debug.Stack())
-			writeDebugLog(crashMsg)
+			writeInfoLog(crashMsg)
 			writeCrashReport(crashMsg)
 		}
 	}()
@@ -69,7 +69,7 @@ func main() {
 	flag.Parse()
 	if *logcat != "" {
 		SetLogCategories(*logcat)
-		writeDebugLog("Detailed log categories enabled: " + *logcat)
+		writeInfoLog("Detailed log categories enabled: " + *logcat)
 	}
 
 	// Check for single instance (GUI only)
@@ -83,7 +83,7 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			crashMsg := fmt.Sprintf("PANIC in main: %v\n%s", r, debug.Stack())
-			writeDebugLog(crashMsg)
+			writeInfoLog(crashMsg)
 			writeCrashReport(crashMsg)
 			fmt.Fprint(os.Stderr, "\n!!! APPLICATION CRASHED !!!\nSee crash_report.txt for details\n")
 			// Best-effort tray cleanup: an unhandled panic used to skip the
@@ -96,11 +96,11 @@ func main() {
 	}()
 
 	// Logging is now handled by RotatingLogger (initialized in logging_gui.go)
-	writeDebugLog(fmt.Sprintf("=== %s v%s Starting ===", appName, appVersion))
-	writeDebugLog(fmt.Sprintf("Time: %s", time.Now().Format(time.RFC3339)))
-	writeDebugLog(fmt.Sprintf("Service log: %s", GetServiceLogPath()))
-	writeDebugLog(fmt.Sprintf("Backup log: %s", GetBackupLogPath()))
-	writeDebugLog(fmt.Sprintf("Crash report path: %s", crashReportPath))
+	writeInfoLog(fmt.Sprintf("=== %s v%s Starting ===", appName, appVersion))
+	writeInfoLog(fmt.Sprintf("Time: %s", time.Now().Format(time.RFC3339)))
+	writeInfoLog(fmt.Sprintf("Service log: %s", GetServiceLogPath()))
+	writeInfoLog(fmt.Sprintf("Backup log: %s", GetBackupLogPath()))
+	writeInfoLog(fmt.Sprintf("Crash report path: %s", crashReportPath))
 
 	// Install SIGINT/SIGTERM handler so any live PBS backup session gets
 	// closed before we exit. Without this, a forced kill (e.g. "update
@@ -111,7 +111,7 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		sig := <-sigChan
-		writeDebugLog(fmt.Sprintf("Signal %v received — closing active PBS sessions", sig))
+		writeInfoLog(fmt.Sprintf("Signal %v received — closing active PBS sessions", sig))
 		pbscommon.CloseAllActive()
 		os.Exit(1)
 	}()
@@ -122,7 +122,7 @@ func main() {
 
 	// Create app instance
 	app := NewApp()
-	writeDebugLog("App instance created")
+	writeInfoLog("App instance created")
 
 	// Resolve the WebView2 user-data folder. Prefer Local AppData: it's always
 	// provisioned per profile and isn't subject to roaming-profile redirection,
@@ -144,7 +144,7 @@ func main() {
 		webviewDataDir = filepath.Join(os.TempDir(), "NimbusBackup", "WebView2")
 		_ = os.MkdirAll(webviewDataDir, 0o755)
 	}
-	writeDebugLog(fmt.Sprintf("WebView2 user-data path: %s", webviewDataDir))
+	writeInfoLog(fmt.Sprintf("WebView2 user-data path: %s", webviewDataDir))
 
 	// Create application options
 	appOptions := &options.App{
@@ -176,18 +176,18 @@ func main() {
 	}
 
 	if *minimized {
-		writeDebugLog("Starting in minimized mode (hidden to tray)")
+		writeInfoLog("Starting in minimized mode (hidden to tray)")
 	}
 
-	writeDebugLog("Application options configured")
+	writeInfoLog("Application options configured")
 
 	// Run application
-	writeDebugLog("Starting Wails runtime...")
+	writeInfoLog("Starting Wails runtime...")
 	err := wails.Run(appOptions)
 
 	if err != nil {
 		errMsg := fmt.Sprintf("ERROR: Wails.Run failed: %v\nStack trace:\n%s", err, debug.Stack())
-		writeDebugLog(errMsg)
+		writeInfoLog(errMsg)
 		writeCrashReport(errMsg)
 		fmt.Fprint(os.Stderr, "\n!!! APPLICATION FAILED TO START !!!\n")
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -195,7 +195,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	writeDebugLog("Application shutdown normally")
+	writeInfoLog("Application shutdown normally")
 }
 
 func writeCrashReport(message string) {
@@ -231,13 +231,13 @@ Please report this issue to RDEM Systems:
 // startup is called when the app starts
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	writeDebugLog("App.startup() called")
+	writeInfoLog("App.startup() called")
 	a.GetSecurityWarnings() // logs posture warnings once at startup
 
 	// Detect execution mode (Service vs Standalone)
 	detector := api.NewModeDetector(getAPITokenPath())
 	a.mode = detector.DetectMode()
-	writeDebugLog(fmt.Sprintf("Execution mode: %s", a.mode.String()))
+	writeInfoLog(fmt.Sprintf("Execution mode: %s", a.mode.String()))
 
 	// The GUI never schedules, never checks in, and never cleans up after a
 	// backup engine, because it no longer HAS one (docs/V4-PIPELINE.md
@@ -252,7 +252,7 @@ func (a *App) startup(ctx context.Context) {
 	// control-plane check-in loop, and its own VSS cleanup, in parallel with
 	// the service doing the same.
 	if a.mode != api.ModeService {
-		writeDebugLog("Service unreachable at startup - the GUI will show status only until it comes back")
+		writeInfoLog("Service unreachable at startup - the GUI will show status only until it comes back")
 	}
 
 	// Startup jobs are NOT run here. They belong to the service, which
@@ -270,12 +270,12 @@ func (a *App) startup(ctx context.Context) {
 
 // domReady is called after front-end resources have been loaded
 func (a *App) domReady(ctx context.Context) {
-	writeDebugLog("App.domReady() called - UI loaded successfully")
+	writeInfoLog("App.domReady() called - UI loaded successfully")
 }
 
 // beforeClose is called when the application is about to quit
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
-	writeDebugLog("App.beforeClose() called - minimizing to tray")
+	writeInfoLog("App.beforeClose() called - minimizing to tray")
 	// Instead of closing, minimize to tray
 	a.MinimizeToTray()
 	return true // Prevent actual close
@@ -283,7 +283,7 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 
 // shutdown is called at application termination
 func (a *App) shutdown(ctx context.Context) {
-	writeDebugLog("App.shutdown() called — closing active PBS sessions")
+	writeInfoLog("App.shutdown() called — closing active PBS sessions")
 	pbscommon.CloseAllActive()
 }
 
@@ -291,7 +291,7 @@ func (a *App) shutdown(ctx context.Context) {
 // Wails-bound, so it must never expose tokens to the frontend; internal callers
 // use a.config directly.
 func (a *App) GetConfig() *Config {
-	writeDebugLog("GetConfig() called from frontend")
+	writeInfoLog("GetConfig() called from frontend")
 	return a.config.sanitized()
 }
 
@@ -302,7 +302,7 @@ func (a *App) GetHostname() string {
 		writeErrorLog(fmt.Sprintf("GetHostname() error: %v", err))
 		return "unknown"
 	}
-	writeDebugLog(fmt.Sprintf("GetHostname() returned: %s", hostname))
+	writeInfoLog(fmt.Sprintf("GetHostname() returned: %s", hostname))
 	return hostname
 }
 
@@ -350,7 +350,7 @@ func (a *App) IsReadOnly() bool {
 }
 
 func (a *App) GetVersion() string {
-	writeDebugLog(fmt.Sprintf("GetVersion() returned: %s", appVersion))
+	writeInfoLog(fmt.Sprintf("GetVersion() returned: %s", appVersion))
 	return appVersion
 }
 
@@ -402,13 +402,13 @@ func (a *App) GetRecentRuns(days int) (*api.RunsResponse, error) {
 // (machine) backups. Bound to the frontend via Wails so the Backup tab can
 // populate its disk picker. Returns an error on non-Windows builds.
 func (a *App) ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
-	writeDebugLog("ListPhysicalDisks() called from frontend")
+	writeInfoLog("ListPhysicalDisks() called from frontend")
 	disks, err := ListPhysicalDisks()
 	if err != nil {
 		writeErrorLog(fmt.Sprintf("ListPhysicalDisks() error: %v", err))
 		return nil, err
 	}
-	writeDebugLog(fmt.Sprintf("Found %d physical disks", len(disks)))
+	writeInfoLog(fmt.Sprintf("Found %d physical disks", len(disks)))
 	return disks, nil
 }
 
@@ -510,7 +510,7 @@ func (a *App) SaveControlServerConfig(serverURL, enrollToken, certFP string) err
 // SaveConfig saves the configuration
 func (a *App) SaveConfig(config *Config) error {
 	// Log sanitized config (no secrets)
-	writeDebugLog(fmt.Sprintf("SaveConfig() called: URL=%s, AuthID=%s, Datastore=%s, BackupID=%s",
+	writeInfoLog(fmt.Sprintf("SaveConfig() called: URL=%s, AuthID=%s, Datastore=%s, BackupID=%s",
 		security.SanitizeURL(config.BaseURL),
 		config.AuthID,
 		config.Datastore,
@@ -554,13 +554,13 @@ func (a *App) SaveConfig(config *Config) error {
 
 	// Update in-memory config
 	a.config = config
-	writeDebugLog("Config saved successfully and loaded into app")
+	writeInfoLog("Config saved successfully and loaded into app")
 	return nil
 }
 
 // TestConnection tests the PBS connection with the provided config (or current if nil)
 func (a *App) TestConnection(config *Config) error {
-	writeDebugLog("TestConnection() called")
+	writeInfoLog("TestConnection() called")
 
 	// Use provided config or fallback to current app config
 	testConfig := config
@@ -595,7 +595,7 @@ func (a *App) TestConnection(config *Config) error {
 	}
 
 	// Debug log with sanitized credentials
-	writeDebugLog(fmt.Sprintf("Testing connection: URL=%s, AuthID=%s, Secret=%s, Datastore=%s",
+	writeInfoLog(fmt.Sprintf("Testing connection: URL=%s, AuthID=%s, Secret=%s, Datastore=%s",
 		security.SanitizeURL(testConfig.BaseURL),
 		testConfig.AuthID,
 		security.SanitizeSecret(testConfig.Secret),
@@ -607,13 +607,13 @@ func (a *App) TestConnection(config *Config) error {
 		return err
 	}
 
-	writeDebugLog("Connection test successful (authenticated + datastore accessible)")
+	writeInfoLog("Connection test successful (authenticated + datastore accessible)")
 	return nil
 }
 
 // GetLastBackupDirs returns the last used backup directories
 func (a *App) GetLastBackupDirs() []string {
-	writeDebugLog(fmt.Sprintf("GetLastBackupDirs() returned %d directories", len(a.config.LastBackupDirs)))
+	writeInfoLog(fmt.Sprintf("GetLastBackupDirs() returned %d directories", len(a.config.LastBackupDirs)))
 	return a.config.LastBackupDirs
 }
 
@@ -621,7 +621,7 @@ func (a *App) GetLastBackupDirs() []string {
 func (a *App) ReloadConfig() {
 	newConfig := LoadConfig()
 	a.config = newConfig
-	writeDebugLog("Config reloaded from disk")
+	writeInfoLog("Config reloaded from disk")
 }
 
 // ==================== MULTI-PBS MANAGEMENT ====================
@@ -629,7 +629,7 @@ func (a *App) ReloadConfig() {
 // ListPBSServers returns all configured PBS servers
 func (a *App) ListPBSServers() []*PBSServer {
 	servers := a.config.ListPBSServers()
-	writeDebugLog(fmt.Sprintf("ListPBSServers() returned %d servers", len(servers)))
+	writeInfoLog(fmt.Sprintf("ListPBSServers() returned %d servers", len(servers)))
 	// M-04: never hand PBS tokens to the frontend — return sanitized copies.
 	out := make([]*PBSServer, 0, len(servers))
 	for _, s := range servers {
@@ -640,7 +640,7 @@ func (a *App) ListPBSServers() []*PBSServer {
 
 // GetPBSServer returns a single PBS server by ID (secret stripped — M-04).
 func (a *App) GetPBSServer(id string) (*PBSServer, error) {
-	writeDebugLog(fmt.Sprintf("GetPBSServer(%s) called", id))
+	writeInfoLog(fmt.Sprintf("GetPBSServer(%s) called", id))
 	s, err := a.config.GetPBSServer(id)
 	if err != nil {
 		return nil, err
@@ -674,7 +674,7 @@ func toMap(v interface{}) (map[string]interface{}, error) {
 
 // AddPBSServer adds a new PBS server to the configuration
 func (a *App) AddPBSServer(pbs *PBSServer) error {
-	writeDebugLog(fmt.Sprintf("AddPBSServer(%s) called", pbs.ID))
+	writeInfoLog(fmt.Sprintf("AddPBSServer(%s) called", pbs.ID))
 	if a.delegateConfigWrites() {
 		m, err := toMap(pbs)
 		if err != nil {
@@ -692,7 +692,7 @@ func (a *App) AddPBSServer(pbs *PBSServer) error {
 
 // UpdatePBSServer updates an existing PBS server
 func (a *App) UpdatePBSServer(pbs *PBSServer) error {
-	writeDebugLog(fmt.Sprintf("UpdatePBSServer(%s) called", pbs.ID))
+	writeInfoLog(fmt.Sprintf("UpdatePBSServer(%s) called", pbs.ID))
 	if a.delegateConfigWrites() {
 		// The service performs the "empty secret means keep stored one" merge
 		// against its authoritative config, so secrets stay service-side.
@@ -719,7 +719,7 @@ func (a *App) UpdatePBSServer(pbs *PBSServer) error {
 
 // DeletePBSServer removes a PBS server
 func (a *App) DeletePBSServer(id string) error {
-	writeDebugLog(fmt.Sprintf("DeletePBSServer(%s) called", id))
+	writeInfoLog(fmt.Sprintf("DeletePBSServer(%s) called", id))
 	if a.delegateConfigWrites() {
 		if err := a.apiClient.DeletePBSServer(id); err != nil {
 			writeErrorLog(fmt.Sprintf("DeletePBSServer: service-side delete failed: %v", err))
@@ -733,7 +733,7 @@ func (a *App) DeletePBSServer(id string) error {
 
 // SetDefaultPBSServer sets the default PBS server
 func (a *App) SetDefaultPBSServer(id string) error {
-	writeDebugLog(fmt.Sprintf("SetDefaultPBSServer(%s) called", id))
+	writeInfoLog(fmt.Sprintf("SetDefaultPBSServer(%s) called", id))
 	if a.delegateConfigWrites() {
 		if err := a.apiClient.SetDefaultPBS(id); err != nil {
 			writeErrorLog(fmt.Sprintf("SetDefaultPBSServer: service-side set failed: %v", err))
@@ -752,7 +752,7 @@ func (a *App) GetDefaultPBSID() string {
 
 // TestPBSConnection tests connection to a specific PBS server
 func (a *App) TestPBSConnection(pbsID string) error {
-	writeDebugLog(fmt.Sprintf("TestPBSConnection(%s) called", pbsID))
+	writeInfoLog(fmt.Sprintf("TestPBSConnection(%s) called", pbsID))
 
 	pbs, err := a.config.GetPBSServer(pbsID)
 	if err != nil {
@@ -769,13 +769,13 @@ func (a *App) TestPBSConnection(pbsID string) error {
 // pinning when a self-signed PBS rejects CA validation (audit H-02). Discovery
 // only: no token is sent.
 func (a *App) GetServerFingerprint(baseURL string) (string, error) {
-	writeDebugLog(fmt.Sprintf("GetServerFingerprint(%s) called", security.SanitizeURL(baseURL)))
+	writeInfoLog(fmt.Sprintf("GetServerFingerprint(%s) called", security.SanitizeURL(baseURL)))
 	fp, err := pbscommon.FetchServerFingerprint(baseURL)
 	if err != nil {
 		writeErrorLog(fmt.Sprintf("GetServerFingerprint failed: %v", err))
 		return "", err
 	}
-	writeDebugLog(fmt.Sprintf("GetServerFingerprint discovered: %s", fp))
+	writeInfoLog(fmt.Sprintf("GetServerFingerprint discovered: %s", fp))
 	return fp, nil
 }
 
@@ -783,7 +783,7 @@ func (a *App) GetServerFingerprint(baseURL string) (string, error) {
 // resolving the secret server-side so the frontend (which never holds the token,
 // M-04) can pin a discovered fingerprint without round-tripping credentials.
 func (a *App) PinPBSServerFingerprint(id, fingerprint string) error {
-	writeDebugLog(fmt.Sprintf("PinPBSServerFingerprint(%s) called", id))
+	writeInfoLog(fmt.Sprintf("PinPBSServerFingerprint(%s) called", id))
 	if err := security.ValidateFingerprint(fingerprint); err != nil {
 		return fmt.Errorf("empreinte certificat invalide: %w", err)
 	}
@@ -794,7 +794,7 @@ func (a *App) PinPBSServerFingerprint(id, fingerprint string) error {
 	// write through the service in that case so a single privileged writer owns the
 	// file; standalone GUIs (no service) write directly as before.
 	if !a.isServiceProcess && a.mode == api.ModeService && a.apiClient != nil {
-		writeDebugLog(fmt.Sprintf("PinPBSServerFingerprint(%s): delegating write to service", id))
+		writeInfoLog(fmt.Sprintf("PinPBSServerFingerprint(%s): delegating write to service", id))
 		if err := a.apiClient.PinFingerprint(id, fingerprint); err != nil {
 			writeErrorLog(fmt.Sprintf("PinPBSServerFingerprint: service-side pin failed: %v", err))
 			return err
@@ -833,13 +833,13 @@ func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {
 // not a GUI capability, precisely so that a modified front end cannot reach
 // one.
 func (a *App) StartBackup(backupType string, backupDirs []string, diskTargets []string, excludeList []string, backupID string, useVSS bool, compression string) error {
-	writeDebugLog(fmt.Sprintf("StartBackup() called - VSS: %v, compression: %s", useVSS, compression))
+	writeInfoLog(fmt.Sprintf("StartBackup() called - VSS: %v, compression: %s", useVSS, compression))
 
 	// The service may have started after the GUI did. Re-probing here rather
 	// than trusting startup detection is the difference between "press the
 	// button again in a minute" and "restart the application".
 	if a.mode != api.ModeService && a.apiClient.IsServiceAvailable() {
-		writeDebugLog("[Mode] Service now reachable")
+		writeInfoLog("[Mode] Service now reachable")
 		a.mode = api.ModeService
 	}
 	if a.mode != api.ModeService {
@@ -864,7 +864,7 @@ func (a *App) StopBackup() error {
 
 // startBackupViaService sends backup request to the service via HTTP API
 func (a *App) startBackupViaService(backupType string, backupDirs []string, diskTargets []string, excludeList []string, backupID string, useVSS bool, compression string) error {
-	writeDebugLog("[Service Mode] Sending backup request to service")
+	writeInfoLog("[Service Mode] Sending backup request to service")
 
 	req := &api.BackupRequest{
 		BackupType:  backupType,
@@ -882,7 +882,7 @@ func (a *App) startBackupViaService(backupType string, backupDirs []string, disk
 		return fmt.Errorf("%s :: %v", errServiceComm, err)
 	}
 
-	writeDebugLog(fmt.Sprintf("[Service Mode] Backup started: %s (JobID: %s)", resp.Message, resp.JobID))
+	writeInfoLog(fmt.Sprintf("[Service Mode] Backup started: %s (JobID: %s)", resp.Message, resp.JobID))
 
 	// No poller is started here. The front end polls /runs/active every
 	// three seconds for EVERY run, whatever started it, so a second

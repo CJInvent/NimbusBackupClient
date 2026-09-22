@@ -155,22 +155,6 @@ func (a *App) resolveBackupKeyForRun(runUUID string) (key []byte, escrow []byte,
 		"encrypted backup is required but this machine could not settle on a key to use")
 }
 
-// reportKeyStatus tells the server what this machine found. Best-effort and
-// never load-bearing: the decision has already been made by the time this runs,
-// and a backup must not fail because a status report did.
-func reportKeyStatus(ad *controlplane.BackupKeyAd, st controlplane.KeyStorage) {
-	cpMu.Lock()
-	c := cpClient
-	cpMu.Unlock()
-	if c == nil || ad == nil {
-		return
-	}
-	rep := controlplane.KeyStatusFor(ad, st)
-	if _, err := c.ReportKeyStatus(rep); err != nil {
-		writeWarnLog(fmt.Sprintf("[BackupKey] key-status report failed: %v", err))
-	}
-}
-
 // fetchKeyMaterial calls the control plane for key material and checks it is
 // material at all before it goes anywhere.
 //

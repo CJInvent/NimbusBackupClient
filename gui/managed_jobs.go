@@ -63,13 +63,13 @@ func loadManagedJobs() {
 	if err := json.Unmarshal(data, &jobs); err != nil {
 		// A corrupt cache is not a reason to refuse to start. The next
 		// check-in replaces it wholesale anyway.
-		writeDebugLog(fmt.Sprintf("[managed] discarding unreadable job cache: %v", err))
+		writeInfoLog(fmt.Sprintf("[managed] discarding unreadable job cache: %v", err))
 		return
 	}
 	managedMu.Lock()
 	managedJobs = jobs
 	managedMu.Unlock()
-	writeDebugLog(fmt.Sprintf("[managed] restored %d job(s) from cache", len(jobs)))
+	writeInfoLog(fmt.Sprintf("[managed] restored %d job(s) from cache", len(jobs)))
 }
 
 // applyManagedJobs replaces the managed set with what the server just sent.
@@ -98,7 +98,7 @@ func applyManagedJobs(jobs []controlplane.ManagedJob) {
 		return
 	}
 
-	writeDebugLog(fmt.Sprintf("[managed] job set changed: now %d job(s)", len(jobs)))
+	writeInfoLog(fmt.Sprintf("[managed] job set changed: now %d job(s)", len(jobs)))
 
 	path, err := getManagedJobsPath()
 	if err != nil {

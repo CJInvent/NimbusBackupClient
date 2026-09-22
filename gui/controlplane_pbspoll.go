@@ -130,7 +130,7 @@ func (a *App) runPBSPollLoop(stop <-chan struct{}) {
 		pbsLastResult = result
 		pbsLastCheckedAt = checkedAt
 		pbsResultMu.Unlock()
-		writeDebugLog(fmt.Sprintf("[pbspoll] scheduled PBS connectivity check at %s: reachable=%v",
+		writeInfoLog(fmt.Sprintf("[pbspoll] scheduled PBS connectivity check at %s: reachable=%v",
 			checkedAt.Format(time.RFC3339), pbsReachabilityLabel(result)))
 	}
 }

@@ -9,7 +9,7 @@ package main
 //
 // This is the groundwork for "detailed logs mappable under a log category":
 // callers use writeCatLog(catXxx, ...) for verbose lines; always-on
-// operational lines keep using writeDebugLog. Default (no flag) = quiet, so we
+// operational lines keep using writeInfoLog. Default (no flag) = quiet, so we
 // never regress the log-volume fixes.
 
 import (
@@ -70,6 +70,9 @@ func categoryEnabled(c logCategory) bool {
 // writeCatLog logs only when the category was enabled at launch.
 func writeCatLog(c logCategory, message string) {
 	if categoryEnabled(c) {
-		writeDebugLog("[" + string(c) + "] " + message)
+		// DEBUG-labelled: these are the verbose lines the level exists to
+		// control. They used to be written through the INFO writer and
+		// labelled [SERVICE] like everything else.
+		writeLogToLogger(serviceLogger, "DEBUG", "["+string(c)+"] "+message)
 	}
 }

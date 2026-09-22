@@ -59,6 +59,6 @@ func noteBreakGlassUse() {
 	msg := fmt.Sprintf("[controlplane] BREAK-GLASS: local EmergencyFileRestore flag is enabling file restore "+
 		"because the control server is unreachable (last successful check-in: %s). "+
 		"Org policy has file restore DISABLED; clear the flag once the server is reachable again.", when)
-	writeDebugLog(msg)
+	writeInfoLog(msg)
 	writeBackupLog(msg)
 }

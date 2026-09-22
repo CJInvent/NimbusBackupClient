@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,6 +95,18 @@ type Agent struct {
 	// owns the reacting behavior.
 	OnPBSTarget func(*PBSTarget)
 
+	// PendingLogs returns the queued WARN/ERROR lines to deliver with this
+	// check-in, or nil when there are none. OnLogAck is then told the
+	// highest sequence the server has stored, so the queue can be trimmed;
+	// it is called only after a SUCCESSFUL check-in that carried a batch.
+	PendingLogs func() *LogBatch
+	OnLogAck    func(ackSeq int64)
+
+	// OnDebugUntil receives the server's debug deadline on every successful
+	// check-in (0 = off). Every cycle, including when it is 0, for the same
+	// reason OnBackupKey is pushed: turning debug OFF must reach the machine.
+	OnDebugUntil func(until int64)
+
 	AgentVersion string
 
 	// PolicyMaxAge optionally bounds how long a delivered policy stays in
@@ -135,6 +146,7 @@ type Agent struct {
 	burstSeconds atomic.Int64
 	burstUntil   atomic.Int64 // unix seconds; 0 = no burst
 	mu           sync.Mutex   // serializes forced check-ins with the loop
+	checkinGate  repeatGate   // collapses a repeating check-in failure (V4-RUN-AUDIT §5.5)
 
 	statusMu sync.Mutex
 	status   Status
@@ -302,11 +314,29 @@ func (a *Agent) CheckinNow() {
 		req.Inventory = &inv
 	}
 
+	if a.PendingLogs != nil {
+		req.Logs = a.PendingLogs()
+	}
+
 	resp, err := a.Client.Checkin(req)
 	a.recordAttempt(err)
 	if err != nil {
-		log.Printf("[controlplane] check-in failed (will retry next cycle): %v", err)
+		// WARN, once per distinct failure: an outage used to write this line
+		// every two minutes for its whole length. The gate emits it when it
+		// starts or changes, and one INFO line when it ends.
+		if line := a.checkinGate.fail(fmt.Sprintf("check-in failed (will retry next cycle): %v", err)); line != "" {
+			logf(LogWarn, "%s", line)
+		}
 		return
+	}
+	if line := a.checkinGate.ok(); line != "" {
+		logf(LogInfo, "check-in %s", line)
+	}
+	if req.Logs != nil && a.OnLogAck != nil {
+		a.OnLogAck(resp.LogAckSeq)
+	}
+	if a.OnDebugUntil != nil {
+		a.OnDebugUntil(resp.DebugUntil)
 	}
 
 	if resp.CheckinSeconds >= 30 { // refuse absurd values; floor at 30 s
@@ -363,7 +393,7 @@ func (a *Agent) CheckinNow() {
 		for _, c := range resp.Commands {
 			ids = append(ids, fmt.Sprintf("%d:%s", c.ID, c.Command))
 		}
-		log.Printf("[controlplane] check-in delivered %d command(s): %s", n, strings.Join(ids, ", "))
+		logf(LogInfo, "check-in delivered %d command(s): %s", n, strings.Join(ids, ", "))
 	}
 
 	for _, cmd := range resp.Commands {
@@ -378,14 +408,14 @@ func (a *Agent) CheckinNow() {
 		// call below, so a process restart between the two still leaves a
 		// trace of how far the command got.
 		if res.OK {
-			log.Printf("[controlplane] command %d (%s) dispatched OK", cmd.ID, cmd.Command)
+			logf(LogInfo, "command %d (%s) dispatched OK", cmd.ID, cmd.Command)
 		} else {
-			log.Printf("[controlplane] command %d (%s) dispatch FAILED: %v", cmd.ID, cmd.Command, res.Result)
+			logf(LogWarn, "command %d (%s) dispatch FAILED: %v", cmd.ID, cmd.Command, res.Result)
 		}
 		if err := a.Client.PostCommandResult(cmd.ID, res); err != nil {
-			log.Printf("[controlplane] command %d result post failed: %v", cmd.ID, err)
+			logf(LogWarn, "command %d result post failed: %v", cmd.ID, err)
 		} else {
-			log.Printf("[controlplane] command %d result posted (ok=%v)", cmd.ID, res.OK)
+			logf(LogDebug, "command %d result posted (ok=%v)", cmd.ID, res.OK)
 		}
 	}
 }
@@ -395,7 +425,7 @@ func (a *Agent) CheckinNow() {
 func (a *Agent) safeHandle(cmd Command) (res CommandResult) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[controlplane] command %d handler panicked: %v", cmd.ID, r)
+			logf(LogError, "command %d handler panicked: %v", cmd.ID, r)
 			res = CommandResult{OK: false, Result: map[string]interface{}{"error": "handler panic"}}
 		}
 	}()

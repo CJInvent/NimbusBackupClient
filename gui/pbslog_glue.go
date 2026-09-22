@@ -13,8 +13,8 @@ func init() {
 }
 
 func pbscommonSetDebugLog() {
-	pbscommon.DebugLogFn = func(msg string) { writeDebugLog("[pbs] " + msg) }
-	snapshot.LogFn = func(msg string) { writeDebugLog(msg) }
+	pbscommon.DebugLogFn = func(msg string) { writeInfoLog("[pbs] " + msg) }
+	snapshot.LogFn = func(msg string) { writeInfoLog(msg) }
 
 	// The crypto audit trail goes to the BACKUP log, not the service log, and
 	// that choice is the whole point of the hook being separate.

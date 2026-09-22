@@ -1,7 +1,7 @@
 package main
 
 // logredirect.go — routes Go's standard `log` package into the SAME rotating
-// log the rest of the client writes to (writeDebugLog).
+// log the rest of the client writes to (writeInfoLog).
 //
 // WHY THIS EXISTS
 //
@@ -25,7 +25,7 @@ package main
 // future import can reintroduce a silent failure path. Nothing in this
 // process should ever write a diagnostic that lands nowhere.
 //
-// Safe against recursion: writeDebugLog -> writeLogToLogger uses the rotating
+// Safe against recursion: writeInfoLog -> writeLogToLogger uses the rotating
 // logger and fmt.Fprint(os.Stderr, ...) directly, and never calls back into
 // the stdlib log package.
 
@@ -35,7 +35,7 @@ import (
 	"log"
 )
 
-// debugLogWriter adapts writeDebugLog to io.Writer so it can back log.SetOutput.
+// debugLogWriter adapts writeInfoLog to io.Writer so it can back log.SetOutput.
 type debugLogWriter struct{}
 
 // Write forwards each line to the visible rotating log. The stdlib log package
@@ -48,7 +48,7 @@ func (debugLogWriter) Write(p []byte) (int, error) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		writeDebugLog(string(line))
+		writeInfoLog(string(line))
 	}
 	// Report the full input as consumed: a short count is an io.Writer
 	// contract violation and makes the stdlib log package report an error

@@ -86,7 +86,7 @@ func loadManagedState() {
 	}
 	var raw map[string]string
 	if err := json.Unmarshal(data, &raw); err != nil {
-		writeDebugLog("[managed-sched] discarding unreadable fire history")
+		writeInfoLog("[managed-sched] discarding unreadable fire history")
 		return
 	}
 	for id, ts := range raw {
@@ -129,7 +129,7 @@ func managedJobLocation(job controlplane.ManagedJob) *time.Location {
 		if loc, err := time.LoadLocation(job.Timezone); err == nil {
 			return loc
 		}
-		writeDebugLog(fmt.Sprintf("[managed-sched] job %q names unknown timezone %q; using this machine's zone",
+		writeInfoLog(fmt.Sprintf("[managed-sched] job %q names unknown timezone %q; using this machine's zone",
 			job.Name, job.Timezone))
 	}
 	return time.Local
@@ -158,7 +158,7 @@ func dueManagedJobs(jobs []controlplane.ManagedJob, state map[string]time.Time, 
 			// storing it, so this is a contract violation rather than a
 			// user error. Skip the job; do not take the machine's other
 			// jobs down with it.
-			writeDebugLog(fmt.Sprintf("[managed-sched] job %q has an unparseable schedule %q: %v",
+			writeInfoLog(fmt.Sprintf("[managed-sched] job %q has an unparseable schedule %q: %v",
 				job.Name, job.Schedule, err))
 			continue
 		}
@@ -232,12 +232,12 @@ func (a *App) checkManagedJobs() {
 	managedStateMu.Unlock()
 
 	for _, id := range sortedKeys(seeded) {
-		writeDebugLog(fmt.Sprintf("[managed-sched] %s seen for the first time; waiting for its next occurrence", id))
+		writeInfoLog(fmt.Sprintf("[managed-sched] %s seen for the first time; waiting for its next occurrence", id))
 	}
 
 	for _, job := range due {
 		sj := managedToScheduledJob(job)
-		writeDebugLog(fmt.Sprintf("[managed-sched] firing %s (%s) for %s",
+		writeInfoLog(fmt.Sprintf("[managed-sched] firing %s (%s) for %s",
 			sj.ID, job.Name, fired[sj.ID].Format(time.RFC3339)))
 		// requestID stays empty: nobody asked for this, the schedule came
 		// round. The unmanaged-backup gate exempts managed ids, so an org

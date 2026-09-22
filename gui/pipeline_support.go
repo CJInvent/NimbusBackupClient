@@ -47,7 +47,7 @@ func (a *App) CancelActiveBackup() bool {
 	backupMu.Unlock()
 	if cancel != nil {
 		cancel()
-		writeDebugLog("Backup: cancel requested for in-progress backup")
+		writeInfoLog("Backup: cancel requested for in-progress backup")
 		return true
 	}
 	return false
@@ -66,7 +66,7 @@ func (a *App) maybeRunExchangePostBackup() {
 		writeWarnLog("[Exchange] app-aware tasks enabled but no Exchange installation detected - skipping")
 		return
 	}
-	writeDebugLog(fmt.Sprintf("[Exchange] Running post-backup tasks for Exchange %s (health=%v, truncateLogs=%v)",
+	writeInfoLog(fmt.Sprintf("[Exchange] Running post-backup tasks for Exchange %s (health=%v, truncateLogs=%v)",
 		version, a.config.ExchangeAware, a.config.ExchangeLogTruncation))
 	runExchangePostBackup(version, a.config.ExchangeAware, a.config.ExchangeLogTruncation)
 }

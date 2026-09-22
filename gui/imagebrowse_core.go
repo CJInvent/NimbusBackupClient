@@ -469,7 +469,7 @@ func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, d
 		return ErrRestoreDisabled
 	}
 
-	writeDebugLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
+	writeInfoLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
 		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
 	_ = asZip // retained in the signature for frontend compatibility; always zip now
 
@@ -571,7 +571,7 @@ func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, di
 		return ErrRestoreDisabled
 	}
 
-	writeDebugLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
+	writeInfoLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
 		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
 
 	if destDir == "" {

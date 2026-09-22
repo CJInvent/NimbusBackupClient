@@ -30,7 +30,7 @@ func (a *App) GetSecurityWarnings() []string {
 			writeWarnLog(fmt.Sprintf("[SecurityPosture] WARNING: %s", w))
 		}
 		if len(postureWarnings) == 0 {
-			writeDebugLog("[SecurityPosture] No issues detected")
+			writeInfoLog("[SecurityPosture] No issues detected")
 		}
 	})
 	return postureWarnings

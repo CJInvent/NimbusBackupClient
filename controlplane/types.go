@@ -128,6 +128,40 @@ type NetworkInterface struct {
 type CheckinRequest struct {
 	AgentVersion string     `json:"agent_version,omitempty"`
 	Inventory    *Inventory `json:"inventory,omitempty"`
+
+	// Logs carries this machine's queued WARN and ERROR lines, oldest first
+	// (V4-RUN-AUDIT §4.1). Absent when nothing is queued. Rides the check-in
+	// on purpose: no new timer, no new connection, and a machine that cannot
+	// check in could not have delivered them any other way either.
+	Logs *LogBatch `json:"logs,omitempty"`
+}
+
+// LogBatch is one delivery from the agent's persistent WARN/ERROR queue.
+type LogBatch struct {
+	// Queue names this instance of the agent's queue file. With Seq it is
+	// the idempotency key: a queue that had to be recreated restarts its
+	// sequence, and its new lines must not collide with -- and be discarded
+	// as duplicates of -- the old queue's.
+	Queue   string     `json:"queue"`
+	Entries []LogEntry `json:"entries"`
+	// Dropped is the CUMULATIVE number of lines this machine's queue has
+	// discarded to stay within its caps, since the queue was created. A
+	// queue that drops silently is a queue that lies; the server shows the
+	// number beside what did arrive.
+	Dropped int64 `json:"dropped"`
+}
+
+// LogEntry is one WARN or ERROR line. Seq is monotonic per machine and is the
+// idempotency key: a batch resent after a lost response is stored once.
+type LogEntry struct {
+	Seq       int64  `json:"seq"`
+	At        string `json:"at"`    // RFC 3339, UTC, the agent's clock
+	Level     string `json:"level"` // "warn" | "error"
+	Component string `json:"component"`
+	Message   string `json:"message"`
+	// RunUUID ties a line to the backup run it happened inside, so it shows
+	// on that run's report rather than only in the machine's stream.
+	RunUUID string `json:"run_uuid,omitempty"`
 }
 
 // Command from the server queue. Handlers MUST be idempotent: a command
@@ -249,6 +283,19 @@ type CheckinResponse struct {
 	// change detector: fetch from /pbs-credential when it does not match the
 	// auth-id whose secret we already hold.
 	PBSTarget *PBSTarget `json:"pbs_target"`
+
+	// LogAckSeq is the highest log sequence the server has stored for this
+	// machine. The agent trims its queue up to it. It acknowledges what is
+	// STORED, not what this request carried, so a batch whose response was
+	// lost is trimmed by the next check-in's answer instead of resent forever.
+	LogAckSeq int64 `json:"log_ack_seq"`
+
+	// DebugUntil is the unix time until which this machine should log at
+	// DEBUG, or 0 when debug is off (V4-RUN-AUDIT §4.3). A DEADLINE, like
+	// BurstUntil: the agent drops back to its own level when it passes even
+	// if the server never speaks again, because debug left on is how a disk
+	// fills. Set per machine by an operator in the portal and audited there.
+	DebugUntil int64 `json:"debug_until"`
 
 	// ManagedJobs is the complete set of server-defined backup jobs for
 	// this agent, delivered fresh on every check-in.

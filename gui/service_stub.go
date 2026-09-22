@@ -5,7 +5,7 @@ package main
 
 // RunAsService is a stub for non-Windows platforms
 func RunAsService() {
-	writeDebugLog("Service mode not supported on this platform")
+	writeInfoLog("Service mode not supported on this platform")
 }
 
 // IsServiceMode always returns false on non-Windows

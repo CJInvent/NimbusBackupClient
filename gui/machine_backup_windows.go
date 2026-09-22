@@ -351,7 +351,7 @@ func BytesToString(b int64) string {
 
 // ListPhysicalDisks returns a list of available physical disks with their information
 func ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
-	writeDebugLog("Enumerating physical disks...")
+	writeInfoLog("Enumerating physical disks...")
 
 	// Get volume to disk mapping
 	vols, err := enumVolumeDiskOffset()
@@ -404,7 +404,7 @@ func ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 			Path:       diskPath,
 		})
 
-		writeDebugLog(fmt.Sprintf("Found: %s", label))
+		writeInfoLog(fmt.Sprintf("Found: %s", label))
 	}
 
 	devices, err := discoverStorageDevices()
@@ -504,7 +504,7 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 	knownChunks2, err := client.GetKnownSha265FromFIDX(filename)
 	if err == nil {
 		knownChunks = knownChunks2
-		writeDebugLog(fmt.Sprintf("Loaded %d known chunks from previous backup", knownChunks.Len()))
+		writeInfoLog(fmt.Sprintf("Loaded %d known chunks from previous backup", knownChunks.Len()))
 	} else {
 		// This is the session's FIRST request, so a handshake rejection (bad
 		// namespace, permissions, locked backup group, ...) surfaces here. It
@@ -690,7 +690,7 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 // straight to success. The scheduled proof run on 2026-09-15 spent three and
 // a half minutes moving 80 GB while every page showed it preparing.
 func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onPhase func(string), onMilestone func(checkpoint, level, message string), validateSource func(uintptr, string) error) (int64, error) {
-	writeDebugLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
+	writeInfoLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
 	// 32 x 4 MB = 128 MB of elastic buffer between the disk reader and the
@@ -748,7 +748,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 		if E.PartitionNumber == 0 {
 			continue
 		}
-		writeDebugLog(fmt.Sprintf("Partition %d: offset=%s, length=%s",
+		writeInfoLog(fmt.Sprintf("Partition %d: offset=%s, length=%s",
 			E.PartitionNumber, BytesToString(int64(E.StartingOffset)), BytesToString(int64(E.PartitionLength))))
 		if onMilestone != nil {
 			onMilestone(controlplane.CheckpointDisksPartitions, "info", fmt.Sprintf(
@@ -781,7 +781,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 		return 0, err
 	}
 
-	writeDebugLog(fmt.Sprintf("Total disk size: %s", BytesToString(total)))
+	writeInfoLog(fmt.Sprintf("Total disk size: %s", BytesToString(total)))
 
 	if onMilestone != nil && len(snapshotPaths) > 0 {
 		onMilestone(controlplane.CheckpointSnapshotVSS, "info", fmt.Sprintf(
@@ -885,7 +885,7 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 					failRead(err)
 					return
 				}
-				writeDebugLog(fmt.Sprintf("Processing partition %d: %s to %s",
+				writeInfoLog(fmt.Sprintf("Processing partition %d: %s to %s",
 					idx, BytesToString(int64(P.StartByte)), BytesToString(int64(P.EndByte))))
 
 				if !P.RequiresVSS {
@@ -994,7 +994,7 @@ const machineBackupFailedMsg = errBackupFailedSeeLog
 
 // RunMachineBackup performs a full physical disk backup
 func RunMachineBackup(opts BackupOptions) error {
-	writeDebugLog("Starting machine backup")
+	writeInfoLog("Starting machine backup")
 	startTime := time.Now()
 
 	// Validate options
@@ -1012,7 +1012,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	lock := getBackupLock(opts.BaseURL, opts.Datastore)
 	if !lock.TryLock() {
 		msg := errAlreadyRunning
-		writeDebugLog(msg)
+		writeInfoLog(msg)
 		if opts.OnComplete != nil {
 			opts.OnComplete(false, msg)
 		}
@@ -1106,10 +1106,10 @@ func RunMachineBackup(opts BackupOptions) error {
 	progress := func(pct float64, msg string) {
 		switch {
 		case msg != "":
-			writeDebugLog(fmt.Sprintf("Backup engine: %s (%.1f%%)", msg, pct*100))
+			writeInfoLog(fmt.Sprintf("Backup engine: %s (%.1f%%)", msg, pct*100))
 		case pct*100-lastLoggedPct >= 1:
 			lastLoggedPct = pct * 100
-			writeDebugLog(fmt.Sprintf("Backup engine: %.0f%% of disk processed", pct*100))
+			writeInfoLog(fmt.Sprintf("Backup engine: %.0f%% of disk processed", pct*100))
 		}
 		if opts.OnProgress != nil {
 			opts.OnProgress(pct, msg)
@@ -1169,7 +1169,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	}
 
 	progress(1.0, "Backup completed")
-	writeDebugLog("Machine backup completed successfully")
+	writeInfoLog("Machine backup completed successfully")
 
 	// Report the REAL result, not the finalizer's blind-success guess
 	// (attachControlPlaneHooks's returned func, in controlplane_glue.go).

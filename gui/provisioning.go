@@ -66,22 +66,22 @@ func (a *App) ApplyProvisioningProfile() bool {
 	if a.config.ControlAgentID != 0 {
 		// Rule 1. An upgrade re-delivers the profile; that is not a request to
 		// change allegiance.
-		writeDebugLog(fmt.Sprintf(
+		writeInfoLog(fmt.Sprintf(
 			"[provisioning] already enrolled as agent %d — profile discarded without applying (%s)",
 			a.config.ControlAgentID, profile.Redacted()))
 		return false
 	}
 	if a.config.ControlServerURL != "" && a.config.ControlServerURL != profile.ControlURL {
-		writeDebugLog(fmt.Sprintf(
+		writeInfoLog(fmt.Sprintf(
 			"[provisioning] a different control server is already configured (%s) — profile discarded (%s)",
 			a.config.ControlServerURL, profile.Redacted()))
 		return false
 	}
 
 	if age, ok := profile.Age(time.Now()); ok && age > 0 {
-		writeDebugLog(fmt.Sprintf("[provisioning] profile issued %s ago", age.Truncate(time.Hour)))
+		writeInfoLog(fmt.Sprintf("[provisioning] profile issued %s ago", age.Truncate(time.Hour)))
 	}
-	writeDebugLog("[provisioning] applying profile: " + profile.Redacted())
+	writeInfoLog("[provisioning] applying profile: " + profile.Redacted())
 
 	a.config.ControlServerURL = profile.ControlURL
 	a.config.ControlCertFP = controlplane.NormalizeFingerprint(profile.CertFingerprint)
@@ -95,7 +95,7 @@ func (a *App) ApplyProvisioningProfile() bool {
 		writeWarnLog(fmt.Sprintf("[provisioning] WARNING: profile applied but config save failed: %v", err))
 		return false
 	}
-	writeDebugLog("[provisioning] profile applied; enrollment will run on this start")
+	writeInfoLog("[provisioning] profile applied; enrollment will run on this start")
 	return true
 }
 
@@ -128,11 +128,11 @@ func applyProvisionedEncryption(state string) {
 		writeWarnLog(fmt.Sprintf(
 			"[provisioning] WARNING: could not record the provisioned encryption answer (%s): %v", state, err))
 	case seeded:
-		writeDebugLog(fmt.Sprintf(
+		writeInfoLog(fmt.Sprintf(
 			"[provisioning] encryption=%s recorded from the profile — PROVISIONAL, "+
 				"the first check-in replaces it", state))
 	default:
-		writeDebugLog(
+		writeInfoLog(
 			"[provisioning] the profile names an encryption answer, but this machine already has one — kept")
 	}
 }
@@ -154,10 +154,10 @@ func destroyProvisioningFile(path string) {
 		_ = f.Close()
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		writeDebugLog(fmt.Sprintf(
+		writeInfoLog(fmt.Sprintf(
 			"[provisioning] WARNING: could not remove %s: %v — it still contains an enrollment token, delete it manually",
 			path, err))
 		return
 	}
-	writeDebugLog("[provisioning] profile consumed and removed")
+	writeInfoLog("[provisioning] profile consumed and removed")
 }

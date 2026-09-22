@@ -102,11 +102,11 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 		// binding and exists only in the GUI build, and this file has to
 		// compile into both.
 		out.backupID, _ = os.Hostname()
-		writeDebugLog(fmt.Sprintf("[Backup ID] Empty backup-id, using hostname: %s", out.backupID))
+		writeInfoLog(fmt.Sprintf("[Backup ID] Empty backup-id, using hostname: %s", out.backupID))
 	}
 	if out.compression == "" {
 		out.compression = "fastest"
-		writeDebugLog("[Compression] Using default: fastest")
+		writeInfoLog("[Compression] Using default: fastest")
 	}
 
 	// Before this file, none of the validation below ran in the service
@@ -189,7 +189,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	}
 	backupID, compression, targetDirs, pbsCfg := r.backupID, r.compression, r.targetDirs, r.pbs
 
-	writeDebugLog(fmt.Sprintf("[Pipeline] StartBackup: type=%s, id=%s, vss=%v, compression=%s, dir_count=%d",
+	writeInfoLog(fmt.Sprintf("[Pipeline] StartBackup: type=%s, id=%s, vss=%v, compression=%s, dir_count=%d",
 		req.BackupType, security.SanitizeForLog(backupID), req.UseVSS, compression, len(req.BackupDirs)))
 
 	// --- Assemble --------------------------------------------------------
@@ -225,7 +225,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 			pct := percent * 100
 			if message != "" && message != lastRelayedMsg {
 				lastRelayedMsg = message
-				writeDebugLog(fmt.Sprintf("Pipeline relay: %q delivered at %.1f%%", message, pct))
+				writeInfoLog(fmt.Sprintf("Pipeline relay: %q delivered at %.1f%%", message, pct))
 			}
 			a.notifyProgressCallbacks(pct, message)
 		},
@@ -239,7 +239,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 
 		OnComplete: func(success bool, message string) {
 			completionMessage = message
-			writeDebugLog(fmt.Sprintf("[Backup Complete] success=%v - %s", success, message))
+			writeInfoLog(fmt.Sprintf("[Backup Complete] success=%v - %s", success, message))
 			if success {
 				a.maybeRunExchangePostBackup()
 			}
@@ -314,10 +314,10 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	}()
 
 	if req.BackupType == "machine" {
-		writeDebugLog("[Pipeline] Executing full-volume backup via RunMachineBackup")
+		writeInfoLog("[Pipeline] Executing full-volume backup via RunMachineBackup")
 		err = RunMachineBackup(opts)
 	} else {
-		writeDebugLog("[Pipeline] Executing backup via RunBackupInline")
+		writeInfoLog("[Pipeline] Executing backup via RunBackupInline")
 		err = RunBackupInline(opts)
 	}
 

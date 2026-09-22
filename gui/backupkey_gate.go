@@ -31,6 +31,7 @@ import (
 	"controlplane"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // ErrBackupKeyUnknown is the refusal for a managed machine that has never
@@ -50,6 +51,7 @@ var ErrBackupKeyUnknown = errors.New(
 // assignments must survive restart; material is still fetched only at run time.
 func applyBackupKeyFromCheckin(ad *controlplane.BackupKeyAd) {
 	warnIfProvisioningWasWrong(ad)
+	defer reportKeyStatusOnChange(ad)
 	if ad != nil {
 		if err := recordEncryptionRequired(ad); err != nil {
 			writeErrorLog(fmt.Sprintf("[BackupKey] could not persist required encryption policy: %v", err))
@@ -59,6 +61,86 @@ func applyBackupKeyFromCheckin(ad *controlplane.BackupKeyAd) {
 	if err := recordEncryptionOff(); err != nil {
 		writeWarnLog(fmt.Sprintf("[BackupKey] WARNING: could not record that encryption is disabled: %v", err))
 	}
+}
+
+// reportKeyStatus tells the server what this machine found. Best-effort and
+// never load-bearing: the decision has already been made by the time this runs,
+// and a backup must not fail because a status report did. Returns whether the
+// server received it.
+//
+// ad == nil IS REPORTED. It used to return early, so a machine moved out of an
+// encrypted scope never told the server anything again and its last verdict
+// ('mismatch', say) stood forever -- the machine showed red for a key it was no
+// longer supposed to hold. controlplane.KeyStatusFor answers ok for it.
+func reportKeyStatus(ad *controlplane.BackupKeyAd, st controlplane.KeyStorage) bool {
+	cpMu.Lock()
+	c := cpClient
+	cpMu.Unlock()
+	if c == nil {
+		return false
+	}
+	rep := controlplane.KeyStatusFor(ad, st)
+	if _, err := c.ReportKeyStatus(rep); err != nil {
+		writeWarnLog(fmt.Sprintf("[BackupKey] key-status report failed: %v", err))
+		return false
+	}
+	return true
+}
+
+// adReport remembers which assignment this process last reported a status
+// for, so the check-in hook reports on CHANGE rather than every two minutes
+// (V4-RUN-AUDIT §5 rule 1, and the server's 20/hour ceiling on this endpoint).
+var adReport struct {
+	sync.Mutex
+	sent bool
+	sig  string
+}
+
+func adSignature(ad *controlplane.BackupKeyAd) string {
+	switch {
+	case ad == nil:
+		return "none"
+	case ad.Unavailable:
+		return "unavailable:" + ad.KeyID
+	default:
+		return "key:" + ad.KeyID
+	}
+}
+
+// reportKeyStatusOnChange refreshes the server's verdict when the assignment
+// changes -- including to "no key" -- and once per process start, without
+// waiting for a backup to run. Before this the only reports came from the
+// backup gate, so a policy change took effect in the fleet view only after
+// the machine's next backup, and never for a move to no-key (see above).
+//
+// Recorded only when the report lands, so a failed one is retried on the
+// next check-in. Off the check-in goroutine: the report has its own retries,
+// and the loop must not wait on them.
+func reportKeyStatusOnChange(ad *controlplane.BackupKeyAd) {
+	sig := adSignature(ad)
+	adReport.Lock()
+	if adReport.sent && adReport.sig == sig {
+		adReport.Unlock()
+		return
+	}
+	adReport.Unlock()
+	cpMu.Lock()
+	c := cpClient
+	cpMu.Unlock()
+	if c == nil {
+		return // nobody to tell; nothing is recorded, so a later client will
+	}
+	// Storage is read HERE, on the check-in goroutine, and only the network
+	// call is detached: the storage read touches process-wide protector state
+	// that must not be raced.
+	st := backupKeyStorage()
+	go func() {
+		if reportKeyStatus(ad, st) {
+			adReport.Lock()
+			adReport.sent, adReport.sig = true, sig
+			adReport.Unlock()
+		}
+	}()
 }
 
 // warnIfProvisioningWasWrong reports the one case a provisioning-seeded answer

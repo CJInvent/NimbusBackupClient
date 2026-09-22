@@ -116,7 +116,7 @@ func (a *App) SetupSystemTray() {
 		return
 	}
 
-	writeDebugLog("Setting up system tray")
+	writeInfoLog("Setting up system tray")
 
 	// Setup tray in goroutine to avoid blocking
 	go func() {
@@ -149,12 +149,12 @@ func onReady(a *App) func() {
 			for {
 				select {
 				case <-menuShow.ClickedCh:
-					writeDebugLog("Tray: Show window clicked")
+					writeInfoLog("Tray: Show window clicked")
 					// Show the main window
 					runtime.WindowShow(a.ctx)
 					runtime.WindowUnminimise(a.ctx)
 				case <-menuQuit.ClickedCh:
-					writeDebugLog("Tray: Quit clicked")
+					writeInfoLog("Tray: Quit clicked")
 					// Ask systray to remove the icon (Shell_NotifyIcon NIM_DELETE)
 					// and request Wails shutdown in parallel.
 					systray.Quit()
@@ -165,14 +165,14 @@ func onReady(a *App) func() {
 					// that used to leak the icon on every Quit.
 					go func() {
 						waitForTrayExit(3 * time.Second)
-						writeDebugLog("Tray: exiting after Quit")
+						writeInfoLog("Tray: exiting after Quit")
 						os.Exit(0)
 					}()
 				}
 			}
 		}()
 
-		writeDebugLog("System tray initialized")
+		writeInfoLog("System tray initialized")
 	}
 }
 
@@ -195,19 +195,19 @@ func onReady(a *App) func() {
 // that. Restarting explorer.exe (or a reboot) clears whatever has already
 // leaked.
 func onExit() {
-	writeDebugLog("System tray exiting (icon removed)")
+	writeInfoLog("System tray exiting (icon removed)")
 	markTrayExited()
 }
 
 // MinimizeToTray hides the window and minimizes to tray
 func (a *App) MinimizeToTray() {
-	writeDebugLog("Minimizing to tray")
+	writeInfoLog("Minimizing to tray")
 	runtime.WindowHide(a.ctx)
 }
 
 // ShowFromTray shows the window from tray
 func (a *App) ShowFromTray() {
-	writeDebugLog("Showing from tray")
+	writeInfoLog("Showing from tray")
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
 }

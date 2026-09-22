@@ -13,7 +13,7 @@ import (
 // from previous versions that used Task Scheduler or Registry
 // This should be called on app startup to migrate to MSI service
 func CleanupLegacyAutoStart() {
-	writeDebugLog("Cleaning up legacy auto-start configurations...")
+	writeInfoLog("Cleaning up legacy auto-start configurations...")
 
 	// 1. Remove old Task Scheduler task (if exists)
 	cleanupTaskScheduler()
@@ -21,7 +21,7 @@ func CleanupLegacyAutoStart() {
 	// 2. Remove old Registry entry (if exists)
 	cleanupRegistryEntry()
 
-	writeDebugLog("Legacy auto-start cleanup completed")
+	writeInfoLog("Legacy auto-start cleanup completed")
 }
 
 func cleanupTaskScheduler() {
@@ -32,14 +32,14 @@ func cleanupTaskScheduler() {
 	output, err := cmd.CombinedOutput()
 
 	if err == nil {
-		writeDebugLog("Removed legacy Task Scheduler entry")
+		writeInfoLog("Removed legacy Task Scheduler entry")
 	} else {
 		// Task doesn't exist or already removed - that's fine
-		writeDebugLog("No legacy Task Scheduler entry found (already clean)")
+		writeInfoLog("No legacy Task Scheduler entry found (already clean)")
 	}
 
 	if len(output) > 0 {
-		writeDebugLog("schtasks output: " + string(output))
+		writeInfoLog("schtasks output: " + string(output))
 	}
 }
 
@@ -58,12 +58,12 @@ func cleanupRegistryEntry() {
 	// Try to delete the value (ignore error if doesn't exist)
 	err = key.DeleteValue("NimbusBackup")
 	if err == nil {
-		writeDebugLog("Removed legacy Registry auto-start entry")
+		writeInfoLog("Removed legacy Registry auto-start entry")
 	} else if err != registry.ErrNotExist {
 		// Some other error, log it
 		writeErrorLog("Registry cleanup: " + err.Error())
 	} else {
 		// Entry doesn't exist - that's fine
-		writeDebugLog("No legacy Registry entry found (already clean)")
+		writeInfoLog("No legacy Registry entry found (already clean)")
 	}
 }

@@ -48,11 +48,11 @@ func CheckSingleInstance() bool {
 	// Check if mutex already existed (GetLastError returns ERROR_ALREADY_EXISTS even when CreateMutex succeeds)
 	lastErr := windows.GetLastError()
 	if lastErr == windows.ERROR_ALREADY_EXISTS {
-		writeDebugLog("Another instance is already running - attempting to bring it to foreground")
+		writeInfoLog("Another instance is already running - attempting to bring it to foreground")
 
 		// Try to find and activate the existing window
 		if activateExistingWindow() {
-			writeDebugLog("Successfully activated existing window")
+			writeInfoLog("Successfully activated existing window")
 		} else {
 			writeErrorLog("Could not find existing window to activate")
 		}
@@ -66,7 +66,7 @@ func CheckSingleInstance() bool {
 
 	// We are the first instance - keep the mutex open
 	// Don't close it - it will be released when the process exits
-	writeDebugLog("No other instance detected - continuing startup")
+	writeInfoLog("No other instance detected - continuing startup")
 	return true
 }
 
