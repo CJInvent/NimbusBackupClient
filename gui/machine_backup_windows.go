@@ -74,6 +74,10 @@ const IOCTL_DISK_GET_DRIVE_LAYOUT_EX = 0x00070050
 const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
 const IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
 
+// FSCTL_ALLOW_EXTENDED_DASD_IO lifts the file system's bound on volume-handle
+// reads. See allowExtendedDASD.
+const FSCTL_ALLOW_EXTENDED_DASD_IO = 0x00090083
+
 // IOCTL_DISK_GET_DRIVE_GEOMETRY_EX is defined with FILE_ANY_ACCESS, so it
 // works on a device handle opened with dwDesiredAccess == 0 (no elevation),
 // unlike IOCTL_DISK_GET_LENGTH_INFO which requires FILE_READ_ACCESS and thus
@@ -225,6 +229,19 @@ func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 		}
 	}
 	return ret, nil
+}
+
+// allowExtendedDASD lets reads on a volume handle reach the end of the
+// device instead of stopping at the end of the file system on it. NTFS sizes
+// itself one sector short of its partition (the last sector holds the backup
+// boot sector), and without this flag it cuts off any volume-handle read that
+// crosses its own end. IOCTL_DISK_GET_LENGTH_INFO still reports the full
+// device length, so the image reader asks for bytes the handle then refuses:
+// a deterministic short read on the final block of every NTFS snapshot.
+func allowExtendedDASD(f *os.File) error {
+	var bytesReturned uint32
+	return windows.DeviceIoControl(windows.Handle(f.Fd()), FSCTL_ALLOW_EXTENDED_DASD_IO,
+		nil, 0, nil, 0, &bytesReturned, nil)
 }
 
 func GetDiskLength(path string) (int64, error) {
@@ -908,6 +925,10 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 						return
 					}
 					defer snapshotFile.Close()
+					if err := allowExtendedDASD(snapshotFile); err != nil {
+						failRead(fmt.Errorf("enable full-device reads on snapshot %s failed: %w", snap.ObjectPath, err))
+						return
+					}
 
 					pos := P.StartByte
 					l, err := GetDiskLength(strings.TrimRight(snap.ObjectPath, "\\"))
@@ -933,7 +954,8 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 						}
 						nbytes, err := io.ReadFull(snapshotFile, block[:min(uint64(len(block)), remaining)])
 						if err != nil {
-							failRead(fmt.Errorf("snapshot truncated at %d: %w", pos, err))
+							failRead(fmt.Errorf("snapshot truncated at %d: read %d of %d bytes, %d left of snapshot length %d: %w",
+								pos, nbytes, min(uint64(len(block)), remaining), remaining, l, err))
 							return
 						}
 						pos += uint64(nbytes)
