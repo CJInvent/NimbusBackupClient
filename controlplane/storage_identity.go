@@ -20,7 +20,26 @@ type StorageDevice struct {
 	Boot         bool               `json:"boot"`
 	BootVerified bool               `json:"boot_verified"`
 	Partitions   []StoragePartition `json:"partitions"`
+	// IdentityStrength says what ID is worth (docs/V4-BETA-FIXES.md §5,
+	// F-39/F-41): IdentityStrong when the device reports an NAA or EUI-64
+	// designator or a serial that is not a slot name, IdentityWeak when every
+	// designator is a slot name (a Proxmox disk without serial= reports
+	// "drive-scsi1": its "identity" is the slot). Empty for a device with no
+	// identity (unapprovable) and in bindings approved before this field
+	// existed. omitempty keeps the observation of an unchanged pre-F-39
+	// report byte-identical.
+	IdentityStrength string `json:"identity_strength,omitempty"`
+	// Model is the disk's friendly name, for display only. It never decides a
+	// binding.
+	Model string `json:"model,omitempty"`
 }
+
+// Identity strengths. See StorageDevice.IdentityStrength.
+const (
+	IdentityStrong = "strong"
+	IdentityWeak   = "weak"
+)
+
 type StoragePartition struct {
 	ID     string `json:"id"`
 	Offset uint64 `json:"offset"`
@@ -63,14 +82,28 @@ func StorageObservation(devices []StorageDevice) string {
 
 // ResolveStorageBinding refuses unknown, ambiguous, replaced or repartitioned
 // media. It never modifies the operator-approved baseline.
+//
+// How the approved device is found depends on the strength recorded at
+// approval (F-39): a strong identity must match by ID; a weak one is a slot
+// name, so it is found by its disk GUID instead and must be the only device
+// carrying it (a clone attached beside its original is ambiguous, never a
+// guess). Size and partition evidence must match either way. A strength that
+// changed since approval (a serial added or removed) needs a new approval.
+// A binding approved before strengths existed ("") resolves exactly as it did
+// then: by ID, with no strength check; approving again records the strength.
 func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (StorageDevice, error) {
 	var zero StorageDevice
 	if err := validateStorageDevice(binding.Device); err != nil {
 		return zero, err
 	}
+	approved := binding.Device.IdentityStrength
 	var matches []StorageDevice
 	for _, d := range devices {
-		if d.ID == binding.Device.ID {
+		if approved == IdentityWeak {
+			if d.DiskID == binding.Device.DiskID {
+				matches = append(matches, d)
+			}
+		} else if d.ID == binding.Device.ID {
 			matches = append(matches, d)
 		}
 	}
@@ -78,6 +111,13 @@ func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (Sto
 		return zero, fmt.Errorf("storage identity missing or ambiguous for target %s", binding.Target)
 	}
 	current := matches[0]
+	if approved != "" && current.IdentityStrength != approved {
+		now := current.IdentityStrength
+		if now == "" {
+			now = "none"
+		}
+		return zero, fmt.Errorf("storage identity strength changed for target %s (approved %s, now %s); approve the storage again", binding.Target, approved, now)
+	}
 	if current.Path == "" || current.DiskID != binding.Device.DiskID || current.SizeBytes != binding.Device.SizeBytes {
 		return zero, fmt.Errorf("storage disk identity changed for target %s", binding.Target)
 	}
@@ -91,7 +131,9 @@ func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (Sto
 		if bootCount != 1 || !current.Boot || !current.BootVerified {
 			return zero, errors.New("Boot Drive does not match verified Windows partition evidence")
 		}
-	} else if binding.Target != "device:"+current.ID {
+	} else if binding.Target != "device:"+binding.Device.ID {
+		// The target names the APPROVED id: a weak device found in another
+		// slot has a different current ID and is still that target.
 		return zero, errors.New("invalid storage target")
 	}
 	if partitionEvidence(binding.Device.Partitions) != partitionEvidence(current.Partitions) {
@@ -141,6 +183,9 @@ func validateStorageDevice(d StorageDevice) error {
 	}
 	if _, err := hex.DecodeString(d.ID[3:]); err != nil {
 		return errors.New("invalid storage device identity")
+	}
+	if d.IdentityStrength != "" && d.IdentityStrength != IdentityStrong && d.IdentityStrength != IdentityWeak {
+		return errors.New("invalid storage identity strength")
 	}
 	parts := append([]StoragePartition(nil), d.Partitions...)
 	sort.Slice(parts, func(i, j int) bool { return parts[i].Offset < parts[j].Offset })

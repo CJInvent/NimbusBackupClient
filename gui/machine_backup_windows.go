@@ -689,7 +689,7 @@ func uploadWorker(client *pbscommon.PBSClient, counters *chunkCounters, filename
 // sat at "preparing" in the portal for its entire duration and then jumped
 // straight to success. The scheduled proof run on 2026-09-15 spent three and
 // a half minutes moving 80 GB while every page showed it preparing.
-func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onPhase func(string), onMilestone func(checkpoint, level, message string), validateSource func(uintptr, string) error) (int64, error) {
+func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counters *chunkCounters, index int, progress func(float64, string), onPhase func(string), onMilestone func(checkpoint, level, message string), onWriterFailures func([]string), validateSource func(uintptr, string) error) (int64, error) {
 	writeInfoLog(fmt.Sprintf("Starting backup of PhysicalDrive%d", index))
 
 	parts := make([]Partition, 0)
@@ -788,7 +788,10 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 			"Requesting VSS snapshot for %d partition(s) on PhysicalDrive%d", len(snapshotPaths), index))
 	}
 
-	return total, snapshot.CreateVSSSnapshot(snapshotPaths, func(snapshots map[string]snapshot.SnapShot) error {
+	vssConfirmed := false
+	err = snapshot.CreateVSSSnapshot(snapshotPaths, func(snapshots map[string]snapshot.SnapShot) error {
+		vssConfirmed = true
+		reportWriterFailures(snapshots, onMilestone, onWriterFailures)
 		if onMilestone != nil && len(snapshotPaths) > 0 {
 			// This callback only runs once VSS has actually succeeded --
 			// same product definition OnPhase's own "running" signal
@@ -986,6 +989,15 @@ func backupWindowsDisk(ctx context.Context, client *pbscommon.PBSClient, counter
 
 		return uploadWorker(client, counters, fmt.Sprintf("drive-sata%d.img.fidx", index), uint64(total), ch, readerErr, progress)
 	})
+	// A failure before the shadow copy existed is a VSS failure, tagged the
+	// way the directory engine tags it so the run reports vss_failed. The
+	// marker used to arrive from inside the snapshot package, doubled
+	// ("VSS snapshot creation failed: VSS snapshot creation failed: ...");
+	// snapshot now returns only the readable cause (ledger F-43).
+	if err != nil && !vssConfirmed && len(snapshotPaths) > 0 {
+		return total, fmt.Errorf("%s: %w", vssCreateFailedMarker, err)
+	}
+	return total, err
 }
 
 // machineBackupFailedMsg is what the UI (history, progress) shows on failure.
@@ -1138,7 +1150,7 @@ func RunMachineBackup(opts BackupOptions) error {
 		}
 
 		progress(0.10, fmt.Sprintf("Backing up PhysicalDrive%d...", idx))
-		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnPhase, opts.OnMilestone, opts.ValidateSource)
+		diskBytes, err := backupWindowsDisk(opts.Ctx, client, counters, int(idx), progress, opts.OnPhase, opts.OnMilestone, opts.OnVSSWriterFailures, opts.ValidateSource)
 		if err != nil {
 			// A cancelled context means the user pressed Stop; the read abort is
 			// the mechanism, not a fault.

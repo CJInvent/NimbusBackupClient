@@ -25,7 +25,10 @@ import (
 type LogLevel int
 
 const (
-	LogDebug LogLevel = iota
+	// LogTrace: one line per check-in and similar per-cycle detail (the
+	// ledger's T7.5 needed a real TRACE emitter to exist at all).
+	LogTrace LogLevel = iota
+	LogDebug
 	LogInfo
 	LogWarn
 	LogError
@@ -33,6 +36,8 @@ const (
 
 func (l LogLevel) String() string {
 	switch l {
+	case LogTrace:
+		return "TRACE"
 	case LogDebug:
 		return "DEBUG"
 	case LogInfo:

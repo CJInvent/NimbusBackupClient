@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Client logging — level resolution and redaction.
@@ -173,5 +174,28 @@ func TestNoSettableLevelCanSuppressAFailure(t *testing.T) {
 			t.Errorf("%q resolved to a threshold above INFO; that can hide an "+
 				"unclassified failure", name)
 		}
+	}
+}
+
+// T7.5: TRACE is written only at a registry TRACE level; a server debug
+// window lowers the level to DEBUG, never to TRACE, and closing one leaves a
+// registry TRACE in place.
+func TestTraceFollowsTheRegistryNotTheDebugWindow(t *testing.T) {
+	logs := captureServiceLog(t)
+	orig := activeLevel
+	t.Cleanup(func() { activeLevel = orig; debugUntil.Store(0) })
+
+	activeLevel = levelInfo
+	debugUntil.Store(time.Now().Add(time.Hour).Unix())
+	writeTraceLog("t1 during a debug window at INFO")
+	activeLevel = levelTrace
+	debugUntil.Store(time.Now().Add(-time.Minute).Unix())
+	writeTraceLog("t2 at registry TRACE after the window closed")
+	out := logs()
+	if strings.Contains(out, "t1 during") {
+		t.Fatal("a debug window must not turn on TRACE")
+	}
+	if !strings.Contains(out, "t2 at registry TRACE") || !strings.Contains(out, "TRACE") {
+		t.Fatalf("registry TRACE must survive a closed debug window:\n%s", out)
 	}
 }

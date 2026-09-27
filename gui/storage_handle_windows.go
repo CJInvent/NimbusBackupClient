@@ -3,29 +3,25 @@
 package main
 
 import (
-	"bytes"
 	"controlplane"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
 
 // Query identifiers on the actual open device, not a path that may have
-// been reassigned. STORAGE_DEVICE_ID_DESCRIPTOR contains SCSI VPD identifiers.
-func storageHandleID(h windows.Handle) (string, error) {
+// been reassigned. STORAGE_DEVICE_ID_DESCRIPTOR contains SCSI VPD identifiers;
+// storage_identity_parse.go reads them and says how much they are worth.
+func storageHandleID(h windows.Handle) (storageIdentity, error) {
 	query := make([]byte, 12)
 	binary.LittleEndian.PutUint32(query, 2) // StorageDeviceIdProperty
 	data := make([]byte, 65536)
 	var n uint32
 	err := windows.DeviceIoControl(h, 0x2d1400, &query[0], uint32(len(query)), &data[0], uint32(len(data)), &n, nil)
 	if err == nil && n <= uint32(len(data)) {
-		if id, e := storageDescriptorID(data[:n]); e == nil {
+		if id, e := storageDescriptorIdentity(data[:n]); e == nil {
 			return id, nil
 		}
 	}
@@ -34,78 +30,21 @@ func storageHandleID(h windows.Handle) (string, error) {
 	binary.LittleEndian.PutUint32(query, 0) // StorageDeviceProperty
 	err = windows.DeviceIoControl(h, 0x2d1400, &query[0], uint32(len(query)), &data[0], uint32(len(data)), &n, nil)
 	if err != nil {
-		return "", fmt.Errorf("device does not report a persistent identity: %w", err)
+		return storageIdentity{}, fmt.Errorf("device does not report a persistent identity: %w", err)
 	}
-	if n < 36 || n > uint32(len(data)) {
-		return "", errors.New("short storage device descriptor")
+	if n > uint32(len(data)) {
+		return storageIdentity{}, errors.New("short storage device descriptor")
 	}
-	data = data[:n]
-	field := func(offset int) string {
-		start := int(binary.LittleEndian.Uint32(data[offset:]))
-		if start <= 0 || start >= len(data) {
-			return ""
-		}
-		end := bytes.IndexByte(data[start:], 0)
-		if end < 0 {
-			return ""
-		}
-		return strings.TrimSpace(string(data[start : start+end]))
-	}
-	vendor, product, serial := field(12), field(16), field(24)
-	if serial == "" || vendor == "" || product == "" {
-		return "", errors.New("device lacks a persistent hardware identity")
-	}
-	sum := sha256.Sum256([]byte("serial-v1\x00" + vendor + "\x00" + product + "\x00" + serial))
-	return "v1:" + hex.EncodeToString(sum[:]), nil
+	return storageDeviceDescriptorIdentity(data[:n])
 }
-func storageDescriptorID(data []byte) (string, error) {
-	if len(data) < 12 {
-		return "", errors.New("short device identifier header")
-	}
-	size := int(binary.LittleEndian.Uint32(data[4:]))
-	count := int(binary.LittleEndian.Uint32(data[8:]))
-	if size < 12 || size > len(data) || count < 1 || count > 128 {
-		return "", errors.New("invalid device identifier header")
-	}
-	data = data[:size]
-	pos := 12
-	var ids []string
-	for i := 0; i < count; i++ {
-		if pos > len(data)-16 {
-			return "", errors.New("truncated device identifier")
-		}
-		d := data[pos:]
-		length := int(binary.LittleEndian.Uint16(d[8:]))
-		next := int(binary.LittleEndian.Uint16(d[10:]))
-		association := binary.LittleEndian.Uint32(d[12:])
-		if length == 0 || length > len(d)-16 {
-			return "", errors.New("invalid device identifier size")
-		}
-		if association == 0 {
-			ids = append(ids, fmt.Sprintf("%d:%d:%x", binary.LittleEndian.Uint32(d), binary.LittleEndian.Uint32(d[4:]), d[16:16+length]))
-		}
-		if i+1 < count {
-			if next < 16+length || next > len(d)-16 {
-				return "", errors.New("invalid next device identifier")
-			}
-			pos += next
-		}
-	}
-	if len(ids) == 0 {
-		return "", errors.New("no device-associated identifiers")
-	}
-	sort.Strings(ids)
-	sum := sha256.Sum256([]byte("vpd-v1\x00" + strings.Join(ids, "\x00")))
-	return "v1:" + hex.EncodeToString(sum[:]), nil
-}
-func storagePathID(path string) (string, error) {
+func storagePathID(path string) (storageIdentity, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
-		return "", err
+		return storageIdentity{}, err
 	}
 	h, err := windows.CreateFile(p, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
 	if err != nil {
-		return "", err
+		return storageIdentity{}, err
 	}
 	defer windows.CloseHandle(h)
 	return storageHandleID(h)
@@ -117,7 +56,9 @@ func verifyOpenedStorageDevice(handle uintptr, expected controlplane.StorageDevi
 	if err != nil {
 		return err
 	}
-	if id != expected.ID {
+	// expected is the device ResolveStorageBinding found in this observation,
+	// so for a weak identity found in another slot this is its CURRENT id.
+	if id.ID != expected.ID {
 		return errors.New("opened disk hardware identity differs from approved device")
 	}
 	// Cross-reference disk/partition identities through this same handle.

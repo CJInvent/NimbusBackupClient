@@ -27,6 +27,18 @@ type Config struct {
 	Datastore       string `json:"datastore,omitempty"`
 	Namespace       string `json:"namespace,omitempty"`
 
+	// PBSCredentialFor names the credential Secret belongs to: the agent id,
+	// auth-id and generation that ARRIVED WITH the secret in the
+	// /pbs-credential response (NimbusControl V4-BETA-FIXES §1.1). Written
+	// ONLY by fetchPBSCredential, together with Secret. The secret counts as
+	// held only while this equals (ControlAgentID, pbs_target.auth_id,
+	// pbs_target.credential_gen); comparing the auth-id alone missed every
+	// re-mint under the same name (ledger F-38).
+	PBSCredentialFor *PBSCredentialTuple `json:"pbs_credential_for,omitempty"`
+	// PBSRefusedAt is when PBS last refused the held credential (HTTP 401),
+	// unix seconds, 0 = not since it was stored. Reported on check-in.
+	PBSRefusedAt int64 `json:"pbs_refused_at,omitempty"`
+
 	// ==================== BACKUP SETTINGS ====================
 	// DefaultBackupMode is the org's preferred mode ("directory" or "machine")
 	// as delivered by a provisioning profile. It seeds the UI's initial choice

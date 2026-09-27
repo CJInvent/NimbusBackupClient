@@ -31,7 +31,10 @@ NimbusControl repo (`docs/AGENT-API.md`), with client-side notes in
 Two processes, one compiled codebase:
 
 * **GUI process** — the Wails desktop app. Runs in the user's session,
-  unprivileged. Build tag: `!service`.
+  unprivileged. Build tag: `!service`. One per user session, through Wails'
+  `SingleInstanceLock` (`gui/gui_options.go`): a second launch shows the
+  running window and exits (F-44, 2026-09-27; the hand-made mutex it
+  replaces never detected a second instance).
 * **Service process** — `NimbusBackup` Windows service, runs as
   **LocalSystem**. Owns scheduling, privileged VSS snapshots, the
   control-plane loop, and is the **single writer of `config.json`**.
@@ -243,10 +246,17 @@ true, false, or unknown, matching inventory semantics.
   VSS_BT_COPY, false)` — **copy-only, component-less, writers participate**.
   App-consistent (SQL/Exchange writers freeze during `DoSnapshotSet`) but does
   **not** truncate logs, by design, so it never disturbs other backup
-  products' chains. Busy-shadow retry with one VSS service reset; per-writer
-  last-error diagnostics; the full lifecycle (creation, shadow ID, device
-  path, elapsed, failures with HRESULT) logs through `snapshot.LogFn` into the
-  app debug log — in both processes.
+  products' chains. The whole snapshot life (create, backup callback,
+  release) runs on ONE locked OS thread inside one STA COM apartment
+  (NimbusControl V4-BETA-FIXES §3.2, ledger F-34), one go-vss snapshotter per
+  volume (F-54). Another program's in-progress shadow copy is waited out
+  (three attempts a minute apart) and never deleted: no `delete shadows /all`,
+  no VSS service restart (F-42). Failures are described by
+  `snapshot.DescribeVSSError` as `NAME (0xCODE) during Call: sentence`,
+  decoding go-vss's hex-encoded text (F-43). Writers are read AFTER the
+  snapshot exists, by state number so any display language parses (F-36); a
+  failed writer is a WARN line and makes the run Warning. Lines go through
+  `snapshot.LogFn` (INFO), `WarnFn` and `ErrorFn`.
 * **Restore** — `restore_inline.go` (+ search/cache): snapshot tree browse,
   selective restore, metadata sidecar (`.nimbus_backup_meta.json`) with
   cross-host guard.
@@ -351,6 +361,7 @@ Levels, same names and order as the server's `Core\Log`:
 
 | Writer | Label | Suppressed by |
 |---|---|---|
+| `writeTraceLog` | `TRACE` | level above TRACE; a server debug window never lowers to TRACE (one line per check-in: `controlplane.LogTrace`, 2026-09-27) |
 | `writeCatLog` / `writeDebugLevelLog` | `DEBUG` | level above DEBUG, unless the category was enabled at launch (`-logcat pbs,chunks,security,api\|all`) |
 | `writeInfoLog` | `SERVICE` | never below INFO (the settable floor) |
 | `writeWarnLog` | `WARN` | never |
@@ -374,7 +385,10 @@ The `controlplane` package logs through `controlplane.SetLogger`, installed as
 `controlplaneLog`, so its lines keep their severity; the stdlib `log`
 redirect (`logredirect.go`) remains the catch-all for third-party output, at
 INFO. `pbscommon.DebugLogFn` and `snapshot.LogFn` route shared-package
-diagnostics into the same log so nothing prints into the void in a service.
+diagnostics into the same log so nothing prints into the void in a service;
+`snapshot.WarnFn` and `snapshot.ErrorFn` carry the snapshot package's
+failures at their own level, so they are queued for the server with the run's
+uuid (they were INFO and never left the machine: ledger F-36).
 
 Emission discipline is `docs/V4-RUN-AUDIT.md` §5 in the server repository: log
 changes, not polls; collapse repeats (`controlplane.repeatGate`, `sayOnce`).

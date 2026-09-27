@@ -27,17 +27,17 @@ $items=@(Get-Disk | ForEach-Object {
  $parts=@(Get-Partition -DiskNumber $d.Number | ForEach-Object {
   [ordered]@{ID=[string]$_.Guid;Offset=[uint64]$_.Offset;Size=[uint64]$_.Size;Boot=[bool]$_.IsBoot;System=[bool]$_.IsSystem;Letter=[string]$_.DriveLetter}
  })
- [ordered]@{Number=[int]$d.Number;UniqueID=[string]$d.UniqueId;Format=[string]$d.UniqueIdFormat;DiskID=[string]$d.Guid;Signature=[uint32]$d.Signature;Style=[string]$d.PartitionStyle;Size=[int64]$d.Size;Boot=[bool]$d.IsBoot;System=[bool]$d.IsSystem;Partitions=$parts}
+ [ordered]@{Number=[int]$d.Number;UniqueID=[string]$d.UniqueId;Format=[string]$d.UniqueIdFormat;DiskID=[string]$d.Guid;Signature=[uint32]$d.Signature;Style=[string]$d.PartitionStyle;Size=[int64]$d.Size;Model=[string]$d.FriendlyName;Boot=[bool]$d.IsBoot;System=[bool]$d.IsSystem;Partitions=$parts}
 })
 ConvertTo-Json -InputObject $items -Depth 5 -Compress`
 
 type nativeStorageDisk struct {
-	Number                          int
-	UniqueID, Format, DiskID, Style string
-	Signature                       uint32
-	Size                            int64
-	Boot, System                    bool
-	Partitions                      []nativeStoragePartition
+	Number                                 int
+	UniqueID, Format, DiskID, Style, Model string
+	Signature                              uint32
+	Size                                   int64
+	Boot, System                           bool
+	Partitions                             []nativeStoragePartition
 }
 type nativeStoragePartition struct {
 	ID           string
@@ -71,13 +71,15 @@ func discoverStorageDevices() ([]controlplane.StorageDevice, error) {
 		return nil, err
 	}
 	for i := range devices {
-		devices[i].ID, err = storagePathID(devices[i].Path)
-		if err != nil {
+		id, idErr := storagePathID(devices[i].Path)
+		if idErr != nil {
 			// An unselected device with no trustworthy ID is not authority to
 			// stop backups of an independently verified disk. It remains
 			// visible but unapprovable; a bound device disappearing still latches.
-			devices[i].ID = ""
+			devices[i].ID, devices[i].IdentityStrength = "", ""
+			continue
 		}
+		devices[i].ID, devices[i].IdentityStrength = id.ID, id.Strength
 	}
 	return devices, nil
 }
@@ -102,7 +104,7 @@ func buildStorageDevices(raw []nativeStorageDisk, windowsVolume string) ([]contr
 		if d.Style == "MBR" && d.Signature != 0 {
 			diskID = fmt.Sprintf("mbr:%08x", d.Signature)
 		}
-		entry := controlplane.StorageDevice{ID: id, DiskID: diskID, Path: fmt.Sprintf(`\\.\PhysicalDrive%d`, d.Number), SizeBytes: d.Size, Boot: d.Boot}
+		entry := controlplane.StorageDevice{ID: id, DiskID: diskID, Path: fmt.Sprintf(`\\.\PhysicalDrive%d`, d.Number), SizeBytes: d.Size, Boot: d.Boot, Model: storageModel(d.Model)}
 		for _, p := range d.Partitions {
 			partID := strings.ToLower(strings.Trim(p.ID, "{}"))
 			if d.Style == "MBR" {

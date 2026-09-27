@@ -145,22 +145,28 @@ func TestCheckinCarriesLogsAckAndDebug(t *testing.T) {
 		if got.Logs != nil && len(got.Logs.Entries) > 0 {
 			ack = got.Logs.Entries[len(got.Logs.Entries)-1].Seq
 		}
-		_ = json.NewEncoder(w).Encode(CheckinResponse{CheckinSeconds: 120, LogAckSeq: ack, DebugUntil: debugUntil.Load()})
+		_ = json.NewEncoder(w).Encode(CheckinResponse{CheckinSeconds: 120, LogAckSeq: ack, DebugUntil: debugUntil.Load(),
+			OrgSuspended: debugUntil.Load() != 0})
 	}))
 	defer srv.Close()
 
 	var acked, debug int64 = -1, -1
+	var suspended *bool
 	batch := &LogBatch{Dropped: 3, Entries: []LogEntry{
 		{Seq: 41, At: "2026-09-22T10:00:00Z", Level: "warn", Component: "x", Message: "m1"},
 		{Seq: 42, At: "2026-09-22T10:00:01Z", Level: "error", Component: "x", Message: "m2", RunUUID: "r"},
 	}}
 	a := &Agent{
-		Client:       &Client{BaseURL: srv.URL, AgentID: 1, Secret: "x"},
-		PendingLogs:  func() *LogBatch { return batch },
-		OnLogAck:     func(s int64) { acked = s },
-		OnDebugUntil: func(u int64) { debug = u },
+		Client:         &Client{BaseURL: srv.URL, AgentID: 1, Secret: "x"},
+		PendingLogs:    func() *LogBatch { return batch },
+		OnLogAck:       func(s int64) { acked = s },
+		OnDebugUntil:   func(u int64) { debug = u },
+		OnOrgSuspended: func(s bool) { suspended = &s },
 	}
 	a.CheckinNow()
+	if suspended == nil || !*suspended {
+		t.Fatal("org_suspended=true must be delivered")
+	}
 	if got.Logs == nil || len(got.Logs.Entries) != 2 || got.Logs.Dropped != 3 || got.Logs.Entries[1].RunUUID != "r" {
 		t.Fatalf("the batch must be sent whole: %+v", got.Logs)
 	}
@@ -184,6 +190,9 @@ func TestCheckinCarriesLogsAckAndDebug(t *testing.T) {
 	}
 	if debug != 0 {
 		t.Fatalf("debug off must be delivered as 0, got %d", debug)
+	}
+	if suspended == nil || *suspended {
+		t.Fatal("org_suspended=false (a reactivation) must be delivered too")
 	}
 }
 
@@ -296,5 +305,26 @@ func waitIdle(t *testing.T, rr *RunReporter) {
 			t.Fatal("reporter did not drain")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// T7.5: every successful check-in leaves one TRACE line summarizing what
+// went and what came back, with counts and presence only.
+func TestCheckinTraceSummary(t *testing.T) {
+	logs := captureLog(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(CheckinResponse{CheckinSeconds: 120, OrgSuspended: true,
+			Commands: []Command{{ID: 1, Command: "noop"}}})
+	}))
+	defer srv.Close()
+	a := &Agent{Client: &Client{BaseURL: srv.URL, AgentID: 1, Secret: "x"}}
+	a.CheckinNow()
+	if n := logs.count("TRACE", "check-in ok in"); n != 1 {
+		t.Fatalf("want one TRACE summary, got %d: %v", n, logs.all())
+	}
+	for _, want := range []string{"commands=1", "org_suspended=true", "pbs_target=false"} {
+		if logs.count("TRACE", want) != 1 {
+			t.Fatalf("summary lacks %q: %v", want, logs.all())
+		}
 	}
 }

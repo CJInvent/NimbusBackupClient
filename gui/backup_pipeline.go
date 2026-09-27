@@ -321,6 +321,24 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 		err = RunBackupInline(opts)
 	}
 
+	// PBS REFUSED THE CREDENTIAL (V4-BETA-FIXES §1.1). Its own failure class:
+	// record it (the next check-in reports it), say so once, and ask the
+	// control server for the credential it currently names. The run still
+	// fails -- it is not retried in place, because its completion has
+	// already been reported and the first report wins -- but it fails with a
+	// sentence an operator can act on, and the next run uses whatever the
+	// fetch brought.
+	if isPBSCredentialRefused(err) {
+		cpMu.Lock()
+		client := cpClient
+		cpMu.Unlock()
+		var fetch pbsCredentialFetcher
+		if client != nil {
+			fetch = withAgentKeyFetcher(client)
+		}
+		err = pbsRefusalRunError(err, a.notePBSCredentialRefused(fetch))
+	}
+
 	cpFinish(err)
 	runFinish(err)
 	return err

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // RunReporter tracks one backup run's lifecycle and posts phase changes.
@@ -183,7 +184,7 @@ func (r *RunReporter) Running() { r.post(StatusRunning, nil) }
 // (chkdsk / vssadmin writers) server-side. Include the raw VSS error.
 func (r *RunReporter) VSSFailed(errSummary string) {
 	r.post(StatusVSSFailed, func(rep *RunReport) {
-		rep.ErrorSummary = clip(errSummary, 500)
+		rep.ErrorSummary = clipHead(errSummary, 500)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	})
 }
@@ -206,7 +207,7 @@ func (r *RunReporter) Warning(pbsBackupType, pbsBackupID string, pbsBackupTime i
 		rep.PBSBackupType, rep.PBSBackupID = pbsBackupType, pbsBackupID
 		rep.PBSBackupTime = i64(pbsBackupTime)
 		totals.into(rep)
-		rep.ErrorSummary = clip(errSummary, 500)
+		rep.ErrorSummary = clipHead(errSummary, 500)
 		rep.LogTail = clip(logTail, 16<<10)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	})
@@ -215,7 +216,7 @@ func (r *RunReporter) Warning(pbsBackupType, pbsBackupID string, pbsBackupTime i
 // Failed is terminal (non-VSS failure: network, PBS, IO…).
 func (r *RunReporter) Failed(errSummary, logTail string) {
 	r.post(StatusFailed, func(rep *RunReport) {
-		rep.ErrorSummary = clip(errSummary, 500)
+		rep.ErrorSummary = clipHead(errSummary, 500)
 		rep.LogTail = clip(logTail, 16<<10)
 		rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	})
@@ -310,9 +311,29 @@ func (r *RunReporter) isTerminal(s RunStatus) bool {
 	return false
 }
 
+// clip keeps the TAIL of a LOG: the end of a log is the useful part.
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[len(s)-n:] // keep the TAIL — the end of a log is the useful part
+	return s[len(s)-n:]
+}
+
+// clipHead keeps the HEAD of an error SUMMARY, within n bytes on a rune
+// boundary, with a trailing ellipsis when anything was cut (V4-BETA-FIXES
+// §3.1, ledger F-43). Summaries used the tail too, and for a VSS failure the
+// tail was go-vss's hex-encoded description: the portal showed
+// "Snapshot creation failed: 5722066696c65...". A summary says what went wrong
+// first; its end is the least useful part. n bytes, not n characters, because
+// the server cuts at 500 bytes and must never split a character.
+func clipHead(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	const ell = "\u2026"
+	cut := n - len(ell)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ell
 }

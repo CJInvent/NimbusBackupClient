@@ -95,6 +95,11 @@ type Agent struct {
 	// owns the reacting behavior.
 	OnPBSTarget func(*PBSTarget)
 
+	// HeldPBSCredential reports, on every check-in, which PBS credential this
+	// machine holds (auth-id, generation, last refusal) -- never the secret.
+	// nil return = none held; the field is then omitted.
+	HeldPBSCredential func() *HeldPBSCredential
+
 	// PendingLogs returns the queued WARN/ERROR lines to deliver with this
 	// check-in, or nil when there are none. OnLogAck is then told the
 	// highest sequence the server has stored, so the queue can be trimmed;
@@ -106,6 +111,11 @@ type Agent struct {
 	// check-in (0 = off). Every cycle, including when it is 0, for the same
 	// reason OnBackupKey is pushed: turning debug OFF must reach the machine.
 	OnDebugUntil func(until int64)
+
+	// OnOrgSuspended receives the organization's suspended flag on every
+	// successful check-in, false included, so a reactivation reaches the
+	// machine the same way a suspension does.
+	OnOrgSuspended func(suspended bool)
 
 	AgentVersion string
 
@@ -317,7 +327,11 @@ func (a *Agent) CheckinNow() {
 	if a.PendingLogs != nil {
 		req.Logs = a.PendingLogs()
 	}
+	if a.HeldPBSCredential != nil {
+		req.PBSCredential = a.HeldPBSCredential()
+	}
 
+	t0 := time.Now()
 	resp, err := a.Client.Checkin(req)
 	a.recordAttempt(err)
 	if err != nil {
@@ -332,11 +346,23 @@ func (a *Agent) CheckinNow() {
 	if line := a.checkinGate.ok(); line != "" {
 		logf(LogInfo, "check-in %s", line)
 	}
+	// TRACE: one line per check-in, what went and what came back (never a
+	// value that could be a secret: counts and presence only).
+	logf(LogTrace, "check-in ok in %dms: sent inventory=%v logs=%d pbs_credential=%v; got commands=%d managed_jobs=%d pbs_target=%v backup_key=%v storage_approval=%v debug_until=%d org_suspended=%v log_ack=%d",
+		time.Since(t0).Milliseconds(), req.Inventory != nil, logEntryCount(req.Logs), req.PBSCredential != nil,
+		len(resp.Commands), len(resp.ManagedJobs), resp.PBSTarget != nil, resp.BackupKey != nil,
+		resp.StorageApproval != nil, resp.DebugUntil, resp.OrgSuspended, resp.LogAckSeq)
 	if req.Logs != nil && a.OnLogAck != nil {
 		a.OnLogAck(resp.LogAckSeq)
 	}
 	if a.OnDebugUntil != nil {
 		a.OnDebugUntil(resp.DebugUntil)
+	}
+	// Before commands, like policy: a run_backup in this response is manual
+	// work and is attempted anyway, but the scheduler must see the flag the
+	// server sent with it, not the previous cycle's.
+	if a.OnOrgSuspended != nil {
+		a.OnOrgSuspended(resp.OrgSuspended)
 	}
 
 	if resp.CheckinSeconds >= 30 { // refuse absurd values; floor at 30 s
@@ -430,4 +456,12 @@ func (a *Agent) safeHandle(cmd Command) (res CommandResult) {
 		}
 	}()
 	return a.HandleCommand(cmd)
+}
+
+// logEntryCount is the number of queued log lines a check-in carried.
+func logEntryCount(b *LogBatch) int {
+	if b == nil {
+		return 0
+	}
+	return len(b.Entries)
 }

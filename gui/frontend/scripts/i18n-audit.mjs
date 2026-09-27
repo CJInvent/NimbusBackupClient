@@ -15,12 +15,17 @@
  *
  * Run:  node scripts/i18n-audit.mjs        (from gui/frontend)
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
-// EVERY component that renders user-visible text. A file missing from this
-// list ships unaudited -- which is how a new panel could carry hardcoded
-// English past a gate whose whole job is catching hardcoded English.
-const FILES = ['src/App.jsx', 'src/PathPicker.jsx', 'src/StatusPanel.jsx'];
+// EVERY component that renders user-visible text: every .jsx under src/,
+// found rather than listed. The list this replaces named src/PathPicker.jsx
+// after the file had moved to src/components/, and the loop skipped a missing
+// file silently, so nothing under components/ (the storage panel included)
+// had been audited (found 2026-09-27, beta fixes F-32).
+const jsxUnder = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? jsxUnder(join(dir, e.name)) : e.name.endsWith('.jsx') ? [join(dir, e.name)] : []);
+const FILES = jsxUnder('src').sort();
 
 // Language-neutral by nature. Keep SHORT and honest.
 const ALLOW = [
@@ -56,8 +61,7 @@ const isAllowed = (txt) => {
 let findings = 0;
 
 for (const file of FILES) {
-  let src;
-  try { src = readFileSync(file, 'utf8'); } catch { continue; }
+  const src = readFileSync(file, 'utf8'); // a file that cannot be read fails the audit
   const lines = src.split('\n');
 
   lines.forEach((line, i) => {
@@ -90,4 +94,4 @@ if (findings) {
   console.error(`\n${findings} hardcoded user-visible string(s) — route them through t().`);
   process.exit(1);
 }
-console.log('i18n audit clean: every user-visible string goes through t().');
+console.log(`i18n audit clean: every user-visible string in ${FILES.length} files goes through t().`);

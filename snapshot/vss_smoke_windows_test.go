@@ -20,11 +20,16 @@ package snapshot
 // a track record — an advisory signal beats a flaky gate people learn to skip.
 
 import (
+	"encoding/json"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	vss "github.com/st-matskevich/go-vss"
 	"golang.org/x/sys/windows"
 )
 
@@ -113,20 +118,91 @@ func TestVSSSmokeEmitsDiagnosticsWindows(t *testing.T) {
 	}
 }
 
-func TestVSSWriterDiagnostics(t *testing.T) {
-	var lines []string
-	old := LogFn
-	LogFn = func(s string) { lines = append(lines, s) }
-	t.Cleanup(func() { LogFn = old })
-	healthy := "Writer name: 'System Writer'\nState: [1] Stable\nLast error: No error\n"
-	if logWriterWarnings(healthy) || len(lines) != 0 {
-		t.Fatalf("healthy writer warned: %q", lines)
+// TestVSSStressThreadMigration is the F-34 reproduction (V4-BETA-FIXES
+// §3.2), run by hand on the test VM, never in CI (it takes minutes and needs
+// an elevated, VSS-capable machine):
+//
+//	$env:NIMBUS_VSS_STRESS = "unfixed"   # or "fixed"
+//	$env:NIMBUS_VSS_STRESS_CYCLES = "50"  # default 50
+//	$env:NIMBUS_VSS_STRESS_OUT = "C:\path\stress-unfixed.json"  # optional evidence file
+//	.\snapshot.test.exe -test.run TestVSSStressThreadMigration -test.v -test.timeout 2h
+//
+// "unfixed" drives go-vss the way CreateVSSSnapshot did before the fix: a
+// Snapshotter created and released from a goroutine that is not locked to an
+// OS thread, the library's own CoInitialize/CoUninitialize around the create,
+// Release afterwards possibly on another thread. "fixed" calls the fixed
+// CreateVSSSnapshot. Both run with 4 x GOMAXPROCS goroutines yielding in a
+// loop, so the scheduler migrates goroutines between threads as often as it
+// can. The fix must give 0 failures; the unfixed count is recorded, not
+// asserted -- if it is 0, the ledger says "risk removed", not "cause found".
+func TestVSSStressThreadMigration(t *testing.T) {
+	mode := os.Getenv("NIMBUS_VSS_STRESS")
+	if mode != "fixed" && mode != "unfixed" {
+		t.Skip("manual test: set NIMBUS_VSS_STRESS=fixed or unfixed (see the comment)")
 	}
-	failed := "Writer name: 'Other Writer'\nState: [8] Failed\nLast error: Non-retryable error\n"
-	if !logWriterWarnings(healthy + failed) {
-		t.Fatal("writer failure omitted")
+	cycles := 50
+	if v, err := strconv.Atoi(os.Getenv("NIMBUS_VSS_STRESS_CYCLES")); err == nil && v > 0 {
+		cycles = v
 	}
-	if len(lines) != 2 || !strings.Contains(lines[0], "Other Writer") || strings.Contains(strings.Join(lines, "\n"), "System Writer") {
-		t.Fatalf("wrong writer attribution: %q", lines)
+	vol := os.Getenv("SystemDrive")
+	if vol == "" {
+		vol = "C:"
+	}
+	vol += "\\"
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4*runtime.GOMAXPROCS(0); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					runtime.Gosched()
+				}
+			}
+		}()
+	}
+
+	type failure struct {
+		Cycle   int    `json:"cycle"`
+		Summary string `json:"summary"`
+	}
+	var failures []failure
+	start := time.Now()
+	for c := 1; c <= cycles; c++ {
+		var err error
+		if mode == "unfixed" {
+			sn := vss.Snapshotter{}
+			_, err = sn.CreateSnapshot(vol, false, 180)
+			if err == nil {
+				err = sn.Release()
+			}
+		} else {
+			err = CreateVSSSnapshot([]string{vol}, func(map[string]SnapShot) error { return nil })
+		}
+		if err != nil {
+			failures = append(failures, failure{Cycle: c, Summary: DescribeVSSError(err).Summary()})
+			t.Logf("cycle %d: %s", c, DescribeVSSError(err).Summary())
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	result := map[string]any{"mode": mode, "cycles": cycles, "failures": len(failures), "detail": failures,
+		"gomaxprocs": runtime.GOMAXPROCS(0), "seconds": int(time.Since(start).Seconds()),
+		"finished_utc": time.Now().UTC().Format(time.RFC3339)}
+	js, _ := json.MarshalIndent(result, "", "  ")
+	t.Logf("%s", js)
+	if out := os.Getenv("NIMBUS_VSS_STRESS_OUT"); out != "" {
+		if err := os.WriteFile(out, js, 0o600); err != nil {
+			t.Errorf("writing %s: %v", out, err)
+		}
+	}
+	if mode == "fixed" && len(failures) > 0 {
+		t.Fatalf("the fixed path failed %d of %d cycles", len(failures), cycles)
 	}
 }

@@ -362,6 +362,13 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 		writeInfoLog(fmt.Sprintf("Job %s not started: %v", job.Name, ErrUnmanagedBackupsDisabled))
 		return
 	}
+	// The organization is suspended (F-22): the scheduler starts nothing,
+	// managed or local. A run somebody asked for carries a request id and is
+	// still attempted; PBS refuses it with the org's tokens disabled.
+	if scheduledRunSuspended(requestID) {
+		writeInfoLog(skippedForSuspension(job.Name))
+		return
+	}
 
 	// Check if job is already running
 	runningJobsMutex.Lock()

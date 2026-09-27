@@ -52,7 +52,9 @@ phase posting, terminal latch, log-tail clipping keeps the END).
   `cpCheckPBSReachability`/`pbscommon.PBSClient.CheckConnectivity`
   unchanged — only *when* it runs changed, not what it does. Check-in's
   inventory now reports the cached result (`cachedPBSReachable()`) instead
-  of performing a live PBS call on every cycle. Server assigns the
+  of performing a live PBS call on every cycle. Its result is logged on
+  CHANGE only, the first result after a start included (F-27, 2026-09-27;
+  it was one INFO line every 30 minutes). Server assigns the
   interval/offset via `CheckinResponse.PBSPollIntervalSeconds/
   PBSPollOffsetSeconds` (`Agent.OnPBSPollSchedule` callback — same shape as
   the existing `OnPolicy` push). This is NOT the manual "Test" button
@@ -75,6 +77,48 @@ All three are server-authoritative and delivered fresh on every check-in
 fleet size all propagate within one check-in cycle with no client-side
 reconfiguration. See NimbusControl `docs/AGENT-API.md` for the
 server-side offset assignment (`Nimbus\Agents\PollSchedule`).
+
+## The machine's PBS credential, and leaving (2026-09-27)
+
+NimbusControl `docs/V4-BETA-FIXES.md` §1.1 and §1.3; wire in `AGENT-API.md`.
+
+- **Which credential a secret is.** `Config.PBSCredentialFor` records the
+  (agent id, auth-id, generation) that arrived WITH the secret from
+  `/pbs-credential`, and only `fetchPBSCredential` writes it, together with
+  `Secret`. A secret counts as held only while that tuple equals
+  (`ControlAgentID`, `pbs_target.auth_id`, `pbs_target.credential_gen`). The
+  old test compared auth-ids after the target had already been copied into
+  `AuthID`, so any saved secret passed it (ledger F-38a/F-38b). The fetch
+  cooldown is keyed by the same tuple. A server without `credential_gen`
+  sends 0 in both places, so it causes one fetch and no more.
+- **Every check-in reports** `pbs_credential {auth_id, gen, refused_at}`
+  (never the secret; omitted when nothing is held).
+- **PBS refusing the credential is its own failure class.** A 401 on the
+  session upgrade (`pbscommon.PBSResponseError`, or our own
+  "PBS authentication or authorization failed: HTTP 401" text) is not
+  "session lost": the directory engine now aborts on the upgrade's rejection
+  instead of logging it as "no previous backup" and waiting 25 minutes. The
+  pipeline then records `PBSRefusedAt`, WARNs once per refused credential,
+  asks the server for the credential it currently names (normal cooldown),
+  and fails the run with "PBS refused this machine's credential; requesting a
+  new one from the control server" (or says the next run uses the new one).
+  Captured lines: `gui/testdata/pbs-refusal/`.
+- **Leaving.** Saving an empty or different control-server URL first calls
+  `POST /api/agent/v1/leave` with the current identity (one attempt, 10 s),
+  then clears it. A failure is a WARN and the machine leaves anyway.
+
+## A suspended organization (2026-09-27, NimbusControl F-22)
+
+Check-in carries `org_suspended` (absent from an older server: false). The
+server has already disabled the organization's PBS tokens; that is the real
+control. While the flag is true the service's scheduler starts nothing,
+managed or local (`scheduledRunSuspended` in `gui/org_suspended.go`, checked
+in `executeScheduledJob`), and the GUI shows "Backups suspended by your
+provider". A run somebody asked for (a portal `run_backup`, a manual run)
+carries a request id and is still attempted; PBS refuses it. The flag is
+logged on change only (WARN when it starts, INFO when it ends) and lives in
+memory: after a service restart it is false until the first check-in, and a
+scheduled run in that window is refused by PBS.
 
 ## Known gaps / verify on a real build
 

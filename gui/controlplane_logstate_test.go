@@ -84,3 +84,24 @@ func TestResetMakesTheNextCheckinLogAgain(t *testing.T) {
 		t.Fatal("after a restart the same schedule must log again")
 	}
 }
+
+// F-27: the scheduled PBS connectivity check logs the first result after a
+// start and every change, and nothing else. Three identical results, one
+// line; a change, a line; a change back, a line.
+func TestPBSReachabilityLogsOnChangeOnly(t *testing.T) {
+	resetCheckinLogState()
+	t.Cleanup(resetCheckinLogState)
+	lines := 0
+	for _, r := range []string{"true", "true", "true", "false", "false", "true", "unknown", "unknown"} {
+		if pbsReachLogChanged(r) {
+			lines++
+		}
+	}
+	if lines != 4 {
+		t.Fatalf("want 4 lines (first, to false, back to true, unknown), got %d", lines)
+	}
+	resetCheckinLogState()
+	if !pbsReachLogChanged("unknown") {
+		t.Fatal("the first result after a restart is logged, even if it matches the last one before")
+	}
+}

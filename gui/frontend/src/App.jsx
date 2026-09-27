@@ -1891,7 +1891,7 @@ function App() {
   // UI for a frame on a machine that turns out to be locked.
   if (readOnly === null) return null
   if (readOnly) {
-    return <><StatusPanel version={appVersion} hostname={config['backup-id']} /><StorageIdentityPanel status={cpStatus?.storage_identity} readOnly /></>
+    return <>{cpStatus?.org_suspended && <p className="card" role="alert">{t('orgSuspendedBanner')}</p>}<StatusPanel version={appVersion} hostname={config['backup-id']} /><StorageIdentityPanel status={cpStatus?.storage_identity} readOnly /></>
   }
 
   return (
@@ -1906,6 +1906,8 @@ function App() {
         </div>
       </div>
 
+      {/* F-22: the organization is suspended; scheduled backups do not run. */}
+      {cpStatus?.org_suspended && <p className="card" role="alert">{t('orgSuspendedBanner')}</p>}
       <StorageIdentityPanel status={cpStatus?.storage_identity} onChanged={st => setCpStatus(s => ({ ...s, storage_identity: st }))} />
 
       {picker && (

@@ -134,6 +134,11 @@ type CheckinRequest struct {
 	// on purpose: no new timer, no new connection, and a machine that cannot
 	// check in could not have delivered them any other way either.
 	Logs *LogBatch `json:"logs,omitempty"`
+
+	// PBSCredential reports the PBS credential this machine holds (never the
+	// secret) so the server can show a machine stuck on an outdated or
+	// refused one. Absent when none is held. V4-BETA-FIXES §1.1.
+	PBSCredential *HeldPBSCredential `json:"pbs_credential,omitempty"`
 }
 
 // LogBatch is one delivery from the agent's persistent WARN/ERROR queue.
@@ -283,6 +288,15 @@ type CheckinResponse struct {
 	// change detector: fetch from /pbs-credential when it does not match the
 	// auth-id whose secret we already hold.
 	PBSTarget *PBSTarget `json:"pbs_target"`
+
+	// OrgSuspended: this machine's organization is suspended in the portal
+	// (NimbusControl AGENT-API.md, F-22). Check-in keeps working so the
+	// machine can say why its backups fail; the server has disabled the
+	// org's PBS tokens, which is the real control. While true the service
+	// skips SCHEDULED runs and says "Backups suspended by your provider"; a
+	// run somebody asked for is still attempted (PBS refuses it). Absent from
+	// an older server, which reads as false.
+	OrgSuspended bool `json:"org_suspended"`
 
 	// LogAckSeq is the highest log sequence the server has stored for this
 	// machine. The agent trims its queue up to it. It acknowledges what is
