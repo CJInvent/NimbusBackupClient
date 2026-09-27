@@ -36,15 +36,22 @@ export default function StorageIdentityPanel({ status, onChanged, readOnly = fal
         <label>
           {!status.joined && !readOnly && <input type="checkbox" checked={selected.includes(target)} disabled={busy}
             onChange={e => setSelected(e.target.checked ? [...selected, target] : selected.filter(v => v !== target))} />}
-          {d.boot ? t('storageBoot') : t('storageDevice')} <code>{d.id}</code>
+          {d.boot ? t('storageBoot') : t('storageDevice')} {d.model ? d.model + ' · ' : ''}{Number(d.size_bytes).toLocaleString()} B
         </label>
+        {d.identity_strength === 'weak' && <p role="note">{t('storageWeakNotice')}</p>}
         <details><summary>{t('storageEvidence')}</summary>
+          <p>{d.identity_strength === 'strong' ? t('storageIdentityStrong') : d.identity_strength === 'weak' ? t('storageIdentityWeak') : t('storageIdentityNone')}</p>
+          <p><code>{d.id}</code></p>
           <p><code>{d.disk_id}</code></p><p><code>{d.path}</code> · {t('size')}: {Number(d.size_bytes).toLocaleString()}</p>
           {(d.partitions || []).map(p => <p key={p.id}><code>{p.id}</code></p>)}
         </details>
       </div>
     })}
-    {status.joined ? <p>{dashboard ? <a href={dashboard} target="_blank" rel="noopener noreferrer">{t('storageDashboard')}</a> : t('storageDashboard')}</p> :
+    {/* F-32: the dashboard sentence is for an error; a clean, applied approval says so. */}
+    {!status.error && status.revision > 0 && <p>{t('storageApprovedRevision').replace('{n}', status.revision)}</p>}
+    {status.joined ? (status.error || !(status.revision > 0)) && <p>{dashboard
+        ? <a href={dashboard} target="_blank" rel="noopener noreferrer">{t(status.error ? 'storageDashboard' : 'storageJoinedHelp')}</a>
+        : t(status.error ? 'storageDashboard' : 'storageJoinedHelp')}</p> :
       !readOnly && <button onClick={approve} disabled={busy || selected.length === 0}>{t('storageApprove')}</button>}
     {error && <p role="alert">{error}</p>}
   </details>

@@ -41,6 +41,11 @@ func TestStorageInventoryLive(t *testing.T) {
 		t.Fatalf("boot count %d", boot)
 	}
 	for _, d := range disks {
+		// F-39: what each disk's identity is worth, for the ledger's record.
+		t.Logf("%s: strength=%q model=%q id=%s", d.Path, d.IdentityStrength, d.Model, d.ID)
+		if d.ID != "" && d.IdentityStrength == "" {
+			t.Fatalf("%s has an identity but no strength", d.Path)
+		}
 		ptr, err := windows.UTF16PtrFromString(d.Path)
 		if err != nil {
 			t.Fatal(err)
