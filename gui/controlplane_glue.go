@@ -134,6 +134,7 @@ func (a *App) StartControlPlane() {
 		OnStorageApproval: a.applyStorageApproval,
 		OnBackupKey:       applyBackupKeyFromCheckin,
 		OnPBSTarget:       a.applyPBSTargetFromCheckin,
+		HeldPBSCredential: a.heldPBSCredentialReport,
 		// V4-RUN-AUDIT §4: queued WARN/ERROR lines ride the check-in, the
 		// server's ack trims the queue, and the server's per-machine debug
 		// deadline sets this process's level. No queue (GUI build, or a
@@ -341,6 +342,9 @@ func (a *App) SaveControlPlaneFromMap(m map[string]interface{}) error {
 		}
 		if u == "" || u != a.config.ControlServerURL {
 			// New/removed server: previous identity is meaningless there.
+			// Tell the server we are leaving FIRST, while we still hold the
+			// identity to say it with (V4-BETA-FIXES §1.3 part 2).
+			a.leaveControlServer()
 			a.config.ControlAgentID = 0
 			a.config.ControlSecret = ""
 		}
@@ -357,6 +361,37 @@ func (a *App) SaveControlPlaneFromMap(m map[string]interface{}) error {
 	}
 	a.RestartControlPlane()
 	return nil
+}
+
+// leaveTimeout bounds the one attempt to tell the server this machine is
+// leaving; the operator is waiting on the save.
+const leaveTimeout = 10 * time.Second
+
+// leaveControlServer tells the current control server that this machine is
+// leaving it, so the server retires the agent and revokes its PBS token
+// instead of keeping an active twin with a live credential (ledger F-45).
+//
+// BEST-EFFORT. One attempt, ten seconds. A machine that cannot reach the
+// server still leaves: the failure is a WARN, and the server's "possibly the
+// same machine" notice covers what remains when it re-enrolls.
+func (a *App) leaveControlServer() {
+	cfg := a.config
+	if cfg == nil || cfg.ControlServerURL == "" || cfg.ControlAgentID <= 0 {
+		return
+	}
+	c := &controlplane.Client{
+		BaseURL:         cfg.ControlServerURL,
+		CertFingerprint: cfg.ControlCertFP,
+		AgentID:         cfg.ControlAgentID,
+		Secret:          decryptSecret(cfg.ControlSecret),
+		UserAgent:       "NimbusBackupClient/" + appVersion,
+	}
+	if err := c.Leave(leaveTimeout); err != nil {
+		writeWarnLog(fmt.Sprintf("[controlplane] could not tell the control server that this machine (agent %d) is leaving; leaving anyway: %v",
+			cfg.ControlAgentID, err))
+		return
+	}
+	writeInfoLog(fmt.Sprintf("[controlplane] told the control server this machine (agent %d) is leaving", cfg.ControlAgentID))
 }
 
 // cpBuildInventory reports every scheduled job so the server can maintain

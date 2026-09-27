@@ -134,6 +134,11 @@ type CheckinRequest struct {
 	// on purpose: no new timer, no new connection, and a machine that cannot
 	// check in could not have delivered them any other way either.
 	Logs *LogBatch `json:"logs,omitempty"`
+
+	// PBSCredential reports the PBS credential this machine holds (never the
+	// secret) so the server can show a machine stuck on an outdated or
+	// refused one. Absent when none is held. V4-BETA-FIXES §1.1.
+	PBSCredential *HeldPBSCredential `json:"pbs_credential,omitempty"`
 }
 
 // LogBatch is one delivery from the agent's persistent WARN/ERROR queue.

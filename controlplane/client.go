@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -252,8 +253,22 @@ func (c *Client) post(path string, in, out interface{}, authed bool) error {
 	return last
 }
 
+// Leave tells the server this machine is leaving it (POST
+// /api/agent/v1/leave, V4-BETA-FIXES §1.3). ONE attempt, bounded by timeout:
+// it runs on the operator's save path, and a machine that cannot reach the
+// server must still be able to leave -- the caller logs a WARN and goes.
+func (c *Client) Leave(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return c.onceCtx(ctx, "/api/agent/v1/leave", []byte("{}"), nil, true)
+}
+
 func (c *Client) once(path string, body []byte, out interface{}, authed bool) error {
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
+	return c.onceCtx(context.Background(), path, body, out, authed)
+}
+
+func (c *Client) onceCtx(ctx context.Context, path string, body []byte, out interface{}, authed bool) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

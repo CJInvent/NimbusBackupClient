@@ -76,6 +76,35 @@ fleet size all propagate within one check-in cycle with no client-side
 reconfiguration. See NimbusControl `docs/AGENT-API.md` for the
 server-side offset assignment (`Nimbus\Agents\PollSchedule`).
 
+## The machine's PBS credential, and leaving (2026-09-27)
+
+NimbusControl `docs/V4-BETA-FIXES.md` §1.1 and §1.3; wire in `AGENT-API.md`.
+
+- **Which credential a secret is.** `Config.PBSCredentialFor` records the
+  (agent id, auth-id, generation) that arrived WITH the secret from
+  `/pbs-credential`, and only `fetchPBSCredential` writes it, together with
+  `Secret`. A secret counts as held only while that tuple equals
+  (`ControlAgentID`, `pbs_target.auth_id`, `pbs_target.credential_gen`). The
+  old test compared auth-ids after the target had already been copied into
+  `AuthID`, so any saved secret passed it (ledger F-38a/F-38b). The fetch
+  cooldown is keyed by the same tuple. A server without `credential_gen`
+  sends 0 in both places, so it causes one fetch and no more.
+- **Every check-in reports** `pbs_credential {auth_id, gen, refused_at}`
+  (never the secret; omitted when nothing is held).
+- **PBS refusing the credential is its own failure class.** A 401 on the
+  session upgrade (`pbscommon.PBSResponseError`, or our own
+  "PBS authentication or authorization failed: HTTP 401" text) is not
+  "session lost": the directory engine now aborts on the upgrade's rejection
+  instead of logging it as "no previous backup" and waiting 25 minutes. The
+  pipeline then records `PBSRefusedAt`, WARNs once per refused credential,
+  asks the server for the credential it currently names (normal cooldown),
+  and fails the run with "PBS refused this machine's credential; requesting a
+  new one from the control server" (or says the next run uses the new one).
+  Captured lines: `gui/testdata/pbs-refusal/`.
+- **Leaving.** Saving an empty or different control-server URL first calls
+  `POST /api/agent/v1/leave` with the current identity (one attempt, 10 s),
+  then clears it. A failure is a WARN and the machine leaves anyway.
+
 ## Known gaps / verify on a real build
 
 1. **Not compile-verified in CI sandbox**: `proxy.golang.org` egress is

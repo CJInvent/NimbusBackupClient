@@ -19,7 +19,7 @@ import (
 // That is the same split as the backup key, for the same reason: a credential
 // re-sent on every cycle is a credential sitting in every log, proxy and cache
 // between the server and the machine. The server rate-limits this endpoint to
-// 3/hour and logs every release at WARN precisely so an agent that fetches
+// 3/hour and audits every release precisely so an agent that fetches
 // repeatedly -- one failing to persist what it got -- is visible rather than
 // invisible.
 
@@ -34,10 +34,18 @@ import (
 // cycle after a superadmin signed out. Keep what you have.
 type PBSTarget struct {
 	// AuthID is the PBS API token id belonging to THIS machine, e.g.
-	// "nimbus-clients@pbs!acme--frontdesk-01-17". It is also the change
-	// detector: when it differs from the auth-id whose secret we hold, our
-	// secret is for a token that is not ours any more and must be refetched.
+	// "nimbus@pbs!nc3fa9c1-2-17" (older tokens keep an <org>--<machine>
+	// name until something re-mints them).
 	AuthID string `json:"auth_id"`
+
+	// CredentialGen goes up by one every time the server mints this
+	// machine's token and never goes down (V4-BETA-FIXES §1.1). With the
+	// agent id and AuthID it is THE change detector: a re-mint under the same
+	// name -- retire then reactivate, a Resync, a re-enrollment -- keeps the
+	// auth-id and changes only this. Zero from a server that predates it,
+	// which compares equal to the zero a credential fetched from that server
+	// carries, so an older server causes one fetch and no more.
+	CredentialGen int64 `json:"credential_gen"`
 
 	BaseURL   string `json:"base_url"`
 	Datastore string `json:"datastore"`
@@ -58,6 +66,9 @@ func (t *PBSTarget) Complete() bool {
 
 // PBSCredential is the sealed response from POST /api/agent/v1/pbs-credential:
 // the target again, plus the secret half sealed to our registered public key.
+// Its AuthID and CredentialGen are read on the server in the same statement
+// as the secret, so they -- not the check-in that prompted the fetch -- are
+// what the secret belongs to.
 //
 // The server returns the target alongside the secret rather than making the
 // caller correlate it with a check-in, and that is worth keeping: the two are
@@ -81,11 +92,21 @@ type PBSCredential struct {
 // keys or discard a working configuration; both have been shipped by somebody.
 var ErrNotProvisioned = errors.New("controlplane: this server provisions no PBS credential for this machine")
 
+// HeldPBSCredential is what this machine reports it holds, on every
+// check-in (`pbs_credential`). Never the secret: the auth-id and generation
+// stored WITH it, and when PBS last refused it (unix seconds; nil = never).
+type HeldPBSCredential struct {
+	AuthID    string `json:"auth_id"`
+	Gen       int64  `json:"gen"`
+	RefusedAt *int64 `json:"refused_at"`
+}
+
 // FetchPBSCredential retrieves the sealed secret half of this machine's PBS
 // token. The caller opens it with the agent key named by SealedToKeyID.
 //
-// CALL THIS ON A MISMATCH, NOT ON A SCHEDULE. The auth-id on every check-in is
-// what says whether the secret already held is still the right one.
+// CALL THIS ON A MISMATCH, NOT ON A SCHEDULE. The (agent id, auth-id,
+// generation) on every check-in is what says whether the secret already held
+// is still the right one.
 func (c *Client) FetchPBSCredential() (*PBSCredential, error) {
 	var out PBSCredential
 	if err := c.post("/api/agent/v1/pbs-credential", struct{}{}, &out, true); err != nil {

@@ -9,7 +9,10 @@ package main
 // happily write master.key and backup-key.json into the developer's real home
 // directory and then read another test's leftovers.
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // resetDEKCache clears the process-wide DEK cache so the next getDEK() re-reads
 // master.key from the (freshly isolated) config dir.
@@ -27,4 +30,24 @@ func isolateConfigDir(t *testing.T) string {
 	resetDEKCache()
 	t.Cleanup(resetDEKCache)
 	return dir
+}
+
+// captureServiceLog points the service logger at a temp file for one test and
+// returns a reader for what was written, so a test can assert on the lines a
+// change must (or must not) produce -- the "logs once" rules are only rules if
+// something counts.
+func captureServiceLog(t *testing.T) func() string {
+	t.Helper()
+	path := t.TempDir() + "/service-test.log"
+	lg, err := NewRotatingLogger(path, MaxLogSize, MaxLogFiles)
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+	prev := serviceLogger
+	serviceLogger = lg
+	t.Cleanup(func() { serviceLogger = prev })
+	return func() string {
+		b, _ := os.ReadFile(path)
+		return string(b)
+	}
 }

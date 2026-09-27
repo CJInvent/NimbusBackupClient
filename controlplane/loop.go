@@ -95,6 +95,11 @@ type Agent struct {
 	// owns the reacting behavior.
 	OnPBSTarget func(*PBSTarget)
 
+	// HeldPBSCredential reports, on every check-in, which PBS credential this
+	// machine holds (auth-id, generation, last refusal) -- never the secret.
+	// nil return = none held; the field is then omitted.
+	HeldPBSCredential func() *HeldPBSCredential
+
 	// PendingLogs returns the queued WARN/ERROR lines to deliver with this
 	// check-in, or nil when there are none. OnLogAck is then told the
 	// highest sequence the server has stored, so the queue can be trimmed;
@@ -316,6 +321,9 @@ func (a *Agent) CheckinNow() {
 
 	if a.PendingLogs != nil {
 		req.Logs = a.PendingLogs()
+	}
+	if a.HeldPBSCredential != nil {
+		req.PBSCredential = a.HeldPBSCredential()
 	}
 
 	resp, err := a.Client.Checkin(req)

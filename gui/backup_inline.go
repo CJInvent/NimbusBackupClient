@@ -1131,7 +1131,19 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 
 	previousDidx, err := client.DownloadPreviousToBytes(archive.ArchiveName)
 	if err != nil {
-		// This is normal for first backup - no previous backup exists
+		// THE SESSION'S FIRST REQUEST, so a rejected session upgrade surfaces
+		// here -- as it already did on the image path. It must abort. Passing
+		// it off as "no previous backup" continued to /dynamic_index, whose
+		// blocked re-dial reported "session cannot be resumed", and that is
+		// the "session lost" class: a 25-minute wait for a credential PBS had
+		// already refused (T5.4, captured 2026-09-24; ledger F-38).
+		var rejected *pbscommon.PBSResponseError
+		if errors.As(err, &rejected) {
+			writeErrorLog(fmt.Sprintf("PBS rejected the backup session: %v", err))
+			return fmt.Errorf("PBS rejected the backup session: %w", err)
+		}
+		// Anything else: no previous index to deduplicate against (a network
+		// error here fails the upload that follows on its own).
 		writeBackupLog(fmt.Sprintf("No previous backup found (first backup?): %v", err))
 		previousDidx = []byte{}
 	} else {

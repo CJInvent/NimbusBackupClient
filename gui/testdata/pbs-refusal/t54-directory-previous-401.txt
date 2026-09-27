@@ -1,0 +1,7 @@
+No previous backup found (first backup?): Get "https://10.10.10.110:8007/previous?archive-name=backup.pxar.didx": PBS authentication or authorization failed: HTTP 401 Unauthorized - HTTP/1.1 401 Unauthorized
+set-cookie: __Host-PBSAuthCookie: [redacted] 01 Jan 1970 00:00:00 GMT; Secure; SameSite=Lax; HttpOnly; Path=/;
+content-length: 43
+date: Thu, 24 Sep 2026 15:27:40 GMT
+
+
+Body: authentication failed - invalid credentials
