@@ -134,6 +134,7 @@ func (a *App) StartControlPlane() {
 		OnStorageApproval: a.applyStorageApproval,
 		OnBackupKey:       applyBackupKeyFromCheckin,
 		OnPBSTarget:       a.applyPBSTargetFromCheckin,
+		OnOrgSuspended:    applyOrgSuspended,
 		HeldPBSCredential: a.heldPBSCredentialReport,
 		// V4-RUN-AUDIT §4: queued WARN/ERROR lines ride the check-in, the
 		// server's ack trims the queue, and the server's per-machine debug
@@ -278,6 +279,8 @@ func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 		"agent_id":             int64(0),
 		"connected":            false,
 		"pending_enroll_token": cfg != nil && cfg.ControlEnrollToken != "",
+		// F-22: shown on the status card; the service owns the flag.
+		"org_suspended": orgSuspended.Load(),
 	}
 	if cfg != nil {
 		out["agent_id"] = cfg.ControlAgentID

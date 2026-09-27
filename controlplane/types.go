@@ -289,6 +289,15 @@ type CheckinResponse struct {
 	// auth-id whose secret we already hold.
 	PBSTarget *PBSTarget `json:"pbs_target"`
 
+	// OrgSuspended: this machine's organization is suspended in the portal
+	// (NimbusControl AGENT-API.md, F-22). Check-in keeps working so the
+	// machine can say why its backups fail; the server has disabled the
+	// org's PBS tokens, which is the real control. While true the service
+	// skips SCHEDULED runs and says "Backups suspended by your provider"; a
+	// run somebody asked for is still attempted (PBS refuses it). Absent from
+	// an older server, which reads as false.
+	OrgSuspended bool `json:"org_suspended"`
+
 	// LogAckSeq is the highest log sequence the server has stored for this
 	// machine. The agent trims its queue up to it. It acknowledges what is
 	// STORED, not what this request carried, so a batch whose response was

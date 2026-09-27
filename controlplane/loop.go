@@ -112,6 +112,11 @@ type Agent struct {
 	// reason OnBackupKey is pushed: turning debug OFF must reach the machine.
 	OnDebugUntil func(until int64)
 
+	// OnOrgSuspended receives the organization's suspended flag on every
+	// successful check-in, false included, so a reactivation reaches the
+	// machine the same way a suspension does.
+	OnOrgSuspended func(suspended bool)
+
 	AgentVersion string
 
 	// PolicyMaxAge optionally bounds how long a delivered policy stays in
@@ -345,6 +350,12 @@ func (a *Agent) CheckinNow() {
 	}
 	if a.OnDebugUntil != nil {
 		a.OnDebugUntil(resp.DebugUntil)
+	}
+	// Before commands, like policy: a run_backup in this response is manual
+	// work and is attempted anyway, but the scheduler must see the flag the
+	// server sent with it, not the previous cycle's.
+	if a.OnOrgSuspended != nil {
+		a.OnOrgSuspended(resp.OrgSuspended)
 	}
 
 	if resp.CheckinSeconds >= 30 { // refuse absurd values; floor at 30 s

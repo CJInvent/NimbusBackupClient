@@ -1,5 +1,6 @@
 const translations = {
   fr: {
+    orgSuspendedBanner: "Sauvegardes suspendues par votre prestataire : les sauvegardes planifiées ne s'exécutent pas tant que votre organisation n'est pas réactivée.",
     storageTitle: "Identité du stockage",
     storageError: "Identité du stockage : intervention requise",
     storageReview: "Vérifiez les identités des disques et partitions avant de valider les périphériques sélectionnés.",
@@ -504,6 +505,7 @@ const translations = {
     panelFailed: "Échec",
   },
   en: {
+    orgSuspendedBanner: "Backups suspended by your provider: scheduled backups do not run until your organization is reactivated.",
     storageTitle: "Storage identity",
     storageError: "Storage identity requires intervention",
     storageReview: "Review the device and partition identities before approving selected devices.",
@@ -1008,6 +1010,7 @@ const translations = {
     panelFailed: "Failed",
   },
   es: {
+    orgSuspendedBanner: "Copias de seguridad suspendidas por su proveedor: las copias programadas no se ejecutan hasta que se reactive su organización.",
     storageTitle: "Identidad del almacenamiento",
     storageError: "La identidad del almacenamiento requiere intervención",
     storageReview: "Revise las identidades de los discos y particiones antes de aprobar los dispositivos seleccionados.",

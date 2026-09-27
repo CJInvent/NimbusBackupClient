@@ -105,6 +105,19 @@ NimbusControl `docs/V4-BETA-FIXES.md` §1.1 and §1.3; wire in `AGENT-API.md`.
   `POST /api/agent/v1/leave` with the current identity (one attempt, 10 s),
   then clears it. A failure is a WARN and the machine leaves anyway.
 
+## A suspended organization (2026-09-27, NimbusControl F-22)
+
+Check-in carries `org_suspended` (absent from an older server: false). The
+server has already disabled the organization's PBS tokens; that is the real
+control. While the flag is true the service's scheduler starts nothing,
+managed or local (`scheduledRunSuspended` in `gui/org_suspended.go`, checked
+in `executeScheduledJob`), and the GUI shows "Backups suspended by your
+provider". A run somebody asked for (a portal `run_backup`, a manual run)
+carries a request id and is still attempted; PBS refuses it. The flag is
+logged on change only (WARN when it starts, INFO when it ends) and lives in
+memory: after a service restart it is false until the first check-in, and a
+scheduled run in that window is refused by PBS.
+
 ## Known gaps / verify on a real build
 
 1. **Not compile-verified in CI sandbox**: `proxy.golang.org` egress is
