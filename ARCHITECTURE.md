@@ -31,7 +31,10 @@ NimbusControl repo (`docs/AGENT-API.md`), with client-side notes in
 Two processes, one compiled codebase:
 
 * **GUI process** — the Wails desktop app. Runs in the user's session,
-  unprivileged. Build tag: `!service`.
+  unprivileged. Build tag: `!service`. One per user session, through Wails'
+  `SingleInstanceLock` (`gui/gui_options.go`): a second launch shows the
+  running window and exits (F-44, 2026-09-27; the hand-made mutex it
+  replaces never detected a second instance).
 * **Service process** — `NimbusBackup` Windows service, runs as
   **LocalSystem**. Owns scheduling, privileged VSS snapshots, the
   control-plane loop, and is the **single writer of `config.json`**.
@@ -358,6 +361,7 @@ Levels, same names and order as the server's `Core\Log`:
 
 | Writer | Label | Suppressed by |
 |---|---|---|
+| `writeTraceLog` | `TRACE` | level above TRACE; a server debug window never lowers to TRACE (one line per check-in: `controlplane.LogTrace`, 2026-09-27) |
 | `writeCatLog` / `writeDebugLevelLog` | `DEBUG` | level above DEBUG, unless the category was enabled at launch (`-logcat pbs,chunks,security,api\|all`) |
 | `writeInfoLog` | `SERVICE` | never below INFO (the settable floor) |
 | `writeWarnLog` | `WARN` | never |

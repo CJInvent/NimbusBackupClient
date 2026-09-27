@@ -43,6 +43,10 @@ var (
 	lastPollLogged         bool
 	lastPollIntervalLogged int
 	lastPollOffsetLogged   int
+	// The scheduled PBS connectivity result last logged ("" = none since
+	// start): one line per CHANGE, the first result after start included
+	// (ledger F-27).
+	lastPBSReachLogged string
 
 	// Reporter hand-off between the code that KNOWS the job name
 	// (executeScheduledJob) and the code that builds BackupOptions.
@@ -217,6 +221,19 @@ func pollScheduleLogChanged(intervalSeconds, offsetSeconds int) bool {
 	return true
 }
 
+// pbsReachLogChanged is the same test for the scheduled PBS connectivity
+// result: true for the first result after a (re)start and whenever it
+// differs from the last one logged.
+func pbsReachLogChanged(label string) bool {
+	cpLogMu.Lock()
+	defer cpLogMu.Unlock()
+	if lastPBSReachLogged == label {
+		return false
+	}
+	lastPBSReachLogged = label
+	return true
+}
+
 // resetCheckinLogState makes the next check-in log its values again. Called
 // when the control plane starts or restarts, so "what is this agent
 // configured with" stays answerable from the log after a restart or a
@@ -227,6 +244,7 @@ func resetCheckinLogState() {
 	lastPolicyLogged = nil
 	lastPollLogged = false
 	lastPollIntervalLogged, lastPollOffsetLogged = 0, 0
+	lastPBSReachLogged = ""
 	// A restarted or re-pointed control plane reports its key status afresh.
 	adReport.Lock()
 	adReport.sent, adReport.sig = false, ""

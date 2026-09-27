@@ -315,11 +315,24 @@ func writeDebugLevelLog(message string) {
 	writeLogToLogger(serviceLogger, "DEBUG", message)
 }
 
+// writeTraceLog writes a TRACE line: only when the registry level is TRACE.
+// A server debug window lowers the level to DEBUG, never to TRACE, so these
+// lines are the machine owner's choice alone -- and a debug window that
+// closes leaves a registry TRACE in place (ledger T7.5).
+func writeTraceLog(message string) {
+	if !logLevelEnabled(levelTrace) {
+		return
+	}
+	writeLogToLogger(serviceLogger, "TRACE", message)
+}
+
 // controlplaneLog is installed with controlplane.SetLogger, so the control
 // plane package's lines keep their severity instead of all arriving at INFO
 // through the stdlib redirect.
 func controlplaneLog(level controlplane.LogLevel, message string) {
 	switch level {
+	case controlplane.LogTrace:
+		writeTraceLog(message)
 	case controlplane.LogDebug:
 		writeDebugLevelLog(message)
 	case controlplane.LogInfo:

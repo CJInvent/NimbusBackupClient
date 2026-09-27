@@ -130,8 +130,14 @@ func (a *App) runPBSPollLoop(stop <-chan struct{}) {
 		pbsLastResult = result
 		pbsLastCheckedAt = checkedAt
 		pbsResultMu.Unlock()
-		writeInfoLog(fmt.Sprintf("[pbspoll] scheduled PBS connectivity check at %s: reachable=%v",
-			checkedAt.Format(time.RFC3339), pbsReachabilityLabel(result)))
+		// On CHANGE only (F-27): at the default 30-minute interval the old
+		// line was 48 identical INFO lines a day per machine, and the one
+		// that mattered -- reachable went false -- looked like all the rest.
+		// The result is still reported at every check-in.
+		if label := pbsReachabilityLabel(result); pbsReachLogChanged(label) {
+			writeInfoLog(fmt.Sprintf("[pbspoll] scheduled PBS connectivity check at %s: reachable=%s",
+				checkedAt.Format(time.RFC3339), label))
+		}
 	}
 }
 

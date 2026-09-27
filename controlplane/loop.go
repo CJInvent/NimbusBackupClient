@@ -331,6 +331,7 @@ func (a *Agent) CheckinNow() {
 		req.PBSCredential = a.HeldPBSCredential()
 	}
 
+	t0 := time.Now()
 	resp, err := a.Client.Checkin(req)
 	a.recordAttempt(err)
 	if err != nil {
@@ -345,6 +346,12 @@ func (a *Agent) CheckinNow() {
 	if line := a.checkinGate.ok(); line != "" {
 		logf(LogInfo, "check-in %s", line)
 	}
+	// TRACE: one line per check-in, what went and what came back (never a
+	// value that could be a secret: counts and presence only).
+	logf(LogTrace, "check-in ok in %dms: sent inventory=%v logs=%d pbs_credential=%v; got commands=%d managed_jobs=%d pbs_target=%v backup_key=%v storage_approval=%v debug_until=%d org_suspended=%v log_ack=%d",
+		time.Since(t0).Milliseconds(), req.Inventory != nil, logEntryCount(req.Logs), req.PBSCredential != nil,
+		len(resp.Commands), len(resp.ManagedJobs), resp.PBSTarget != nil, resp.BackupKey != nil,
+		resp.StorageApproval != nil, resp.DebugUntil, resp.OrgSuspended, resp.LogAckSeq)
 	if req.Logs != nil && a.OnLogAck != nil {
 		a.OnLogAck(resp.LogAckSeq)
 	}
@@ -449,4 +456,12 @@ func (a *Agent) safeHandle(cmd Command) (res CommandResult) {
 		}
 	}()
 	return a.HandleCommand(cmd)
+}
+
+// logEntryCount is the number of queued log lines a check-in carried.
+func logEntryCount(b *LogBatch) int {
+	if b == nil {
+		return 0
+	}
+	return len(b.Entries)
 }

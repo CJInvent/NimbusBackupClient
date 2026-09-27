@@ -19,9 +19,6 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	wailswin "github.com/wailsapp/wails/v2/pkg/options/windows"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"pbscommon"
 	"security"
@@ -72,12 +69,14 @@ func main() {
 		writeInfoLog("Detailed log categories enabled: " + *logcat)
 	}
 
-	// Check for single instance (GUI only)
-	// If another instance exists, activate it and exit
-	if !CheckSingleInstance() {
-		fmt.Println("Another instance is already running. Activating existing window...")
-		os.Exit(0)
-	}
+	// ONE GUI PER USER SESSION is Wails' SingleInstanceLock (guiOptions
+	// below): a second launch hands its arguments to the first and exits
+	// inside wails.Run. The hand-made mutex this replaces read a SECOND
+	// GetLastError() after CreateMutex had already returned
+	// ERROR_ALREADY_EXISTS as its error, and in Go that value is not
+	// reliable, so every launch "was the only instance" (ledger F-44). So
+	// nothing between here and wails.Run may have side effects a second
+	// launch should not cause: legacy auto-start cleanup moved to startup.
 
 	// Setup panic recovery for main
 	defer func() {
@@ -116,10 +115,6 @@ func main() {
 		os.Exit(1)
 	}()
 
-	// Clean up legacy auto-start from previous versions
-	// (Task Scheduler or Registry entries before MSI service)
-	CleanupLegacyAutoStart()
-
 	// Create app instance
 	app := NewApp()
 	writeInfoLog("App instance created")
@@ -146,34 +141,7 @@ func main() {
 	}
 	writeInfoLog(fmt.Sprintf("WebView2 user-data path: %s", webviewDataDir))
 
-	// Create application options
-	appOptions := &options.App{
-		Title:     fmt.Sprintf("%s v%s", appName, appVersion),
-		Width:     1000,
-		Height:    700,
-		MaxWidth:  1400, // Prevent window from being too large
-		MaxHeight: 900,  // Prevent title bar from going off-screen
-		MinWidth:  400,  // Allow very small windows for low-res screens
-		MinHeight: 300,  // Allow very small windows for low-res screens
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		StartHidden:      *minimized, // Start hidden if --minimized flag is set
-		OnStartup:        app.startup,
-		OnDomReady:       app.domReady,
-		OnBeforeClose:    app.beforeClose,
-		OnShutdown:       app.shutdown,
-		Bind: []interface{}{
-			app,
-		},
-		Windows: &wailswin.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-			DisableWindowIcon:    false,
-			WebviewUserDataPath:  webviewDataDir,
-		},
-	}
+	appOptions := guiOptions(app, *minimized, webviewDataDir)
 
 	if *minimized {
 		writeInfoLog("Starting in minimized mode (hidden to tray)")
@@ -232,6 +200,9 @@ Please report this issue to RDEM Systems:
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	writeInfoLog("App.startup() called")
+	// Here, not in main(): only the instance that stays runs it (F-44).
+	// Removes Task Scheduler / Run-key auto-start left by pre-MSI versions.
+	CleanupLegacyAutoStart()
 	a.GetSecurityWarnings() // logs posture warnings once at startup
 
 	// Detect execution mode (Service vs Standalone)

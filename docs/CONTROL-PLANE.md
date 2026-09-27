@@ -52,7 +52,9 @@ phase posting, terminal latch, log-tail clipping keeps the END).
   `cpCheckPBSReachability`/`pbscommon.PBSClient.CheckConnectivity`
   unchanged — only *when* it runs changed, not what it does. Check-in's
   inventory now reports the cached result (`cachedPBSReachable()`) instead
-  of performing a live PBS call on every cycle. Server assigns the
+  of performing a live PBS call on every cycle. Its result is logged on
+  CHANGE only, the first result after a start included (F-27, 2026-09-27;
+  it was one INFO line every 30 minutes). Server assigns the
   interval/offset via `CheckinResponse.PBSPollIntervalSeconds/
   PBSPollOffsetSeconds` (`Agent.OnPBSPollSchedule` callback — same shape as
   the existing `OnPolicy` push). This is NOT the manual "Test" button
