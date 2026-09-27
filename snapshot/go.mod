@@ -3,8 +3,7 @@ module snapshot
 go 1.26
 
 require (
+	github.com/go-ole/go-ole v1.2.6
 	github.com/st-matskevich/go-vss v0.3.3
 	golang.org/x/sys v0.1.0
 )
-
-require github.com/go-ole/go-ole v1.2.6 // indirect

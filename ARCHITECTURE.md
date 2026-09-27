@@ -243,10 +243,17 @@ true, false, or unknown, matching inventory semantics.
   VSS_BT_COPY, false)` — **copy-only, component-less, writers participate**.
   App-consistent (SQL/Exchange writers freeze during `DoSnapshotSet`) but does
   **not** truncate logs, by design, so it never disturbs other backup
-  products' chains. Busy-shadow retry with one VSS service reset; per-writer
-  last-error diagnostics; the full lifecycle (creation, shadow ID, device
-  path, elapsed, failures with HRESULT) logs through `snapshot.LogFn` into the
-  app debug log — in both processes.
+  products' chains. The whole snapshot life (create, backup callback,
+  release) runs on ONE locked OS thread inside one STA COM apartment
+  (NimbusControl V4-BETA-FIXES §3.2, ledger F-34), one go-vss snapshotter per
+  volume (F-54). Another program's in-progress shadow copy is waited out
+  (three attempts a minute apart) and never deleted: no `delete shadows /all`,
+  no VSS service restart (F-42). Failures are described by
+  `snapshot.DescribeVSSError` as `NAME (0xCODE) during Call: sentence`,
+  decoding go-vss's hex-encoded text (F-43). Writers are read AFTER the
+  snapshot exists, by state number so any display language parses (F-36); a
+  failed writer is a WARN line and makes the run Warning. Lines go through
+  `snapshot.LogFn` (INFO), `WarnFn` and `ErrorFn`.
 * **Restore** — `restore_inline.go` (+ search/cache): snapshot tree browse,
   selective restore, metadata sidecar (`.nimbus_backup_meta.json`) with
   cross-host guard.
@@ -374,7 +381,10 @@ The `controlplane` package logs through `controlplane.SetLogger`, installed as
 `controlplaneLog`, so its lines keep their severity; the stdlib `log`
 redirect (`logredirect.go`) remains the catch-all for third-party output, at
 INFO. `pbscommon.DebugLogFn` and `snapshot.LogFn` route shared-package
-diagnostics into the same log so nothing prints into the void in a service.
+diagnostics into the same log so nothing prints into the void in a service;
+`snapshot.WarnFn` and `snapshot.ErrorFn` carry the snapshot package's
+failures at their own level, so they are queued for the server with the run's
+uuid (they were INFO and never left the machine: ledger F-36).
 
 Emission discipline is `docs/V4-RUN-AUDIT.md` §5 in the server repository: log
 changes, not polls; collapse repeats (`controlplane.repeatGate`, `sayOnce`).

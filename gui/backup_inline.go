@@ -88,6 +88,43 @@ type BackupOptions struct {
 	// additive timeline detail, not a status transition, so a late one is
 	// still meaningful rather than a regression to suppress.
 	OnMilestone func(checkpoint, level, message string)
+	// OnVSSWriterFailures receives the names of the VSS writers that failed
+	// during this run's snapshot, read after the snapshot existed
+	// (V4-BETA-FIXES §4, ledger F-36). The volume data is captured; the run
+	// reports Warning, not Success. Nil-safe; called at most once per
+	// snapshot set, only with a non-empty list.
+	OnVSSWriterFailures func(writers []string)
+}
+
+// snapshotWriterFailures is the writer-failure list the snapshot package puts
+// on every entry of one snapshot set.
+func snapshotWriterFailures(snaps map[string]snapshot.SnapShot) []string {
+	for _, sn := range snaps {
+		return sn.WriterFailures
+	}
+	return nil
+}
+
+// reportWriterFailures hands a snapshot set's failed writers to the run: a
+// warning event on the timeline and the hook that turns the outcome into
+// Warning.
+func reportWriterFailures(snaps map[string]snapshot.SnapShot, onMilestone func(string, string, string), onWriterFailures func([]string)) {
+	names := snapshotWriterFailures(snaps)
+	if len(names) == 0 {
+		return
+	}
+	if onMilestone != nil {
+		onMilestone(controlplane.CheckpointSnapshotVSS, "warning", vssWriterSummary(names))
+	}
+	if onWriterFailures != nil {
+		onWriterFailures(names)
+	}
+}
+
+// vssWriterSummary is the run's error summary when writers failed (CJ,
+// 2026-09-25: Warning, not Success).
+func vssWriterSummary(names []string) string {
+	return "VSS writer(s) failed: " + strings.Join(names, ", ") + "; application consistency not guaranteed"
 }
 
 // vssCreateFailedMarker tags errors that occurred BEFORE the VSS shadow
@@ -817,7 +854,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		// PBS dedupes chunks, so retrying is cheap for the already-uploaded data.
 		var err error
 		for attempt := 1; attempt <= maxDirAttempts; attempt++ {
-			err = backupDirectory(opts.Ctx, client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase, opts.OnMilestone)
+			err = backupDirectory(opts.Ctx, client, &newchunk, &reusechunk, &failedchunk, dir, opts.UseVSS, progress, opts.OnStats, opts.ExcludeList, opts.OnPhase, opts.OnMilestone, opts.OnVSSWriterFailures)
 			if err == nil {
 				break
 			}
@@ -1028,7 +1065,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	return nil
 }
 
-func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string), onMilestone func(checkpoint, level, message string)) error {
+func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk, reusechunk, failedchunk *atomic.Uint64, backupdir string, usevss bool, progress func(float64, string), onStats func(*BackupProgressStats), excludeList []string, onPhase func(string), onMilestone func(checkpoint, level, message string), onWriterFailures func([]string)) error {
 	writeBackupLog(fmt.Sprintf("Starting backup of %s", backupdir))
 	originalPath := backupdir
 
@@ -1053,6 +1090,7 @@ func backupDirectory(ctx context.Context, client *pbscommon.PBSClient, newchunk,
 				onMilestone(controlplane.CheckpointSnapshotVSS, "info",
 					fmt.Sprintf("VSS snapshot confirmed for %s", backupdir))
 			}
+			reportWriterFailures(snaps, onMilestone, onWriterFailures)
 			for _, snap := range snaps {
 				backupdir = snap.FullPath
 				break

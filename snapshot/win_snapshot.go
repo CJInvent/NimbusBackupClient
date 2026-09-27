@@ -6,41 +6,15 @@ package snapshot
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
-	"github.com/st-matskevich/go-vss"
+	ole "github.com/go-ole/go-ole"
 )
-
-// writerErrorLines extracts the diagnostic core from `vssadmin list writers`
-// output: each writer name with a non-zero last error and its state — the
-// same facts Event Viewer's VSS entries carry, so a failed snapshot is
-// debuggable from our log alone.
-func writerErrorLines(writersStatus string) []string {
-	var out []string
-	var name, state string
-	for _, line := range strings.Split(writersStatus, "\n") {
-		l := strings.TrimSpace(line)
-		if strings.HasPrefix(l, "Writer name:") {
-			name = strings.TrimPrefix(l, "Writer name:")
-		}
-		if strings.HasPrefix(l, "State:") {
-			state = strings.TrimPrefix(l, "State:")
-		}
-		if strings.HasPrefix(l, "Last error:") {
-			errv := strings.TrimSpace(strings.TrimPrefix(l, "Last error:"))
-			if errv != "" && !strings.EqualFold(errv, "No error") {
-				out = append(out, fmt.Sprintf("writer%s: state%s, last error: %s", name, state, errv))
-			}
-			name, state = "", ""
-		}
-	}
-	return out
-}
 
 // shadowIDRe matches a bare VSS shadow-copy GUID (8-4-4-4-12 hex).
 var shadowIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -97,94 +71,95 @@ func getAppDataFolder() (string, error) {
 	return appDataFolder, nil
 }
 
+// CreateVSSSnapshot shadow-copies the volumes of paths, runs backup_callback
+// with the snapshots, and releases them.
+//
+// ONE OS THREAD, ONE COM APARTMENT, FOR THE WHOLE LIFE OF THE SNAPSHOT
+// (V4-BETA-FIXES §3.2, ledger F-34). go-vss calls CoInitialize and then a long
+// sequence of COM calls, and nothing pinned the goroutine to a thread: the
+// scheduler could move it between CoInitialize and InitializeForBackup onto a
+// thread with no apartment (0x800401f0 CO_E_NOTINITIALIZED, Windows events
+// 8193/13 -- run 113). The library's own CoUninitialize also ran when
+// CreateSnapshot RETURNED, before the components were used again by Release.
+// So the thread is locked and an STA apartment is opened here, before the
+// first snapshotter exists, and closed only after the last Release: the
+// library's nested CoInitialize returns S_FALSE and its CoUninitialize
+// balances it, while ours keeps the apartment alive. STA, not MTA, because the
+// library initializes STA and a nested STA-on-MTA call would return
+// RPC_E_CHANGED_MODE and unbalance the uninitialize. The backup callback runs
+// on this locked thread; its worker goroutines do no COM.
+//
+// ONE SNAPSHOTTER PER VOLUME. The old loop reused one go-vss Snapshotter for
+// every path, and go-vss refuses a second CreateSnapshot on it ("snapshotter
+// is already in use"), so an image of a disk with two lettered volumes could
+// never be taken (ledger F-54).
 func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapShot) error) error {
-
-	sn := vss.Snapshotter{}
-	defer sn.Release()
-	snapshots := make(map[string]SnapShot)
-
-	for _, path := range paths {
-		path, _ = filepath.Abs(path)
-		volName := filepath.VolumeName(path)
-		volName += "\\"
-		subPath := path[len(volName):] //Strp C:\, 3 chars or whatever it is
-
-		appDataFolder, err := getAppDataFolder()
-		if err != nil {
-			fmt.Println("Error:", err)
-			return err
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		// S_FALSE (already initialized on this thread) is success; anything
+		// else means COM is unusable here and every VSS call would fail.
+		if oe, ok := err.(*ole.OleError); !ok || oe.Code() != 1 {
+			ErrorFn(fmt.Sprintf("VSS: COM initialization failed: %v", err))
+			return fmt.Errorf("COM initialization failed: %w", err)
 		}
+	}
+	defer ole.CoUninitialize()
 
-		LogFn(fmt.Sprintf("VSS: creating snapshot of %s (backup context, non-persistent, timeout 180s)", volName))
-		tSnap := time.Now()
-
-		// Check VSS writers status before creating snapshot
-		checkWritersCmd := exec.Command("vssadmin", "list", "writers")
-		writersOutput, writerErr := checkWritersCmd.CombinedOutput()
-		if writerErr != nil {
-			LogFn(fmt.Sprintf("VSS WARNING: could not inspect writer status: %v", writerErr))
-		}
-		writersStatus := string(writersOutput)
-
-		hasWriterWarnings := logWriterWarnings(writersStatus)
-
-		snapshot, err := sn.CreateSnapshot(volName, false, 180)
-		if err != nil && isShadowAlreadyInProgress(err) {
-			// IVssBackupComponents stuck from a previous crashed run.
-			// vssadmin delete shadows alone won't release it — we have to bounce
-			// the VSS service to drop the orphaned context, then retry once.
-			LogFn(fmt.Sprintf("VSS: snapshot creation blocked by an in-progress shadow (%v) — resetting VSS service state and retrying once", err))
-			sn.Release()
-			if resetErr := vssForceReset(); resetErr != nil {
-				LogFn(fmt.Sprintf("VSS: service reset FAILED: %v", resetErr))
-			}
-			sn = vss.Snapshotter{}
-			snapshot, err = sn.CreateSnapshot(volName, false, 180)
-		}
-		if err != nil {
-			errMsg := err.Error()
-			// Check if error is ONLY due to writer failures (0x80070005 = Access Denied, 0x800423f4 = Non-retryable)
-			if strings.Contains(errMsg, "0x80070005") || strings.Contains(errMsg, "0x800423f4") {
-				// These are writer-specific errors, not snapshot creation errors
-				// Log but DON'T fail - the snapshot might still be usable for file backup
-				LogFn(fmt.Sprintf("VSS: writer errors during creation (%v) — the snapshot itself may still be valid, checking", err))
-				// snapshot might still be valid even with writer errors - check below
-			} else {
-				// Critical failure: log everything Event Viewer would show —
-				// the exact error (with HRESULT) plus every writer in a bad
-				// state — THEN fail.
-				LogFn(fmt.Sprintf("VSS FAILED: snapshot of %s: %v", volName, err))
-				for _, wl := range writerErrorLines(writersStatus) {
-					LogFn("VSS " + wl)
-				}
-				return fmt.Errorf("VSS snapshot creation failed: %v", err)
-			}
-		}
-
-		// Verify snapshot was actually created
-		if snapshot == nil || snapshot.Id == "" {
-			LogFn(fmt.Sprintf("VSS FAILED: no snapshot object returned for %s", volName))
-			return fmt.Errorf("VSS snapshot creation failed: no valid snapshot created")
-		}
-
-		LogFn(fmt.Sprintf("VSS: snapshot {%s} of %s created in %s -> %s",
-			snapshot.Id, volName, time.Since(tSnap).Round(time.Millisecond), snapshot.DeviceObjectPath))
-		if hasWriterWarnings {
-			LogFn("VSS: snapshot created despite writer warnings — volume backup proceeding")
-		}
-
-		_, err = SymlinkSnapshot(filepath.Join(appDataFolder, "VSS"), snapshot.Id, snapshot.DeviceObjectPath)
-
-		if err != nil {
-			return err
-		}
-
-		snapshots[path] = SnapShot{FullPath: filepath.Join(appDataFolder, "VSS", snapshot.Id, subPath), Id: snapshot.Id, ObjectPath: snapshot.DeviceObjectPath, Valid: true}
-
+	appDataFolder, err := getAppDataFolder()
+	if err != nil {
+		ErrorFn(fmt.Sprintf("VSS: cannot resolve the snapshot folder: %v", err))
+		return err
 	}
 
-	return backup_callback(snapshots)
+	writersBefore := listWriters("before the snapshot")
+	describeWritersBefore(writersBefore)
 
+	var created []*createdSnapshot
+	defer func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			if rerr := created[i].sn.Release(); rerr != nil {
+				WarnFn(fmt.Sprintf("VSS: releasing the snapshot of %s: %s", created[i].volume, StripHex(rerr.Error())))
+			}
+		}
+	}()
+
+	type target struct{ path, volume, sub string }
+	var targets []target
+	byVolume := map[string]*createdSnapshot{}
+	for _, path := range paths {
+		path, _ = filepath.Abs(path)
+		volName := filepath.VolumeName(path) + "\\"
+		targets = append(targets, target{path: path, volume: volName, sub: path[len(volName):]})
+		if _, done := byVolume[volName]; done {
+			continue
+		}
+		LogFn(fmt.Sprintf("VSS: creating snapshot of %s (backup context, non-persistent, timeout %ds)", volName, vssTimeoutSeconds))
+		tSnap := time.Now()
+		cs, cerr := createVolumeSnapshot(volName, writersBefore)
+		if cerr != nil {
+			return cerr
+		}
+		created = append(created, cs)
+		byVolume[volName] = cs
+		LogFn(fmt.Sprintf("VSS: snapshot {%s} of %s created in %s -> %s",
+			cs.snap.Id, volName, time.Since(tSnap).Round(time.Millisecond), cs.snap.DeviceObjectPath))
+		if _, lerr := SymlinkSnapshot(filepath.Join(appDataFolder, "VSS"), cs.snap.Id, cs.snap.DeviceObjectPath); lerr != nil {
+			ErrorFn(fmt.Sprintf("VSS: %v", lerr))
+			return lerr
+		}
+	}
+
+	// The writers' outcome for THIS snapshot set, now that it exists.
+	failed := writerOutcome()
+
+	snapshots := make(map[string]SnapShot, len(targets))
+	for _, t := range targets {
+		cs := byVolume[t.volume]
+		snapshots[t.path] = SnapShot{FullPath: filepath.Join(appDataFolder, "VSS", cs.snap.Id, t.sub),
+			Id: cs.snap.Id, ObjectPath: cs.snap.DeviceObjectPath, Valid: true, WriterFailures: failed}
+	}
+	return backup_callback(snapshots)
 }
 
 // VSSCleanup removes orphaned VSS snapshots left by a previously crashed Nimbus
@@ -203,7 +178,7 @@ func CreateVSSSnapshot(paths []string, backup_callback func(sn map[string]SnapSh
 func VSSCleanup() error {
 	appData, err := getAppDataFolder()
 	if err != nil {
-		fmt.Printf("VSS Cleanup: cannot resolve app data folder: %v\n", err)
+		WarnFn(fmt.Sprintf("VSS cleanup: cannot resolve the snapshot folder: %v", err))
 		return nil
 	}
 	vssDir := filepath.Join(appData, "VSS")
@@ -229,100 +204,19 @@ func VSSCleanup() error {
 		}
 
 		// Live symlink ⇒ the shadow still exists ⇒ a genuine orphan from a crash.
-		fmt.Printf("VSS Cleanup: removing orphaned Nimbus shadow %s...\n", id)
-		deleteCmd := exec.Command("vssadmin", "delete", "shadows", "/shadow={"+id+"}", "/quiet")
-		if out, derr := deleteCmd.CombinedOutput(); derr != nil {
+		LogFn(fmt.Sprintf("VSS cleanup: removing orphaned Nimbus shadow %s", id))
+		if out, derr := runCommand("vssadmin", "delete", "shadows", "/shadow={"+id+"}", "/quiet"); derr != nil {
 			// Keep the marker so a later run retries; never fall back to /all.
-			fmt.Printf("VSS Cleanup: could not delete shadow %s (best-effort, will retry): %v - %s\n", id, derr, string(out))
+			WarnFn(fmt.Sprintf("VSS cleanup: could not delete Nimbus shadow %s (will retry): %v - %s", id, derr, strings.TrimSpace(string(out))))
 			continue
 		}
-		fmt.Printf("VSS Cleanup: removed Nimbus shadow %s\n", id)
+		LogFn(fmt.Sprintf("VSS cleanup: removed Nimbus shadow %s", id))
 		_ = os.Remove(marker)
 	}
 
-	// NOTE: we deliberately do NOT bounce the Windows VSS service here.
-	// `net stop/start VSS` affects EVERY VSS consumer on the host — on a Domain
-	// Controller, or a machine running third-party backup software (Veritas Backup
-	// Exec, Windows Server Backup, SQL/Exchange agents), restarting VSS can abort
-	// their in-flight snapshots and corrupt their backup state. Doing it on every
-	// service startup is especially hostile and runs even when no backup is due.
-	// A stuck IVssBackupComponents context from a previously crashed run ("shadow
-	// copy creation already in progress") is instead recovered lazily and only when
-	// it actually blocks us, by vssForceReset() on the next CreateSnapshot attempt
-	// — right before our own backup. See CreateVSSSnapshot.
+	// Never a VSS service restart and never `delete shadows /all`: both
+	// reach every VSS consumer on the host. A stuck context of OUR OWN, should
+	// one ever need a service bounce, is an operator action surfaced on the
+	// run report, not something this agent does (V4-BETA-FIXES §3.3).
 	return nil
-}
-
-// isShadowAlreadyInProgress detects the "shadow copy creation is already in
-// progress" error returned by go-vss / Windows VSS when a previous
-// IVssBackupComponents context is still held.
-func isShadowAlreadyInProgress(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	// Windows surfaces this either as VSS_E_BAD_STATE (0x8004230f) or as a
-	// human-readable message containing "already in progress".
-	return strings.Contains(msg, "already in progress") ||
-		strings.Contains(msg, "0x8004230f")
-}
-
-// vssForceReset is the aggressive recovery used mid-backup when a snapshot
-// attempt returns "already in progress". It deletes orphan shadows then
-// bounces the VSS service so the next CreateSnapshot starts from a clean
-// state.
-//
-// DELIBERATE /all here (unlike startup VSSCleanup which is now scoped): this runs
-// ONLY when our own CreateSnapshot is already blocked by a stuck VSS context, not
-// on every service start — a much smaller blast radius. The "in progress" state is
-// an in-flight requester/provider sequence, not a completed shadow we can target
-// by ID, so clearing it needs the service bounce below. WINDOWS-VERIFY: tighten
-// this (and the error classifier above; the in-progress code may be 0x80042316,
-// not 0x8004230f) before relying on it.
-func vssForceReset() error {
-	deleteCmd := exec.Command("vssadmin", "delete", "shadows", "/all", "/quiet")
-	if out, err := deleteCmd.CombinedOutput(); err != nil {
-		fmt.Printf("VSS reset: delete shadows warning: %v - %s\n", err, string(out))
-	}
-	return restartVSSService()
-}
-
-// restartVSSService bounces the Windows Volume Shadow Copy service. Safe at
-// service startup and during error recovery because Nimbus is the only VSS
-// consumer on backup-dedicated hosts, and stopping VSS just discards any
-// in-flight shadow context (which is exactly what we want when it's stuck).
-func restartVSSService() error {
-	fmt.Println("VSS Cleanup: Restarting VSS service to clear stuck state...")
-	stopCmd := exec.Command("net", "stop", "VSS")
-	if out, err := stopCmd.CombinedOutput(); err != nil {
-		// "service is not started" is fine — we'll start it next.
-		if !strings.Contains(string(out), "not started") &&
-			!strings.Contains(strings.ToLower(string(out)), "n'est pas démarr") {
-			fmt.Printf("VSS service stop warning: %v - %s\n", err, string(out))
-		}
-	}
-	startCmd := exec.Command("net", "start", "VSS")
-	if out, err := startCmd.CombinedOutput(); err != nil {
-		// "already started" is fine.
-		if strings.Contains(string(out), "already been started") ||
-			strings.Contains(strings.ToLower(string(out)), "déjà été démarr") {
-			return nil
-		}
-		return fmt.Errorf("net start VSS failed: %v - %s", err, string(out))
-	}
-	fmt.Println("VSS Cleanup: VSS service restarted")
-	return nil
-}
-
-// logWriterWarnings attributes only actual errors to their own writer.
-// The Last error label itself is also present for healthy writers.
-func logWriterWarnings(status string) bool {
-	errors := writerErrorLines(status)
-	for _, line := range errors {
-		LogFn("VSS WARNING: " + line)
-	}
-	if len(errors) > 0 {
-		LogFn("VSS: continuing with writer errors — application consistency may be affected")
-	}
-	return len(errors) > 0
 }

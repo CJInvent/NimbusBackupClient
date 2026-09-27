@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -138,19 +137,48 @@ func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 		reportedMu.Unlock()
 	}
 
+	// VSS writers that failed during this run's snapshot (V4-BETA-FIXES §4,
+	// CJ 2026-09-25): the volume data is there, application consistency is
+	// not, and the run is Warning rather than Success.
+	var (
+		writerMu       sync.Mutex
+		writerFailures []string
+	)
+	prevWriters := opts.OnVSSWriterFailures
+	opts.OnVSSWriterFailures = func(names []string) {
+		writerMu.Lock()
+		for _, n := range names {
+			if !containsString(writerFailures, n) {
+				writerFailures = append(writerFailures, n)
+			}
+		}
+		writerMu.Unlock()
+		if prevWriters != nil {
+			prevWriters(names)
+		}
+	}
+	writerSummary := func() string {
+		writerMu.Lock()
+		defer writerMu.Unlock()
+		if len(writerFailures) == 0 {
+			return ""
+		}
+		return vssWriterSummary(writerFailures)
+	}
+
 	prevResult := opts.OnResult
 	opts.OnResult = func(s *BackupStatus) {
 		if s != nil {
 			markReported()
 			tail := s.Message
-			switch {
-			case s.Outcome == OutcomeFailed && errorLooksVSS(s.Message):
-				rep.VSSFailed(firstLine(s.Message))
-			case s.Outcome == OutcomeFailed:
-				rep.Failed(firstLine(s.Message), tail)
-			case len(s.SkippedReadError) > 0 || len(s.Directories) > 0 && anyDirFailed(s.Directories):
-				rep.Warning(opts.BackupType, s.BackupID, s.BackupTime,
-					totalsOf(s), firstLine(s.Message), tail)
+			kind, summary := decideRunReport(s, writerSummary())
+			switch kind {
+			case reportVSSFailed:
+				rep.VSSFailed(summary)
+			case reportFailed:
+				rep.Failed(summary, tail)
+			case reportWarning:
+				rep.Warning(opts.BackupType, s.BackupID, s.BackupTime, totalsOf(s), summary, tail)
 				cpStampSnapshotNotes(opts, rep, s.BackupID, s.BackupTime)
 			default:
 				rep.Success(opts.BackupType, s.BackupID, s.BackupTime,
@@ -171,13 +199,15 @@ func attachControlPlaneHooks(opts *BackupOptions) (func(error), string) {
 		if already {
 			return // the engine reported its own outcome; nothing to add
 		}
-		if err != nil {
-			msg := err.Error()
-			if errorLooksVSS(msg) {
-				rep.VSSFailed(firstLine(msg))
-			} else {
-				rep.Failed(firstLine(msg), msg)
-			}
+		switch kind, summary := decideFinalReport(err, writerSummary()); kind {
+		case reportVSSFailed:
+			rep.VSSFailed(summary)
+			return
+		case reportFailed:
+			rep.Failed(summary, err.Error())
+			return
+		case reportWarning:
+			rep.Warning(opts.BackupType, opts.BackupID, time.Now().Unix(), controlplane.RunTotals{}, summary, "")
 			return
 		}
 		// Succeeded, but this engine gave us no BackupStatus, so the PBS
@@ -203,15 +233,6 @@ func totalsOf(s *BackupStatus) controlplane.RunTotals {
 		ChunksNew:     int64(s.NewChunks),
 		ChunksReused:  int64(s.ReusedChunks),
 	}
-}
-
-func anyDirFailed(dirs []DirResult) bool {
-	for _, d := range dirs {
-		if !d.OK {
-			return true
-		}
-	}
-	return false
 }
 
 // cpStampSnapshotNotes attaches this run's Backup Job ID to its PBS
@@ -255,16 +276,11 @@ func cpStampSnapshotNotes(opts *BackupOptions, rep *controlplane.RunReporter, ba
 	}()
 }
 
-// errorLooksVSS classifies a failure as VSS-side: the sentinel from
-// backupDirectory wraps every error that occurred before the shadow copy
-// was confirmed.
-func errorLooksVSS(msg string) bool {
-	return strings.Contains(msg, vssCreateFailedMarker)
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
 	}
-	return s
+	return false
 }

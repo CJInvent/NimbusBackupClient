@@ -15,6 +15,11 @@ func init() {
 func pbscommonSetDebugLog() {
 	pbscommon.DebugLogFn = func(msg string) { writeInfoLog("[pbs] " + msg) }
 	snapshot.LogFn = func(msg string) { writeInfoLog(msg) }
+	// Leveled, so writer failures and snapshot errors reach the WARN/ERROR
+	// queue the server receives and carry the run's uuid (ledger F-36: they
+	// were INFO and never left the machine).
+	snapshot.WarnFn = func(msg string) { writeWarnLog(msg) }
+	snapshot.ErrorFn = func(msg string) { writeErrorLog(msg) }
 
 	// The crypto audit trail goes to the BACKUP log, not the service log, and
 	// that choice is the whole point of the hook being separate.

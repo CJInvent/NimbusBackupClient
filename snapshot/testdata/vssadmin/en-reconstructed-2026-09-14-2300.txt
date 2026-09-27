@@ -1,0 +1,19 @@
+Writer name: 'ASR Writer'
+   State: [10] Failed
+   Last error: Timed out
+
+Writer name: 'MSSearch Service Writer'
+   State: [10] Failed
+   Last error: Timed out
+
+Writer name: 'Shadow Copy Optimization Writer'
+   State: [10] Failed
+   Last error: Timed out
+
+Writer name: 'Registry Writer'
+   State: [10] Failed
+   Last error: Timed out
+
+Writer name: 'COM+ REGDB Writer'
+   State: [10] Failed
+   Last error: Timed out
