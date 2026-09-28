@@ -204,9 +204,10 @@ func calculateDirSizeCtx(ctx context.Context, path string) (uint64, error) {
 			}
 			return nil // Skip other errors
 		}
-		// Never follow junctions / symlinks (see doc comment): on Windows
-		// ReadDir reports mount points with ModeSymlink, so skip the whole
-		// subtree rather than recursing into a loop.
+		// Never follow links (see doc comment). Symbolic links are ModeSymlink;
+		// since Go 1.23 a junction is ModeIrregular and not a directory, so
+		// WalkDir does not descend into it and it reaches the classification
+		// below, like every other entry.
 		if d.Type()&os.ModeSymlink != 0 {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -217,6 +218,12 @@ func calculateDirSizeCtx(ctx context.Context, path string) (uint64, error) {
 			info, err := d.Info()
 			if err != nil {
 				return nil // file vanished or became unreadable: ignore for sizing
+			}
+			// The same rule the writer applies (§13.2 R4): links, app aliases
+			// and online-only files add nothing to the backup, so nothing to
+			// the estimate. A terabyte online-only is not a terabyte to back up.
+			if kind, err := classifyEntry(filePath, info); err == nil && kind != pbscommon.ArchiveEntry {
+				return nil
 			}
 			totalSize += uint64(info.Size())
 		}
@@ -530,6 +537,38 @@ func formatDuration(d time.Duration) string {
 // backupCancelled returns a non-nil error once the backup's context has been
 // cancelled (user pressed Stop). A nil context — engines invoked without one —
 // never cancels, so existing non-cancellable callers are unaffected.
+// waitBeforeSessionRetry waits d before a session-lost retry, calling onTick
+// with the time remaining every tick, and returns the context's error as soon
+// as the run is stopped (F-76 R8). It was time.Sleep in 30-second steps: a
+// Stop, or a service stop for an MSI upgrade, waited out the whole 25 minutes.
+func waitBeforeSessionRetry(ctx context.Context, d, tick time.Duration, onTick func(remaining time.Duration)) error {
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done()
+	}
+	deadline := time.Now().Add(d)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil
+		}
+		if onTick != nil {
+			onTick(remaining)
+		}
+		step := tick
+		if remaining < step {
+			step = remaining
+		}
+		t := time.NewTimer(step)
+		select {
+		case <-done:
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
 func backupCancelled(ctx context.Context) error {
 	if ctx == nil {
 		return nil
@@ -836,7 +875,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	// the next one wipes them — otherwise a read error in an earlier folder of a
 	// multi-folder run / split bin is lost and the run can falsely report
 	// verified_success (v2-H-02 / M-01).
-	var allReadErrors, allSkipped, allExcluded []string
+	var allReadErrors, allSkipped, allExcluded, allOnlineOnly []string
 	successfulDirs := 0
 
 	// Retry policy for session-lost failures: PBS keeps the BackupGroup lock until
@@ -847,6 +886,13 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	const sessionLostRetryWait = 25 * time.Minute
 
 	for idx, dir := range opts.BackupDirs {
+		// A stopped run starts no further directory: each would take a
+		// shadow copy only to abort at its first write (F-76 R8).
+		if cerr := backupCancelled(opts.Ctx); cerr != nil {
+			dirErrors = append(dirErrors, fmt.Sprintf("Backup failed for %s: %v", dir, cerr))
+			dirResults = append(dirResults, DirResult{Path: dir, OK: false, Error: cerr.Error()})
+			continue
+		}
 		writeBackupLog(fmt.Sprintf("Starting backup of directory %d/%d: %s", idx+1, len(opts.BackupDirs), dir))
 
 		// Each directory becomes its own PBS session (Connect → upload → Finish).
@@ -868,19 +914,14 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 				writeBackupLog(fmt.Sprintf("Waiting %s for PBS to release backup group lock before retry...",
 					sessionLostRetryWait))
 
-				waitUntil := time.Now().Add(sessionLostRetryWait)
-				for {
-					remaining := time.Until(waitUntil)
-					if remaining <= 0 {
-						break
-					}
+				if werr := waitBeforeSessionRetry(opts.Ctx, sessionLostRetryWait, 30*time.Second, func(remaining time.Duration) {
 					progress(0, fmt.Sprintf("PBS session lost, waiting %s before retry (PBS lock releasing)...",
 						remaining.Round(time.Second)))
-					sleepFor := 30 * time.Second
-					if remaining < sleepFor {
-						sleepFor = remaining
-					}
-					time.Sleep(sleepFor)
+				}); werr != nil {
+					// Stop or service shutdown during the wait (F-76 R8):
+					// the directory ends now, as a stopped run.
+					writeBackupLog(fmt.Sprintf("Stopped while waiting to retry directory %s", dir))
+					break
 				}
 				writeBackupLog(fmt.Sprintf("Wait complete, retrying directory %s with fresh connection", dir))
 			}
@@ -891,6 +932,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 		allReadErrors = append(allReadErrors, client.ReadErrors...)
 		allSkipped = append(allSkipped, client.SkippedFiles...)
 		allExcluded = append(allExcluded, client.ExcludedFiles...)
+		allOnlineOnly = append(allOnlineOnly, client.OnlineOnlyFiles...)
 
 		if err != nil {
 			errMsg := fmt.Sprintf("Backup failed for %s: %v", dir, err)
@@ -936,19 +978,20 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 			writeBackupLog("Backup stopped by user — partial backup discarded and any VSS snapshot released")
 		}
 		status := &BackupStatus{
-			Outcome:          OutcomeFailed,
-			BackupID:         opts.BackupID,
-			BackupTime:       client.Manifest.BackupTime,
-			DurationSec:      time.Since(startTime).Seconds(),
-			TotalBytes:       totalSize.Load(),
-			BytesUploaded:    client.UploadedBytes(),
-			NewChunks:        newchunk.Load(),
-			ReusedChunks:     reusechunk.Load(),
-			FailedChunks:     failedchunk.Load(),
-			Directories:      dirResults,
-			ExcludedByPolicy: excludedToIssues(allExcluded),
-			SkippedReadError: skippedToIssues(allReadErrors),
-			Message:          errMsg,
+			Outcome:           OutcomeFailed,
+			BackupID:          opts.BackupID,
+			BackupTime:        client.Manifest.BackupTime,
+			DurationSec:       time.Since(startTime).Seconds(),
+			TotalBytes:        totalSize.Load(),
+			BytesUploaded:     client.UploadedBytes(),
+			NewChunks:         newchunk.Load(),
+			ReusedChunks:      reusechunk.Load(),
+			FailedChunks:      failedchunk.Load(),
+			Directories:       dirResults,
+			ExcludedByPolicy:  excludedToIssues(allExcluded),
+			SkippedReadError:  skippedToIssues(allReadErrors),
+			SkippedOnlineOnly: onlineOnlyToIssues(allOnlineOnly),
+			Message:           errMsg,
 		}
 		if opts.OnComplete != nil {
 			opts.OnComplete(false, errMsg)
@@ -984,8 +1027,13 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 
 	progress(1.0, progressMsg)
 
+	if len(allOnlineOnly) > 0 {
+		// Known absences (§13.2 R1): the data is in the cloud or on tiered
+		// storage, not on this device, and reading it would download it.
+		completionMsg += fmt.Sprintf("\n%d online-only files (cloud or tiered storage, not on this device) were not backed up", len(allOnlineOnly))
+	}
 	if len(allSkipped) > 0 {
-		completionMsg += fmt.Sprintf("\n⚠️  %d files/directories skipped (access denied or junction points)", len(allSkipped))
+		completionMsg += fmt.Sprintf("\n⚠️  %d files/directories skipped (links not followed, system files, online-only files, unreadable files; listed in the backup log)", len(allSkipped))
 		writeBackupLog(fmt.Sprintf("=== SKIPPED FILES/DIRECTORIES (%d) ===", len(allSkipped)))
 
 		// Log first 50 skipped files in detail
@@ -1010,42 +1058,30 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	//             read (genuine read errors, not expected system auto-excludes)
 	//   success_with_policy_exclusions — complete except files the user excluded
 	//   verified_success — fully complete
-	hasReadIssues := len(allReadErrors) > 0
-	var outcome BackupOutcome
-	switch {
-	case failed > 0:
-		outcome = OutcomeFailed
-	case partial:
-		outcome = OutcomePartial
-	case hasReadIssues:
-		outcome = OutcomePartial
-	case len(allExcluded) > 0:
-		outcome = OutcomeSuccessWithExclusions
-	default:
-		outcome = OutcomeVerifiedSuccess
-	}
+	outcome := decideOutcome(failed, partial, len(allReadErrors), len(allExcluded), len(allOnlineOnly))
 
 	status := &BackupStatus{
-		Outcome:          outcome,
-		BackupID:         opts.BackupID,
-		BackupTime:       client.Manifest.BackupTime,
-		DurationSec:      duration.Seconds(),
-		TotalBytes:       totalSize.Load(),
-		BytesUploaded:    client.UploadedBytes(),
-		NewChunks:        newchunk.Load(),
-		ReusedChunks:     reusechunk.Load(),
-		FailedChunks:     failed,
-		Directories:      dirResults,
-		ExcludedByPolicy: excludedToIssues(allExcluded),
-		SkippedReadError: skippedToIssues(allReadErrors),
-		Message:          completionMsg,
+		Outcome:           outcome,
+		BackupID:          opts.BackupID,
+		BackupTime:        client.Manifest.BackupTime,
+		DurationSec:       duration.Seconds(),
+		TotalBytes:        totalSize.Load(),
+		BytesUploaded:     client.UploadedBytes(),
+		NewChunks:         newchunk.Load(),
+		ReusedChunks:      reusechunk.Load(),
+		FailedChunks:      failed,
+		Directories:       dirResults,
+		ExcludedByPolicy:  excludedToIssues(allExcluded),
+		SkippedReadError:  skippedToIssues(allReadErrors),
+		SkippedOnlineOnly: onlineOnlyToIssues(allOnlineOnly),
+		Message:           completionMsg,
 	}
 
 	// One machine-greppable result line for support (pairs with the start-of-run
 	// target log): outcome label + the structured counters behind completionMsg.
-	writeBackupLog(fmt.Sprintf("[RESULT] outcome=%s dirs_ok=%d/%d new=%d reused=%d failed=%d read_errors=%d excluded=%d bytes=%d duration=%s",
+	writeBackupLog(fmt.Sprintf("[RESULT] outcome=%s dirs_ok=%d/%d new=%d reused=%d failed=%d read_errors=%d excluded=%d online_only=%d bytes=%d duration=%s",
 		status.Outcome, successfulDirs, len(opts.BackupDirs), status.NewChunks, status.ReusedChunks,
-		status.FailedChunks, len(status.SkippedReadError), len(status.ExcludedByPolicy), status.TotalBytes, duration))
+		status.FailedChunks, len(status.SkippedReadError), len(status.ExcludedByPolicy), len(status.SkippedOnlineOnly), status.TotalBytes, duration))
 
 	// Additive (choice A): OnComplete keeps its (success, message) contract for
 	// existing consumers; OnResult carries the full structured status for the
@@ -1243,6 +1279,7 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 	logicalSkipped := toLogicalPaths(archive.SkippedFiles, backupdir, originalPath)
 	logicalExcluded := toLogicalPaths(archive.ExcludedFiles, backupdir, originalPath)
 	logicalReadErrors := toLogicalPaths(archive.ReadErrors, backupdir, originalPath)
+	logicalOnlineOnly := toLogicalPaths(archive.OnlineOnlyFiles, backupdir, originalPath)
 
 	// Collect skipped files from archive
 	if len(logicalSkipped) > 0 {
@@ -1253,6 +1290,11 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 	// Genuine read errors / content instability drive the outcome (v2-H-02).
 	if len(logicalReadErrors) > 0 {
 		client.ReadErrors = append(client.ReadErrors, logicalReadErrors...)
+	}
+
+	// Online-only placeholders (§13.2 R1): known absences, not read errors.
+	if len(logicalOnlineOnly) > 0 {
+		client.OnlineOnlyFiles = append(client.OnlineOnlyFiles, logicalOnlineOnly...)
 	}
 
 	// Collect files excluded by user policy (H-04), kept distinct from errors.
@@ -1293,12 +1335,13 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 	// skipped on read errors) as a manifest blob, so the GUI can list them without
 	// restoring the archive. Best-effort: a failure here does NOT fail the backup.
 	sidecar := &BackupSidecar{
-		FormatVersion:    1,
-		BackupID:         client.Manifest.BackupID,
-		Directory:        originalPath,
-		GeneratedAt:      time.Now().Unix(),
-		ExcludedByPolicy: excludedToIssues(logicalExcluded),
-		SkippedReadError: skippedToIssues(logicalReadErrors),
+		FormatVersion:     1,
+		BackupID:          client.Manifest.BackupID,
+		Directory:         originalPath,
+		GeneratedAt:       time.Now().Unix(),
+		ExcludedByPolicy:  excludedToIssues(logicalExcluded),
+		SkippedReadError:  skippedToIssues(logicalReadErrors),
+		SkippedOnlineOnly: onlineOnlyToIssues(logicalOnlineOnly),
 	}
 	if sidecarBytes, sErr := json.Marshal(sidecar); sErr != nil {
 		writeBackupLog(fmt.Sprintf("WARNING: failed to serialize status sidecar: %v", sErr))

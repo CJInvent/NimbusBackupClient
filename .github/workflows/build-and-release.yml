@@ -572,6 +572,35 @@ jobs:
             exit 1
           fi
 
+  # F-71: the reparse points a real profile contains (junctions, symbolic
+  # links, app execution aliases, online-only placeholders, WOF-compressed
+  # files) through the production pxar writer and reader on real NTFS. Go's
+  # os.Lstat changed for these in 1.23 and Linux cannot show it. Its own job,
+  # so its result is readable from the check list without the job log.
+  reparse-smoke:
+    name: Reparse Smoke (F-71)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Reparse points through the pxar writer
+        shell: bash
+        working-directory: pbscommon
+        env:
+          GOWORK: off
+        run: |
+          go mod download
+          if go test -count=1 -v -run 'TestWindowsReparse' ./... > smoke.log 2>&1; then cat smoke.log; else
+            cat smoke.log
+            grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::F-71: $l"; done
+            exit 1
+          fi
+
   # Dependency audit. govulncheck is the useful half: it filters by
   # REACHABILITY, so it reports a vulnerable package only when this code
   # actually calls into the affected function. That distinction matters here —
@@ -1262,7 +1291,7 @@ jobs:
   dev-release:
     name: Dev Release (v4_dev)
     if: github.ref == 'refs/heads/v4_dev' && github.event_name == 'push'
-    needs: [toolchain, build-cli, build-gui, windows-smoke]
+    needs: [toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1363,7 +1392,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     # toolchain included deliberately: the dev release already required it,
     # so without it here a STABLE release verified less than a dev build did.
-    needs: [toolchain, build-cli, build-gui, windows-smoke]
+    needs: [toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

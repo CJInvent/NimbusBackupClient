@@ -27,6 +27,9 @@ type BackupSidecar struct {
 	GeneratedAt      int64       `json:"generated_at"`
 	ExcludedByPolicy []FileIssue `json:"excluded_by_policy,omitempty"`
 	SkippedReadError []FileIssue `json:"skipped_read_error,omitempty"`
+	// Files whose data is not on this device (cloud or tiered placeholders),
+	// left out without being opened (V4-BETA-FIXES §13.2 R1). Optional.
+	SkippedOnlineOnly []FileIssue `json:"skipped_online_only,omitempty"`
 }
 
 // BackupOutcome is the three-state result of a backup run.
@@ -84,6 +87,9 @@ type BackupStatus struct {
 	ExcludedByPolicy []FileIssue `json:"excluded_by_policy,omitempty"`
 	SkippedReadError []FileIssue `json:"skipped_read_error,omitempty"`
 	Corrupted        []FileIssue `json:"corrupted,omitempty"`
+	// SkippedOnlineOnly: placeholders whose data is not on this device (§13.2
+	// R1). Known absences, like policy exclusions: not read errors.
+	SkippedOnlineOnly []FileIssue `json:"skipped_online_only,omitempty"`
 
 	// Message is the human-readable summary already shown in logs and the UI.
 	Message string `json:"message"`
@@ -93,6 +99,28 @@ type BackupStatus struct {
 // complete except for deliberate policy exclusions. Partial and failed are not.
 func (s *BackupStatus) Success() bool {
 	return s != nil && (s.Outcome == OutcomeVerifiedSuccess || s.Outcome == OutcomeSuccessWithExclusions)
+}
+
+// decideOutcome is the directory run's 4-level outcome (v2-H-02 / F-01):
+//
+//	failed  -- a chunk upload failed (would corrupt the index)
+//	partial -- some directories failed, or files were unreadable or changed
+//	           during read (genuine read errors, not expected skips)
+//	success_with_policy_exclusions -- complete except files the user excluded
+//	           or files that are online-only (§13.2 R1: known absences, not
+//	           failures; the backup is knowingly short of the selection)
+//	verified_success -- fully complete
+func decideOutcome(failedChunks uint64, dirsFailed bool, readErrors, excluded, onlineOnly int) BackupOutcome {
+	switch {
+	case failedChunks > 0:
+		return OutcomeFailed
+	case dirsFailed, readErrors > 0:
+		return OutcomePartial
+	case excluded > 0, onlineOnly > 0:
+		return OutcomeSuccessWithExclusions
+	default:
+		return OutcomeVerifiedSuccess
+	}
 }
 
 // outcomeRank orders outcomes worst-to-best (failed=0 … verified=3).
@@ -133,6 +161,7 @@ func (s *BackupStatus) merge(child *BackupStatus) {
 	s.ExcludedByPolicy = append(s.ExcludedByPolicy, child.ExcludedByPolicy...)
 	s.SkippedReadError = append(s.SkippedReadError, child.SkippedReadError...)
 	s.Corrupted = append(s.Corrupted, child.Corrupted...)
+	s.SkippedOnlineOnly = append(s.SkippedOnlineOnly, child.SkippedOnlineOnly...)
 }
 
 // skippedToIssues wraps the engine's free-form SkippedFiles descriptions into the
@@ -162,6 +191,18 @@ func toLogicalPaths(items []string, from, to string) []string {
 		out[i] = strings.ReplaceAll(s, from, to)
 	}
 	return out
+}
+
+// onlineOnlyToIssues wraps the online-only paths (§13.2 R1) into FileIssue.
+func onlineOnlyToIssues(paths []string) []FileIssue {
+	if len(paths) == 0 {
+		return nil
+	}
+	issues := make([]FileIssue, 0, len(paths))
+	for _, p := range paths {
+		issues = append(issues, FileIssue{Path: p, Reason: "online-only: not on this device, not downloaded"})
+	}
+	return issues
 }
 
 // excludedToIssues wraps the list of policy-excluded paths (H-04) into FileIssue.

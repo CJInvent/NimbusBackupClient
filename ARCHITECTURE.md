@@ -233,6 +233,31 @@ true, false, or unknown, matching inventory semantics.
 * **Directory mode** — `backup_inline.go`: streams PXAR, DIDX dynamic chunking
   with dedup, junction/locked-file skip with reporting, optional auto-split
   for large first backups (`backup_split_api.go`, `backup_analysis.go`).
+* **What the directory writer does with each entry** (`pbscommon/reparse.go`,
+  `pbscommon/pxar.go`; NimbusControl `docs/V4-BETA-FIXES.md` §13.2, F-71 to
+  F-74). Every entry is classified from its attributes and, for a reparse
+  point, its tag (read with `FindFirstFile`; Go's FileInfo hides it) BEFORE it
+  is opened. The mode bits cannot do this: since Go 1.23 a junction is
+  `ModeIrregular` and not a directory, exactly like a WOF-compressed file.
+  - Name-surrogate reparse points (junctions, mount points, symbolic links):
+    never followed, never archived; an expected skip. A junction's target is
+    absolute, so inside a shadow copy it points at the live volume.
+  - App execution aliases and AF_UNIX sockets: nothing to read; expected skip.
+  - Online-only files (`RECALL_ON_DATA_ACCESS`/`RECALL_ON_OPEN`, or `OFFLINE`
+    on a reparse point): never opened (opening downloads them); listed as
+    online-only in the log, completion message and status sidecar
+    (`skipped_online_only`); outcome `success_with_policy_exclusions` at best,
+    reported to the server as Success. Not read errors.
+  - Placeholder folders are traversed; WOF, dedup and on-device cloud files are
+    read (their filter supplies the data); `OFFLINE` alone is read.
+  - A read error after a file's length is in the stream zero-fills the rest
+    and records a read error naming the offset; the run continues (R2).
+  - On any read error the writer stats the backup root; if the root is gone
+    (shadow copy deleted, share dropped) the directory fails with
+    `ErrSourceUnavailable` and nothing is finalized (R3).
+  - Size estimates and the split plan use the same classification (R4).
+  Tests: `pxar_reparse_test.go` (every platform, injected attributes) and
+  `pxar_reparse_windows_test.go` (real NTFS; CI job "Reparse Smoke (F-71)").
 * **Machine mode** — `machine_backup_windows.go`: per physical disk, enumerate
   partitions, VSS-snapshot mounted volumes, stream raw + snapshot regions into
   a fixed 4 MB chunk pipeline → FIDX. 8 hasher/upload workers over a **128 MB

@@ -19,9 +19,12 @@ import (
 // Every post is fire-and-forget for the CALLER (Client.post already retries
 // with backoff); a lost non-terminal report is harmless — the server's
 // state machine is forward-only and the terminal report carries everything.
-// A lost TERMINAL report leaves the run 'running' server-side until the
-// missed-backup expectation flags the job — acceptable and visible, never
-// silently wrong.
+// A TERMINAL report is stored durably before it is sent and re-sent after a
+// restart or the next check-in until the server has it, and a run this
+// process never saw finish is closed as interrupted (inflight.go, F-75). It
+// was once accepted that a lost terminal "leaves the run running until the
+// missed-backup expectation flags the job"; the dashboard counts a running
+// machine as running, not overdue, so that was never visible.
 //
 // DELIVERY IS ORDERED. Every post used to be its own goroutine, so a
 // milestone emitted right after Preparing() routinely reached the server
@@ -276,10 +279,11 @@ func (r *RunReporter) post(status RunStatus, mutate func(*RunReport)) {
 		r.mu.Unlock()
 		return // never report past a terminal state (mirrors server rule)
 	}
-	switch status {
-	case StatusSuccess, StatusWarning, StatusFailed, StatusVSSFailed:
+	terminal := r.isTerminal(status)
+	if terminal {
 		r.terminal = true
 	}
+	first := r.last == nil
 	rep := r.base
 	rep.Status = status
 	if mutate != nil {
@@ -289,10 +293,30 @@ func (r *RunReporter) post(status RunStatus, mutate func(*RunReport)) {
 	}
 	r.last = &rep
 	r.mu.Unlock()
+
+	// R5: record the run durably before the first report goes out, and the
+	// terminal report before IT goes out, so neither can be lost to a crash
+	// or an outage between here and the server.
+	store := r.c.inflight
+	if store != nil {
+		if terminal {
+			if !store.finish(rep, r.c.owner()) {
+				// R7: the service stop already closed this run.
+				logf(LogInfo, "run %s: already closed as interrupted; the engine's %s report is not sent", rep.RunUUID, rep.Status)
+				return
+			}
+		} else if first {
+			store.begin(rep, r.c.owner())
+		}
+	}
 	r.enqueue(func() {
-		if err := r.c.ReportRun(rep); err != nil {
-			// A lost TERMINAL report leaves the run 'running' on the server,
-			// which an operator will see and chase -- ERROR. A lost
+		err := r.c.ReportRun(rep)
+		if terminal && store != nil && terminalSettled(err) {
+			store.delivered(rep.RunUUID)
+		}
+		if err != nil {
+			// A lost TERMINAL report leaves the run 'running' on the server
+			// until R6 re-sends it (next check-in or start) -- ERROR. A lost
 			// intermediate one is repaired by the next report -- WARN.
 			lvl := LogWarn
 			if r.isTerminal(rep.Status) {

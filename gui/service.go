@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"controlplane"
 	"github.com/kardianos/service"
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"pbscommon"
@@ -167,6 +168,13 @@ func (s *NimbusService) run() {
 func (s *NimbusService) Stop(svc service.Service) error {
 	writeInfoLog("NimbusBackup service stopping...")
 
+	// Close the active runs as interrupted by this stop FIRST (F-75 R7):
+	// cutting the PBS sessions below makes the engine fail with a socket
+	// error, and that is not what happened.
+	if n := interruptActiveRunsForStop(); n > 0 {
+		writeWarnLog(fmt.Sprintf("Service stopping: %d backup run(s) in progress closed as interrupted", n))
+	}
+
 	// Close any live PBS backup session before we return, so the server
 	// releases the writer / snapshot lock instead of waiting for TCP
 	// keepalive to reap the abandoned connection.
@@ -224,4 +232,18 @@ func IsServiceMode() bool {
 		}
 	}
 	return false
+}
+
+// interruptActiveRunsForStop is R7 (F-75) for the service's stop path: the
+// active runs are closed as interrupted by the stop before their PBS
+// sessions are cut, so the portal says what happened instead of a socket
+// error. Returns how many runs it closed.
+func interruptActiveRunsForStop() int {
+	cpMu.Lock()
+	c := cpClient
+	cpMu.Unlock()
+	if c == nil {
+		return 0
+	}
+	return c.InterruptActiveRuns(controlplane.InterruptedByStopText)
 }

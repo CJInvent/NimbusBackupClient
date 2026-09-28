@@ -123,6 +123,17 @@ func (a *App) StartControlPlane() {
 		}
 	}
 
+	// Durable run records (F-75): open the store, then deliver whatever a
+	// restart or an outage left pending -- a terminal report that never
+	// landed, or a run this process never saw finish (closed as
+	// interrupted). In the background: the server may be unreachable.
+	if dir, err := getConfigDir(); err == nil {
+		cpClient.SetInflight(controlplane.OpenInflightRuns(controlplane.InflightPath(dir)))
+		go cpClient.DeliverPendingRuns()
+	} else {
+		writeWarnLog(fmt.Sprintf("[controlplane] run records unavailable (%v): a run interrupted by a restart will stay running on the server", err))
+	}
+
 	resetCheckinLogState()
 	// The control-plane package's lines keep their severity (WARN/ERROR are
 	// what reach the server), and the service opens its persistent queue of
