@@ -547,6 +547,23 @@ jobs:
           go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|VolumeMountPaths|PBSReachability|Storage)' ./...
           go test -tags service -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage)' ./...
 
+      # F-71: the reparse points a real profile contains (junctions, symbolic
+      # links, app execution aliases, online-only placeholders, WOF-compressed
+      # files) through the production pxar writer and reader on real NTFS.
+      # Go's os.Lstat changed for these in 1.23 and Linux cannot show it.
+      - name: Reparse point smoke (F-71)
+        shell: bash
+        working-directory: pbscommon
+        env:
+          GOWORK: off
+        run: |
+          go mod download
+          if go test -count=1 -v -run 'TestWindowsReparse' ./... > smoke.log 2>&1; then cat smoke.log; else
+            cat smoke.log
+            grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::F-71: $l"; done
+            exit 1
+          fi
+
       # S10: create a real VSS snapshot through the production code path and
       # confirm the 0.2.150 diagnostics actually emit.
       #
