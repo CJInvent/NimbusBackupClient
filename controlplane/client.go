@@ -223,8 +223,18 @@ func asHTTPError(err error, out **httpError) bool {
 }
 
 // postDelays is post's retry ladder. A variable only so tests of what
-// happens AFTER the retries give up do not each wait 40 seconds.
-var postDelays = []time.Duration{0, 2 * time.Second, 8 * time.Second, 30 * time.Second}
+// happens AFTER the retries give up do not each wait 40 seconds; guarded,
+// because reporters from other tests may still be posting when one swaps it.
+var (
+	postDelaysMu sync.RWMutex
+	postDelays   = []time.Duration{0, 2 * time.Second, 8 * time.Second, 30 * time.Second}
+)
+
+func retryLadder() []time.Duration {
+	postDelaysMu.RLock()
+	defer postDelaysMu.RUnlock()
+	return postDelays
+}
 
 // post sends JSON with retry. Backoff ladder: 2s, 8s, 30s (+ jitter) on
 // 429/5xx/transport errors — per the contract, never tight-loop. 4xx other
@@ -236,7 +246,7 @@ func (c *Client) post(path string, in, out interface{}, authed bool) error {
 	}
 
 	var last error
-	for attempt, base := range postDelays {
+	for attempt, base := range retryLadder() {
 		if base > 0 {
 			time.Sleep(base + jitter(base/2))
 		}

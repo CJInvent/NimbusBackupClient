@@ -68,9 +68,15 @@ func (s *runSink) terminals(uuid string) []RunReport {
 // fastRetries: what happens after the retries give up, without waiting 40s.
 func fastRetries(t *testing.T) {
 	t.Helper()
+	postDelaysMu.Lock()
 	orig := postDelays
 	postDelays = []time.Duration{0, time.Millisecond}
-	t.Cleanup(func() { postDelays = orig })
+	postDelaysMu.Unlock()
+	t.Cleanup(func() {
+		postDelaysMu.Lock()
+		postDelays = orig
+		postDelaysMu.Unlock()
+	})
 }
 
 // freshProcess forgets the process's store for path, as a restart does.
