@@ -3,6 +3,7 @@ package pbscommon
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/bits"
@@ -291,6 +292,18 @@ type PXARArchive struct {
 	// during read). Expected skips (system auto-excludes, junctions) are NOT here,
 	// so they don't downgrade a backup from verified_success (v2-H-02).
 	ReadErrors []string
+	// OnlineOnlyFiles lists files left out because their data is not on this
+	// device (cloud sync or tiered-storage placeholders, R1). Also in
+	// SkippedFiles; not read errors (V4-BETA-FIXES §13.2).
+	OnlineOnlyFiles []string
+
+	// entryAttrs overrides platformEntryAttrs (tests only).
+	entryAttrs entryAttrsFunc
+	// openForRead overrides os.Open for file payloads (tests only).
+	openForRead func(path string) (io.ReadCloser, error)
+	// sourceLost is set, and stays set, once the backup root stops answering
+	// during the run (R3).
+	sourceLost error
 
 	// ExcludeList holds user-configured exclusion patterns (H-04). Patterns are
 	// matched against each child entry; matches are pruned from the archive and
@@ -412,6 +425,64 @@ func (a *PXARArchive) addReadError(msg string) {
 	a.ReadErrors = append(a.ReadErrors, msg)
 }
 
+// ErrSourceUnavailable: the backup root stopped answering during the run (the
+// shadow copy was deleted, the share dropped). The directory's backup fails and
+// nothing is finalized, so PBS keeps the last complete snapshot as the newest
+// (V4-BETA-FIXES §13.2 R3, F-74).
+var ErrSourceUnavailable = errors.New("the backup source became unavailable during the run")
+
+// readFault records a read failure on one entry (R2/R3). If the backup root
+// itself no longer answers, the failure is not about this entry: it returns
+// ErrSourceUnavailable, which the caller must return, instead of letting every
+// remaining entry become a read error in a snapshot that would then be
+// finalized as "partial".
+func (a *PXARArchive) readFault(msg string) error {
+	if err := a.sourceGone(); err != nil {
+		return err
+	}
+	a.addReadError(msg)
+	return nil
+}
+
+func (a *PXARArchive) sourceGone() error {
+	if a.sourceLost != nil || a.root == "" {
+		return a.sourceLost
+	}
+	if _, err := os.Stat(a.root); err != nil {
+		a.sourceLost = fmt.Errorf("%w: %s: %v", ErrSourceUnavailable, a.root, err)
+	}
+	return a.sourceLost
+}
+
+// skipByKind applies R1 to an entry already Lstat'ed. It reports true when the
+// entry is left out (and records why); a reparse point whose tag cannot be read
+// is a read error.
+func (a *PXARArchive) skipByKind(path string, fi os.FileInfo) (bool, error) {
+	get := a.entryAttrs
+	if get == nil {
+		get = platformEntryAttrs
+	}
+	kind, err := classifyWith(get, path, fi)
+	if err != nil {
+		return true, a.readFault(fmt.Sprintf("Cannot read reparse point type: %s (Error: %v)", path, err))
+	}
+	switch kind {
+	case SkipLink:
+		a.SkippedFiles = append(a.SkippedFiles,
+			fmt.Sprintf("Link not followed (junction, mount point or symbolic link): %s", path))
+	case SkipNotData:
+		a.SkippedFiles = append(a.SkippedFiles,
+			fmt.Sprintf("App execution alias or socket (no data to back up): %s", path))
+	case SkipOnlineOnly:
+		a.SkippedFiles = append(a.SkippedFiles,
+			fmt.Sprintf("Online-only file, not on this device (not downloaded, not backed up): %s", path))
+		a.OnlineOnlyFiles = append(a.OnlineOnlyFiles, path)
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
 func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (CatalogDir, error) {
 	//fmt.Printf("Write dir %s at %d\n", path, a.pos)
 
@@ -428,17 +499,16 @@ func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (Cata
 			// Toplevel directory MUST be accessible — this is a fatal error
 			return CatalogDir{}, fmt.Errorf("cannot stat backup root directory: %s: %w", path, err)
 		}
-		// Sub-directories: skip and continue backup
-		skipMsg := fmt.Sprintf("Cannot stat directory: %s (Error: %v)", path, err)
-		a.addReadError(skipMsg)
-		return CatalogDir{}, nil
+		// Sub-directories: skip and continue backup (unless the source is gone, R3)
+		return CatalogDir{}, a.readFault(fmt.Sprintf("Cannot stat directory: %s (Error: %v)", path, err))
 	}
 
-	// Skip directory junction points to avoid infinite loops and access errors
-	if !toplevel && fileInfo.Mode()&os.ModeSymlink != 0 {
-		skipMsg := fmt.Sprintf("Junction point (skipped): %s", path)
-		a.SkippedFiles = append(a.SkippedFiles, skipMsg)
-		return CatalogDir{}, nil // Return nil error to continue backup
+	// Links are never followed and online-only placeholders never opened (R1).
+	// The root the user selected is always read.
+	if !toplevel {
+		if skip, err := a.skipByKind(path, fileInfo); skip || err != nil {
+			return CatalogDir{}, err
+		}
 	}
 
 	files, err := os.ReadDir(path)
@@ -447,10 +517,8 @@ func (a *PXARArchive) WriteDir(path string, dirname string, toplevel bool) (Cata
 			// Toplevel directory MUST be readable — this is a fatal error
 			return CatalogDir{}, fmt.Errorf("cannot read backup root directory: %s: %w", path, err)
 		}
-		// Sub-directories: skip and continue backup
-		skipMsg := fmt.Sprintf("Cannot read directory: %s (Error: %v)", path, err)
-		a.addReadError(skipMsg)
-		return CatalogDir{}, nil
+		// Sub-directories: skip and continue backup (unless the source is gone, R3)
+		return CatalogDir{}, a.readFault(fmt.Sprintf("Cannot read directory: %s (Error: %v)", path, err))
 	}
 
 	//Avoid writing filename entry on root
@@ -714,25 +782,24 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	fileInfo, err := os.Lstat(path)
 	if err != nil {
 		// Log stat errors but continue backup - don't fail on inaccessible files
-		skipMsg := fmt.Sprintf("Cannot stat file: %s (Error: %v)", path, err)
-		a.addReadError(skipMsg)
-		return CatalogFile{}, nil
+		return CatalogFile{}, a.readFault(fmt.Sprintf("Cannot stat file: %s (Error: %v)", path, err))
 	}
 
-	// Skip junction points and symlinks (common on Windows: "Application Data", etc.)
-	if fileInfo.Mode()&os.ModeSymlink != 0 {
-		skipMsg := fmt.Sprintf("Junction point (skipped): %s", path)
-		a.SkippedFiles = append(a.SkippedFiles, skipMsg)
-		return CatalogFile{}, nil // Return nil error to continue backup
+	// R1, before anything is opened. On Go 1.23+ a junction arrives HERE, not
+	// in WriteDir: ReadDir reports it as ModeIrregular and not a directory.
+	if skip, err := a.skipByKind(path, fileInfo); skip || err != nil {
+		return CatalogFile{}, err
 	}
 
-	file, err := os.Open(path)
+	open := a.openForRead
+	if open == nil {
+		open = func(p string) (io.ReadCloser, error) { return os.Open(p) }
+	}
+	file, err := open(path)
 
 	if err != nil {
 		// Log file open errors but continue backup - don't fail on locked/system files
-		skipMsg := fmt.Sprintf("Cannot open file: %s (Error: %v)", path, err)
-		a.addReadError(skipMsg)
-		return CatalogFile{}, nil
+		return CatalogFile{}, a.readFault(fmt.Sprintf("Cannot open file: %s (Error: %v)", path, err))
 	}
 
 	defer file.Close()
@@ -788,6 +855,7 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 
 	readbuffer := make([]byte, 1024*64)
 	var written uint64
+	var readErr error
 
 	for written < declaredSize {
 		toRead := uint64(len(readbuffer))
@@ -806,7 +874,11 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 			break
 		}
 		if err != nil {
-			return CatalogFile{}, fmt.Errorf("failed to read from %s: %w", path, err)
+			// The length is already in the stream, so the file cannot be
+			// dropped now: zero-fill the rest below (R2, F-72). One bad
+			// sector or one sync-provider failure no longer ends the run.
+			readErr = err
+			break
 		}
 	}
 
@@ -815,8 +887,16 @@ func (a *PXARArchive) WriteFile(path string, basename string) (CatalogFile, erro
 	// a content-instability read error so the backup is not reported as fully
 	// verified (v2-H-02) rather than silently passing.
 	if written < declaredSize {
-		a.addReadError(
-			fmt.Sprintf("File shrank during backup, zero-padded to declared size (content inconsistent): %s", path))
+		if readErr != nil {
+			if err := a.readFault(fmt.Sprintf(
+				"Read failed at byte %d of %d; the rest is zero-filled (content incomplete): %s (Error: %v)",
+				written, declaredSize, path, readErr)); err != nil {
+				return CatalogFile{}, err
+			}
+		} else {
+			a.addReadError(
+				fmt.Sprintf("File shrank during backup, zero-padded to declared size (content inconsistent): %s", path))
+		}
 		pad := make([]byte, 1024*64)
 		for written < declaredSize {
 			n := uint64(len(pad))

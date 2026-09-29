@@ -380,6 +380,10 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # pull-requests: write only for the failure comment below.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -401,9 +405,10 @@ jobs:
 
       - name: Run tests (controlplane module)
         working-directory: controlplane
+        shell: bash
         env:
           GOWORK: off
-        run: go test -v -race ./...
+        run: go test -v -race ./... 2>&1 | tee ../unit-controlplane.log
 
       - name: Resolve dependencies
         working-directory: gui
@@ -413,9 +418,28 @@ jobs:
 
       - name: Run tests
         working-directory: gui
+        shell: bash
         env:
           GOWORK: off
-        run: go test -v -race -coverprofile=coverage.out ./...
+        run: go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee ../unit-gui.log
+
+      # The job log is not readable from where the build sessions work (the
+      # API they have returns a check's conclusion, not its log), so a failure
+      # also lands on the pull request: the failing tests and their lines.
+      - name: Report failing tests on the pull request
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "### Unit Tests failed (run ${{ github.run_id }})"
+            echo '```'
+            cat unit-*.log 2>/dev/null | grep -E -B2 -A12 -- '--- FAIL|WARNING: DATA RACE|^panic:|^FAIL' | head -200
+            echo '```'
+          } > failure.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file failure.md || true
 
       - name: Generate coverage
         working-directory: gui
@@ -571,6 +595,55 @@ jobs:
             grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::S10: $l"; done
             exit 1
           fi
+
+  # F-71: the reparse points a real profile contains (junctions, symbolic
+  # links, app execution aliases, online-only placeholders, WOF-compressed
+  # files) through the production pxar writer and reader on real NTFS. Go's
+  # os.Lstat changed for these in 1.23 and Linux cannot show it. Its own job,
+  # so its result is readable from the check list without the job log.
+  reparse-smoke:
+    name: Reparse Smoke (F-71)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # pull-requests: write only for the failure comment below.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Reparse points through the pxar writer
+        shell: bash
+        working-directory: pbscommon
+        env:
+          GOWORK: off
+        run: |
+          go mod download
+          if go test -count=1 -v -run 'TestWindowsReparse' ./... > smoke.log 2>&1; then cat smoke.log; else
+            cat smoke.log
+            grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::F-71: $l"; done
+            exit 1
+          fi
+
+      # As in Unit Tests: the failure is posted where it can be read.
+      - name: Report the failure on the pull request
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "### Reparse Smoke (F-71) failed (run ${{ github.run_id }})"
+            echo '```'
+            head -c 60000 pbscommon/smoke.log 2>/dev/null || echo "no smoke.log"
+            echo '```'
+          } > failure.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file failure.md || true
 
   # Dependency audit. govulncheck is the useful half: it filters by
   # REACHABILITY, so it reports a vulnerable package only when this code
@@ -1262,7 +1335,7 @@ jobs:
   dev-release:
     name: Dev Release (v4_dev)
     if: github.ref == 'refs/heads/v4_dev' && github.event_name == 'push'
-    needs: [toolchain, build-cli, build-gui, windows-smoke]
+    needs: [toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1363,7 +1436,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     # toolchain included deliberately: the dev release already required it,
     # so without it here a STABLE release verified less than a dev build did.
-    needs: [toolchain, build-cli, build-gui, windows-smoke]
+    needs: [toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

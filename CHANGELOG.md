@@ -40,6 +40,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore.**
 
 ### Fixed
+- **Directory backups mishandled junctions, app execution aliases and
+  online-only files (F-71).** Since Go 1.23 a junction is reported as an
+  irregular file rather than a link, so the writer opened it: the profile's
+  deny-Everyone legacy junctions ("Application Data", "My Documents", ...)
+  became read errors and every profile backup was reported partial, and an
+  openable junction was archived as a 0-byte file. App execution aliases were
+  read errors on every Go version, and OneDrive/Azure File Sync online-only
+  files were opened (downloaded, or read from a shadow copy with no provider
+  behind it). Every entry is now classified by attributes and reparse tag
+  before it is opened: links are never followed, aliases are skipped, and
+  online-only files are listed as such without being opened
+  (`skipped_online_only`; outcome `success_with_policy_exclusions`).
+- **One unreadable file no longer ends the whole directory's backup (F-72).**
+  A read error after the file's length is in the stream zero-fills the rest
+  and records a read error naming the offset.
+- **A backup source that disappears mid-run fails the run (F-74)** instead of
+  committing a mostly empty snapshot as "partial" (a deleted shadow copy, a
+  dropped share).
+- **A split plan no longer drops files that sit directly in a selected root
+  when they are not plain files (F-73)**, such as WOF-compressed files; the
+  size estimate no longer counts online-only files.
+- **A run interrupted by a restart, power loss, crash or service upgrade no
+  longer stays "running" on the server forever (F-75).** Runs are recorded on
+  disk until the server has their terminal report; a lost terminal report is
+  re-sent after the next start or check-in, a run the service never saw
+  finish is closed as "Interrupted", and a service stop closes its own runs.
+- **Stop and service shutdown are honored during the 25-minute session-lost
+  retry wait (F-76).**
 - **An image backup stayed "preparing" in the portal for its whole duration**
   and then jumped to success. Only the directory engine ever called
   `OnPhase("running")`; the machine engine now fires it from the

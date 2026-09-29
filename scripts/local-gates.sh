@@ -45,6 +45,9 @@ have="$(go env GOVERSION)"
 # exit codes independently of any finding, and then red means "something
 # changed" instead of "something is wrong".
 TOOLS="$ROOT/.tools"
+# gosec installed with `GOBIN=.tools go install github.com/securego/gosec/v2/cmd/gosec@latest`
+# (CI installs @latest too) is found here as well as on the PATH.
+export PATH="$TOOLS:$PATH"
 LINT="$TOOLS/golangci-lint"
 lint_version_ok() { [ -x "$LINT" ] && "$LINT" --version 2>/dev/null | grep -q "${GOLANGCI_VERSION#v}"; }
 if ! lint_version_ok; then

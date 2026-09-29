@@ -120,6 +120,26 @@ logged on change only (WARN when it starts, INFO when it ends) and lives in
 memory: after a service restart it is false until the first check-in, and a
 scheduled run in that window is refused by PBS.
 
+## Runs survive a restart (2026-09-28, NimbusControl F-75/F-76)
+
+`controlplane/inflight.go` keeps one record per announced run in
+`runs-inflight.json` beside `config.json` until the server has the run's
+terminal report. The first report records the run; the terminal report is
+stored before it is sent; a 2xx (or a 4xx other than 429) removes the record.
+`DeliverPendingRuns` runs after `StartControlPlane` and after every successful
+check-in: a stored terminal is re-sent as it was, and a run with none that is
+not active in this process is closed as failed "Interrupted: the backup
+service ended during the run…". The service's `Stop` closes its active runs
+first ("…stopped during the run…"), before `CloseAllActive` cuts the PBS
+sessions; the engine's own terminal report after that is not sent. Records
+carry the identity (server URL + agent id) and are dropped, not sent, under
+another; records older than 30 days are dropped. A write failure is one WARN
+and never fails a backup. The directory engine's 25-minute session-lost wait
+now ends at once on Stop (`waitBeforeSessionRetry`), and a stopped run starts
+no further directory. Only one process hosts the agent at a time (the GUI
+delegates to the service when there is one), which the per-process set of
+active runs relies on.
+
 ## Known gaps / verify on a real build
 
 1. **Not compile-verified in CI sandbox**: `proxy.golang.org` egress is

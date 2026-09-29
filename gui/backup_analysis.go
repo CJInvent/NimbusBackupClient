@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"pbscommon"
 )
 
 // analysisSizeBudget is a runaway guard on the explicit-split size scan — NOT a
@@ -97,6 +99,28 @@ type BackupAnalysis struct {
 	Incomplete     bool         `json:"incomplete,omitempty"`       // the size scan hit its deadline; TotalSize is a partial undercount, so split decisions must not trust it
 }
 
+// classifyEntry is the writer's R1 rule (pbscommon.ClassifyEntry), shared by
+// the split plan and the size estimate so both see what the backup will
+// archive. A variable only so tests can present Windows entries on Linux.
+var classifyEntry = pbscommon.ClassifyEntry
+
+// rootEntryNeedsRemainder decides whether a non-directory entry sitting
+// directly in a selected root needs the root's remainder job (§13.2 R4): yes
+// for anything the writer archives or reports as online-only, no for a link or
+// an app execution alias, which add nothing. An entry that cannot be examined
+// gets the job, so the writer reports it rather than the plan dropping it.
+func rootEntryNeedsRemainder(path string, entry os.DirEntry) bool {
+	info, err := entry.Info()
+	if err != nil {
+		return true
+	}
+	kind, err := classifyEntry(path, info)
+	if err != nil {
+		return true
+	}
+	return kind == pbscommon.ArchiveEntry || kind == pbscommon.SkipOnlineOnly
+}
+
 // cleanKey normalizes a path for exact-path comparison (clean + lowercase) so
 // exclusions and folder paths compare uniformly across separators/case (Windows).
 func cleanKey(p string) string {
@@ -150,14 +174,17 @@ func AnalyzeBackupDirs(backupDirs []string, excludes []string, onProgress func(d
 
 		hasDirectFiles := false
 		for _, entry := range entries {
-			if entry.Type().IsRegular() {
-				// A regular file sitting directly in the root belongs to no subfolder
-				// job; the root needs a remainder job so a split backup does not drop it.
-				hasDirectFiles = true
-				continue
-			}
 			if !entry.IsDir() {
-				continue // symlink/device/junction — WriteDir handles or skips these
+				// A file sitting directly in the root belongs to no subfolder job;
+				// the root needs a remainder job so a split backup does not drop it.
+				// Not only IsRegular: since Go 1.23 a WOF-compressed or cloud file
+				// is ModeIrregular, and it is still data (§13.2 R4, F-73). Links and
+				// app aliases alone need no job; online-only files get one so the
+				// run lists them.
+				if rootEntryNeedsRemainder(filepath.Join(dir, entry.Name()), entry) {
+					hasDirectFiles = true
+				}
+				continue
 			}
 			folderPath := filepath.Join(dir, entry.Name())
 			if excludeSet[cleanKey(folderPath)] {

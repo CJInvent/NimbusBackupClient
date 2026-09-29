@@ -346,6 +346,10 @@ func (a *Agent) CheckinNow() {
 	if line := a.checkinGate.ok(); line != "" {
 		logf(LogInfo, "check-in %s", line)
 	}
+	// R6 (F-75): the server is reachable, so deliver any run report a
+	// restart or an outage left pending. Off the check-in's lock: a slow
+	// delivery must not hold the next check-in.
+	go a.Client.DeliverPendingRuns()
 	// TRACE: one line per check-in, what went and what came back (never a
 	// value that could be a secret: counts and presence only).
 	logf(LogTrace, "check-in ok in %dms: sent inventory=%v logs=%d pbs_credential=%v; got commands=%d managed_jobs=%d pbs_target=%v backup_key=%v storage_approval=%v debug_until=%d org_suspended=%v log_ack=%d",

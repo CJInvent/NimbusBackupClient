@@ -47,6 +47,11 @@ type Client struct {
 	// to be, without this.
 	httpOnce sync.Once
 	httpc    *http.Client
+
+	// inflight is the durable run-record store (inflight.go, F-75). nil in
+	// tests and tools that do not need it: runs are then reported from
+	// memory only, as before it existed.
+	inflight *InflightRuns
 }
 
 // MaxBodyBytes mirrors the server's request cap; responses are read with
@@ -217,6 +222,20 @@ func asHTTPError(err error, out **httpError) bool {
 	return ok
 }
 
+// postDelays is post's retry ladder. A variable only so tests of what
+// happens AFTER the retries give up do not each wait 40 seconds; guarded,
+// because reporters from other tests may still be posting when one swaps it.
+var (
+	postDelaysMu sync.RWMutex
+	postDelays   = []time.Duration{0, 2 * time.Second, 8 * time.Second, 30 * time.Second}
+)
+
+func retryLadder() []time.Duration {
+	postDelaysMu.RLock()
+	defer postDelaysMu.RUnlock()
+	return postDelays
+}
+
 // post sends JSON with retry. Backoff ladder: 2s, 8s, 30s (+ jitter) on
 // 429/5xx/transport errors — per the contract, never tight-loop. 4xx other
 // than 429 is returned immediately (retrying a rejected payload is noise).
@@ -226,9 +245,8 @@ func (c *Client) post(path string, in, out interface{}, authed bool) error {
 		return fmt.Errorf("controlplane: encode: %w", err)
 	}
 
-	delays := []time.Duration{0, 2 * time.Second, 8 * time.Second, 30 * time.Second}
 	var last error
-	for attempt, base := range delays {
+	for attempt, base := range retryLadder() {
 		if base > 0 {
 			time.Sleep(base + jitter(base/2))
 		}
