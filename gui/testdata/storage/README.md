@@ -6,8 +6,8 @@ NimbusControl's `docs/reverify-2026-09-27/C0-Capture.ps1 -Part Storage -Label <l
 
 - `<label>.json`: the script's `disks.json`, unedited;
 - `<label>.want.json`: `{"<disk number>": "weak" | "strong"}` for the disks
-  whose configuration is known (for example the test disk with no `serial=`,
-  with `serial=`, with `wwn=`).
+  whose configuration is known (for example a disk that reports no serial, one
+  that reports a serial, one that reports a WWN).
 
 `TestStorageIdentityCapturedDescriptors` reads every pair. None are committed
 yet (2026-09-27): until they are, the pin is the two device ids the pre-F-39

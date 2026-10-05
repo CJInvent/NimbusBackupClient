@@ -199,3 +199,72 @@ func TestStorageObservationUnchangedWithoutNewFields(t *testing.T) {
 		t.Fatal("unknown identity strength approved")
 	}
 }
+
+// A disk with no hardware serial is approved and resolved like any other: its
+// identity is the GUID, size and layout every binding already checks. A serial
+// that appears or disappears is an ordinary identifier change.
+func TestStorageSerialLessDiskIsApprovableAndResolves(t *testing.T) {
+	disk := weakFixture("1")
+	disk.Boot, disk.BootVerified = true, true
+	st := StorageStatus{Devices: []StorageDevice{disk}}
+	ap := StorageApproval{Revision: 1, Observation: StorageObservation(st.Devices), Bindings: []StorageBinding{{Target: "boot", Device: disk}}}
+	if err := ValidateStorageApproval(ap, st); err != nil {
+		t.Fatalf("a disk with no hardware serial cannot be approved: %v", err)
+	}
+	moved := disk
+	moved.ID = "v1:" + strings.Repeat("2", 64)
+	moved.Path = "disk5"
+	if _, err := ResolveStorageBinding(ap.Bindings[0], []StorageDevice{moved}); err != nil {
+		t.Fatalf("a disk with no hardware serial stopped resolving after its derived id changed: %v", err)
+	}
+}
+
+func TestStorageSerialDisappearingCanBeApprovedAgain(t *testing.T) {
+	approved := weakFixture("1")
+	approved.Boot, approved.BootVerified = true, true
+	approved.IdentityStrength = IdentityStrong
+	now := approved // same disk, the serial is gone: a derived id, reported weak
+	now.ID = "v1:" + strings.Repeat("d", 64)
+	now.IdentityStrength = IdentityWeak
+	_, err := ResolveStorageBinding(StorageBinding{Target: "boot", Device: approved}, []StorageDevice{now})
+	if err == nil {
+		t.Fatal("a disk that lost its serial resolved without a new approval")
+	}
+	for _, want := range []string{"approve the storage again", "hardware serial"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("refusal %q blames the disk for the serial", err)
+	}
+	st := StorageStatus{Revision: 1, Devices: []StorageDevice{now}}
+	ap := StorageApproval{Revision: 2, Observation: StorageObservation(st.Devices), Bindings: []StorageBinding{{Target: "boot", Device: now}}}
+	if err := ValidateStorageApproval(ap, st); err != nil {
+		t.Fatalf("the new identifiers cannot be approved: %v", err)
+	}
+	if _, err := ResolveStorageBinding(ap.Bindings[0], []StorageDevice{now}); err != nil {
+		t.Fatalf("the new approval does not resolve: %v", err)
+	}
+}
+
+// What an operator reads must not name a platform or a hypervisor.
+func TestStorageRefusalsNameNoPlatform(t *testing.T) {
+	approved := weakFixture("1")
+	approved.IdentityStrength = IdentityStrong
+	now := approved
+	now.IdentityStrength = IdentityWeak
+	now.ID = "v1:" + strings.Repeat("d", 64)
+	twin := weakFixture("3")
+	for _, devices := range [][]StorageDevice{{now}, {approved, twin}, nil} {
+		_, err := ResolveStorageBinding(StorageBinding{Target: "device:" + approved.ID, Device: approved}, devices)
+		if err == nil {
+			continue
+		}
+		for _, bad := range []string{"proxmox", "qemu", "hypervisor", "vmware", "hyper-v", "serial=", "slot", "strength"} {
+			if strings.Contains(strings.ToLower(err.Error()), bad) {
+				t.Errorf("refusal %q names %q", err, bad)
+			}
+		}
+	}
+}

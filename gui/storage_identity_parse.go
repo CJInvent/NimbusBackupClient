@@ -20,21 +20,29 @@ import (
 // Untagged so the Linux gate tests it; storage_handle_windows.go does the
 // DeviceIoControl calls and hands the bytes here.
 //
-// STRENGTH (docs/V4-BETA-FIXES.md §5, F-39/F-41). QEMU's scsi-hd reports one
-// vendor-specific designator whose text is the disk's serial= if one is set,
-// otherwise the drive id ("drive-scsi1"). Proxmox disks without serial= are
-// therefore identified by their SLOT: moving the disk changes the identity
-// (F-39) and a clone in the same slot keeps it (F-41). Such an identity is
-// "weak", and bindings made on it are matched by disk GUID, size and
-// partitions instead (controlplane.ResolveStorageBinding). Everything else
-// that yields an identity is "strong":
+// STRENGTH (docs/V4-BETA-FIXES.md §5). A device's hardware identifiers say how
+// much its identity is worth. STRONG means the device reports something that
+// belongs to the medium: an NAA or EUI-64 designator, or a serial. WEAK means
+// the only identifier it reports names the slot it is attached to (a
+// designator such as "drive-scsi1"), so the identity changes when the disk
+// moves to another slot and a clone in the same slot keeps it. A device that
+// reports nothing at all has no hardware identifier either.
+//
+// Neither a weak nor a missing identifier blocks approval. Such a disk is
+// identified by its disk GUID (or MBR signature), size and partition layout,
+// the same evidence every approval already checks
+// (controlplane.ResolveStorageBinding). A disk with no hardware identifier at
+// all is given a stable ID derived from that GUID (diskLayoutIdentity) and
+// reported weak; that is not a new kind of identity, only a name for it.
+//
+// Everything that yields a hardware identifier is "strong" unless it is a
+// slot name:
 //   - an NAA (type 3) or EUI-64 (type 2) designator, or any designator that is
 //     neither vendor-specific nor T10;
 //   - a vendor-specific or T10 designator whose text is not a slot name;
 //   - a binary vendor-specific designator (there is no text to be a slot name).
-// Only slot shapes seen on a real machine are listed: QEMU's (the test VM
-// reported "drive-scsi1" and, after a move, "drive-scsi2"; evidence
-// 2026-09-24). Hyper-V and VMware shapes are added when captured (rule 25).
+// Only slot shapes seen on a real machine are listed (rule 25); others are
+// added when captured.
 
 // STORAGE_IDENTIFIER_TYPE and STORAGE_IDENTIFIER_CODE_SET values (ntddstor.h).
 const (
@@ -129,8 +137,8 @@ func isStorageSlotName(s string) bool {
 
 // storageDeviceDescriptorIdentity reads a STORAGE_DEVICE_DESCRIPTOR, the
 // fallback for devices with no page-0x83 designators: vendor, product and
-// serial. A missing serial is no identity; a serial that is a slot name is a
-// weak one.
+// serial. A missing serial is no hardware identity (the caller falls back to
+// diskLayoutIdentity); a serial that is a slot name is a weak one.
 func storageDeviceDescriptorIdentity(data []byte) (storageIdentity, error) {
 	var zero storageIdentity
 	if len(data) < 36 {
@@ -157,6 +165,54 @@ func storageDeviceDescriptorIdentity(data []byte) (storageIdentity, error) {
 		out.Strength = controlplane.IdentityWeak
 	}
 	return out, nil
+}
+
+// diskLayoutIdentity names a disk that reports no hardware identifier. The ID
+// is derived from the disk GUID (or MBR signature) alone and is reported
+// weak, so it is matched like any weak identity: by that GUID, size and
+// partition layout, never by this ID. A disk with no GUID has nothing to
+// derive it from and stays unidentified.
+func diskLayoutIdentity(diskID string) (storageIdentity, bool) {
+	diskID = strings.TrimSpace(diskID)
+	if diskID == "" {
+		return storageIdentity{}, false
+	}
+	sum := sha256.Sum256([]byte("disk-layout-v1\x00" + diskID))
+	return storageIdentity{ID: "v1:" + hex.EncodeToString(sum[:]), Strength: controlplane.IdentityWeak}, true
+}
+
+// withStorageIdentity gives a discovered device its identity: what the open
+// device reported, or when it reported nothing, the layout identity. A device
+// with neither keeps an empty ID and cannot be approved.
+func withStorageIdentity(d controlplane.StorageDevice, hw storageIdentity, hwErr error) controlplane.StorageDevice {
+	if hwErr == nil && hw.ID != "" {
+		d.ID, d.IdentityStrength = hw.ID, hw.Strength
+		return d
+	}
+	if id, ok := diskLayoutIdentity(d.DiskID); ok {
+		d.ID, d.IdentityStrength = id.ID, id.Strength
+		return d
+	}
+	d.ID, d.IdentityStrength = "", ""
+	return d
+}
+
+// openedStorageIdentityMatches decides whether the identity read from the
+// open device agrees with the device approval resolved to. A device whose ID
+// is its layout identity reports no hardware identifier; there is nothing to
+// compare and the layout check on the same handle decides. Any other device
+// must report the ID it was found with.
+func openedStorageIdentityMatches(expected controlplane.StorageDevice, hw storageIdentity, hwErr error) error {
+	if layout, ok := diskLayoutIdentity(expected.DiskID); ok && expected.ID == layout.ID && hwErr != nil {
+		return nil
+	}
+	if hwErr != nil {
+		return hwErr
+	}
+	if hw.ID != expected.ID {
+		return errors.New("opened disk hardware identity differs from approved device")
+	}
+	return nil
 }
 
 // storageModelLimit matches the server's limit for the field; see storageModel.

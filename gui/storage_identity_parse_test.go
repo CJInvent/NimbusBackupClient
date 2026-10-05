@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,5 +210,65 @@ func mustReadJSON(t *testing.T, path string, v interface{}) {
 	b = []byte(strings.TrimPrefix(string(b), "\ufeff")) // Set-Content -Encoding UTF8 writes a BOM
 	if err = json.Unmarshal(b, v); err != nil {
 		t.Fatalf("%s: %v", path, err)
+	}
+}
+
+// A disk that reports no hardware identifier is identified by its disk GUID,
+// size and layout, never refused for the missing serial.
+func TestDiskLayoutIdentity(t *testing.T) {
+	a, ok := diskLayoutIdentity("14121eb2-3b2a-4d46-88d6-0810d3922bbd")
+	if !ok || a.Strength != controlplane.IdentityWeak || len(a.ID) != 67 || !strings.HasPrefix(a.ID, "v1:") {
+		t.Fatalf("got %+v ok=%v", a, ok)
+	}
+	again, _ := diskLayoutIdentity(" 14121eb2-3b2a-4d46-88d6-0810d3922bbd ")
+	other, _ := diskLayoutIdentity("mbr:0a0b0c0d")
+	if again.ID != a.ID || other.ID == a.ID {
+		t.Fatal("the layout identity must follow the disk GUID and nothing else")
+	}
+	if _, ok := diskLayoutIdentity(" "); ok {
+		t.Fatal("a disk with no GUID has no layout identity")
+	}
+}
+
+func TestWithStorageIdentity(t *testing.T) {
+	dev := controlplane.StorageDevice{DiskID: "gpt-disk", ID: "v1:old", IdentityStrength: "x"}
+	hw := storageIdentity{ID: "v1:" + strings.Repeat("a", 64), Strength: controlplane.IdentityStrong}
+	if got := withStorageIdentity(dev, hw, nil); got.ID != hw.ID || got.IdentityStrength != controlplane.IdentityStrong {
+		t.Fatalf("a reported identity must win: %+v", got)
+	}
+	layout, _ := diskLayoutIdentity("gpt-disk")
+	got := withStorageIdentity(dev, storageIdentity{}, errors.New("device lacks a persistent hardware identity"))
+	if got.ID != layout.ID || got.IdentityStrength != controlplane.IdentityWeak {
+		t.Fatalf("no serial must fall back to the layout identity: %+v", got)
+	}
+	dev.DiskID = ""
+	if got = withStorageIdentity(dev, storageIdentity{}, errors.New("no identity")); got.ID != "" || got.IdentityStrength != "" {
+		t.Fatalf("no serial and no GUID must stay unidentified: %+v", got)
+	}
+}
+
+func TestOpenedStorageIdentityMatches(t *testing.T) {
+	layout, _ := diskLayoutIdentity("gpt-disk")
+	derived := controlplane.StorageDevice{DiskID: "gpt-disk", ID: layout.ID, IdentityStrength: controlplane.IdentityWeak}
+	hwID := "v1:" + strings.Repeat("a", 64)
+	withSerial := controlplane.StorageDevice{DiskID: "gpt-disk", ID: hwID, IdentityStrength: controlplane.IdentityStrong}
+	noHW := errors.New("device lacks a persistent hardware identity")
+	cases := []struct {
+		name string
+		want controlplane.StorageDevice
+		got  storageIdentity
+		err  error
+		ok   bool
+	}{
+		{"no serial then and now", derived, storageIdentity{}, noHW, true},
+		{"serial matches", withSerial, storageIdentity{ID: hwID}, nil, true},
+		{"serial differs", withSerial, storageIdentity{ID: "v1:" + strings.Repeat("b", 64)}, nil, false},
+		{"serial vanished after discovery", withSerial, storageIdentity{}, noHW, false},
+		{"layout device that grew a serial", derived, storageIdentity{ID: hwID}, nil, false},
+	}
+	for _, c := range cases {
+		if err := openedStorageIdentityMatches(c.want, c.got, c.err); (err == nil) != c.ok {
+			t.Errorf("%s: got %v, want ok=%v", c.name, err, c.ok)
+		}
 	}
 }

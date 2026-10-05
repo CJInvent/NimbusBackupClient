@@ -53,13 +53,11 @@ func storagePathID(path string) (storageIdentity, error) {
 func verifyOpenedStorageDevice(handle uintptr, expected controlplane.StorageDevice) error {
 	h := windows.Handle(handle)
 	id, err := storageHandleID(h)
-	if err != nil {
-		return err
-	}
 	// expected is the device ResolveStorageBinding found in this observation,
-	// so for a weak identity found in another slot this is its CURRENT id.
-	if id.ID != expected.ID {
-		return errors.New("opened disk hardware identity differs from approved device")
+	// so for a weak identity found in another slot this is its CURRENT id. A
+	// device with no hardware identifier is decided by the layout check below.
+	if err = openedStorageIdentityMatches(expected, id, err); err != nil {
+		return err
 	}
 	// Cross-reference disk/partition identities through this same handle.
 	data := make([]byte, 48+144*128)
