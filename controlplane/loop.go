@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -38,6 +39,10 @@ type Agent struct {
 	// BuildInventory produces the current job list every cycle so the
 	// server's missed-backup expectations always track reality.
 	BuildInventory func() Inventory
+
+	// AlternateWANURL overrides the echo service for tests. Empty means
+	// AlternateWANURL (ipecho.net/plain).
+	AlternateWANURL string
 
 	// HandleCommand executes one server command and returns its result.
 	// MUST be idempotent — see Command docs. Runs on the loop goroutine;
@@ -315,10 +320,24 @@ func (a *Agent) nextWait(now time.Time) time.Duration {
 // CheckinNow performs one check-in cycle (also callable out-of-band, e.g.
 // right after a config change, without waiting for the ticker).
 func (a *Agent) CheckinNow() {
+	// BEFORE the lock, and bounded: a third party's slowness must neither
+	// hold the check-in lock nor delay the check-in beyond the lookup's own
+	// timeout. Failure just omits the field this cycle.
+	altWAN := ""
+	if a.CurrentPolicy().ReportAlternateWAN {
+		url := a.AlternateWANURL
+		if url == "" {
+			url = AlternateWANURL
+		}
+		if ip, err := LookupAlternateWAN(context.Background(), nil, url); err == nil {
+			altWAN = ip
+		}
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	req := CheckinRequest{AgentVersion: a.AgentVersion}
+	req := CheckinRequest{AgentVersion: a.AgentVersion, AlternateWANIP: altWAN}
 	if a.BuildInventory != nil {
 		inv := a.BuildInventory()
 		req.Inventory = &inv
