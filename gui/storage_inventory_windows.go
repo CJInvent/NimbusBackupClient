@@ -71,15 +71,12 @@ func discoverStorageDevices() ([]controlplane.StorageDevice, error) {
 		return nil, err
 	}
 	for i := range devices {
+		// A device that reports no hardware identifier is identified by its
+		// disk GUID, size and layout (withStorageIdentity), like every
+		// approval. Only a disk with no GUID either stays unapprovable, and
+		// stays visible; a bound device disappearing still latches.
 		id, idErr := storagePathID(devices[i].Path)
-		if idErr != nil {
-			// An unselected device with no trustworthy ID is not authority to
-			// stop backups of an independently verified disk. It remains
-			// visible but unapprovable; a bound device disappearing still latches.
-			devices[i].ID, devices[i].IdentityStrength = "", ""
-			continue
-		}
-		devices[i].ID, devices[i].IdentityStrength = id.ID, id.Strength
+		devices[i] = withStorageIdentity(devices[i], id, idErr)
 	}
 	return devices, nil
 }

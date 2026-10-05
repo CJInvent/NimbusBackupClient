@@ -20,14 +20,14 @@ type StorageDevice struct {
 	Boot         bool               `json:"boot"`
 	BootVerified bool               `json:"boot_verified"`
 	Partitions   []StoragePartition `json:"partitions"`
-	// IdentityStrength says what ID is worth (docs/V4-BETA-FIXES.md §5,
-	// F-39/F-41): IdentityStrong when the device reports an NAA or EUI-64
-	// designator or a serial that is not a slot name, IdentityWeak when every
-	// designator is a slot name (a Proxmox disk without serial= reports
-	// "drive-scsi1": its "identity" is the slot). Empty for a device with no
-	// identity (unapprovable) and in bindings approved before this field
-	// existed. omitempty keeps the observation of an unchanged pre-F-39
-	// report byte-identical.
+	// IdentityStrength says what ID is worth (docs/V4-BETA-FIXES.md §5):
+	// IdentityStrong when the device reports a hardware identifier of its own
+	// (an NAA or EUI-64 designator or a serial), IdentityWeak when it reports
+	// none, or only the slot it sits in, so its ID is derived and the disk is
+	// found by its GUID, size and layout instead. Empty only for a device with
+	// no GUID either (unapprovable) and in bindings approved before this field
+	// existed. omitempty keeps the observation of an unchanged older report
+	// byte-identical.
 	IdentityStrength string `json:"identity_strength,omitempty"`
 	// Model is the disk's friendly name, for display only. It never decides a
 	// binding.
@@ -84,11 +84,13 @@ func StorageObservation(devices []StorageDevice) string {
 // media. It never modifies the operator-approved baseline.
 //
 // How the approved device is found depends on the strength recorded at
-// approval (F-39): a strong identity must match by ID; a weak one is a slot
-// name, so it is found by its disk GUID instead and must be the only device
-// carrying it (a clone attached beside its original is ambiguous, never a
-// guess). Size and partition evidence must match either way. A strength that
-// changed since approval (a serial added or removed) needs a new approval.
+// approval: a strong identity must match by ID; a weak one has no hardware
+// identifier of its own, so it is found by its disk GUID instead and must be
+// the only device carrying it (a copy attached beside its original is
+// ambiguous, never a guess). Size and partition evidence must match either
+// way. A hardware serial that appeared or disappeared since approval is an
+// ordinary identifier change: it needs a new approval, and the new
+// identifiers can be approved like any others.
 // A binding approved before strengths existed ("") resolves exactly as it did
 // then: by ID, with no strength check; approving again records the strength.
 func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (StorageDevice, error) {
@@ -108,15 +110,24 @@ func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (Sto
 		}
 	}
 	if len(matches) != 1 {
+		if len(matches) == 0 && approved == IdentityStrong {
+			// The serial may be gone: the same disk, now identified by its
+			// layout. Say that, rather than "missing".
+			var same []StorageDevice
+			for _, d := range devices {
+				if d.DiskID == binding.Device.DiskID && d.SizeBytes == binding.Device.SizeBytes {
+					same = append(same, d)
+				}
+			}
+			if len(same) == 1 {
+				return zero, serialChangedError(binding.Target, approved, same[0].IdentityStrength)
+			}
+		}
 		return zero, fmt.Errorf("storage identity missing or ambiguous for target %s", binding.Target)
 	}
 	current := matches[0]
 	if approved != "" && current.IdentityStrength != approved {
-		now := current.IdentityStrength
-		if now == "" {
-			now = "none"
-		}
-		return zero, fmt.Errorf("storage identity strength changed for target %s (approved %s, now %s); approve the storage again", binding.Target, approved, now)
+		return zero, serialChangedError(binding.Target, approved, current.IdentityStrength)
 	}
 	if current.Path == "" || current.DiskID != binding.Device.DiskID || current.SizeBytes != binding.Device.SizeBytes {
 		return zero, fmt.Errorf("storage disk identity changed for target %s", binding.Target)
@@ -140,6 +151,18 @@ func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (Sto
 		return zero, fmt.Errorf("storage partition identity changed for target %s", binding.Target)
 	}
 	return current, nil
+}
+
+// serialChangedError is the refusal for a disk whose hardware serial appeared
+// or disappeared since approval. It names the change in plain words.
+func serialChangedError(target, approved, now string) error {
+	word := func(strength string) string {
+		if strength == IdentityStrong {
+			return "reported a hardware serial"
+		}
+		return "reported no hardware serial"
+	}
+	return fmt.Errorf("storage identity changed for target %s (it %s when approved, now %s); approve the storage again", target, word(approved), word(now))
 }
 func partitionEvidence(parts []StoragePartition) string {
 	cp := append([]StoragePartition(nil), parts...)

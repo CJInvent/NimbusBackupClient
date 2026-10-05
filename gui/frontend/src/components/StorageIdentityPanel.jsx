@@ -38,7 +38,6 @@ export default function StorageIdentityPanel({ status, onChanged, readOnly = fal
             onChange={e => setSelected(e.target.checked ? [...selected, target] : selected.filter(v => v !== target))} />}
           {d.boot ? t('storageBoot') : t('storageDevice')} {d.model ? d.model + ' · ' : ''}{Number(d.size_bytes).toLocaleString()} B
         </label>
-        {d.identity_strength === 'weak' && <p role="note">{t('storageWeakNotice')}</p>}
         <details><summary>{t('storageEvidence')}</summary>
           <p>{d.identity_strength === 'strong' ? t('storageIdentityStrong') : d.identity_strength === 'weak' ? t('storageIdentityWeak') : t('storageIdentityNone')}</p>
           <p><code>{d.id}</code></p>
