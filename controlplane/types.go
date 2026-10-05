@@ -139,6 +139,12 @@ type CheckinRequest struct {
 	// secret) so the server can show a machine stuck on an outdated or
 	// refused one. Absent when none is held. V4-BETA-FIXES §1.1.
 	PBSCredential *HeldPBSCredential `json:"pbs_credential,omitempty"`
+
+	// AlternateWANIP is what an internet echo service saw this machine as,
+	// sent only while policy.report_alternate_wan is on and only when the
+	// lookup succeeded. A different fact from the address the server observes
+	// on the socket: that one is private behind a branch VPN or private WAN.
+	AlternateWANIP string `json:"alternate_wan_ip,omitempty"`
 }
 
 // LogBatch is one delivery from the agent's persistent WARN/ERROR queue.
@@ -206,6 +212,13 @@ type Policy struct {
 	// polarity as the field above, for the same reason: failing closed here
 	// would lock the console of every unmanaged install.
 	GUIReadOnly bool `json:"gui_read_only"`
+
+	// ReportAlternateWAN=true: ask an internet echo service what the
+	// internet sees this machine as, on every check-in, and report it as
+	// alternate_wan_ip. The zero value is OFF: an organization that never set
+	// this must not have its machines contact a third party. Display-only on
+	// the server; see alternate_wan.go.
+	ReportAlternateWAN bool `json:"report_alternate_wan"`
 }
 
 // ManagedJob is one server-defined backup job. Field names mirror
