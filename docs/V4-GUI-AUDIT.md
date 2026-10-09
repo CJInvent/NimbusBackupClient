@@ -2,8 +2,8 @@
 
 **Status (2026-10-09).** Specification only. No code has been changed. Written
 against `v4_dev` at `226595c`; every line number below is `gui/frontend/src/App.jsx`
-at that commit unless another file is named. Nothing here is built until CJ has
-read it and answered section 7.
+at that commit unless another file is named. CJ's answers of 2026-10-09 are recorded in
+section 7 and applied below; nothing is built until CJ says to start step S1.
 
 Companion documents: client `docs/V4-PIPELINE.md`, `docs/V4-RESTORE.md`;
 NimbusControl `docs/V4-CLIENT-CONFIG.md`, `V4-AUDITABILITY.md`,
@@ -89,7 +89,7 @@ built on them until confirmed.
    each call; CFG 5.1 and UX 8.1 rule 4 want the browser absent.
 7. **Messages are ephemeral and mostly emoji.** 92 `showStatus` calls, every one
    auto-hiding after 5 s, rendered at the bottom of the active tab, below the
-   fold on a normal window. About 210 emoji characters in `App.jsx`; nine native
+   fold on a normal window. About 210 emoji characters in `App.jsx`, most of them decoration; nine native
    `confirm`/`alert` dialogs.
 8. **Hardcoded French and duplicate catalog keys.** Ten live literals and thirteen dead fallbacks bypass
    `t()` (Appendix B); the Servers tab uses two parallel key sets for the same
@@ -101,8 +101,7 @@ built on them until confirmed.
    (line 2564, see 3.6), and the dead tab name `'scheduled'` (line 2685).
 10. **Auditability gaps (AUD 0).** Security-posture warnings exist only in the
     agent log and a GUI banner and are never reported; the local job-history file
-    is a second history with different content from the server's; the split
-    backup's retry prompts exist only on the console.
+    is a second history with different content from the server's.
 
 ---
 
@@ -188,7 +187,7 @@ sets `gui_read_only` (line 1893). Its audit is mostly about R1 and wording.
 | Rollup shows the worst outcome of the day | Correct and documented (comment above `rollupByDay`) | none | KEEP |
 | Detail table of 10 rows, result shows raw `r.error` (278-300) | Does not run NB codes through `localizeMessage`, which exists only inside `App` | A: errors say what happened | CHANGE: one shared message localizer (4.3); rows as tiles (PREF) |
 | `panelManagedNotice` | Explains the lock | none | KEEP |
-| Locked view renders no header controls (1893-1895) | A locked user cannot change language or text size | presentation only, no service call | CHANGE: render `HeaderControls` |
+| Locked view renders no header controls (1893-1895) | A locked user cannot change language or text size | presentation only, no service call | CHANGE: render `HeaderControls` (theme, size and font, language) |
 | Storage identity panel in the locked view | Present (`readOnly` prop) | CFG 5 | KEEP |
 
 M versus S: identical except the storage tile (above). The locked view is a
@@ -203,7 +202,7 @@ managed state by definition; a standalone machine has no organization to lock it
 | Tabs `servers, backup, restore, about` as clickable `div`s (1935-1947) | Not focusable, no role | accessibility; UX 8.1 rule 4 | CHANGE: buttons with tab roles. M: Status, Back up, Restore (only if `fileRestore`), About. S: Status, Back up, Restore, Setup, About |
 | Suspended banner (1910) | `<p class="card" role="alert">` | F-22 | KEEP; Start must also say why it refuses (3.6) |
 | Security warnings banner (1927-1934) | English strings from Go, agent-log only | AUD 0 | CHANGE: 3.10 |
-| Header controls: theme (auto/light/dark), accent swatches, text size, language with flag emoji | Persisted in `localStorage` | none | KEEP; language list shows names only (a flag is a country); default accent from branding when managed (Q5) |
+| Header controls: theme (auto/light/dark), accent swatches, text size, language with flag emoji | Persisted in `localStorage` | none | KEEP; language list shows names only (a flag is a country); the **A** dropdown gains the font choice (4.10); default accent from branding when managed (Q5) |
 
 ### 3.4 Connecting to the control server
 
@@ -238,7 +237,7 @@ a server table that cannot render (2001-2047, inside the empty-list branch).
 | Delete uses native `confirm` (751), TOFU uses `window.confirm` (802) | Native dialogs | 4.2 | | CHANGE |
 | "Tip: get your API token from the PBS interface" box (2163) | Useful for S | | | KEEP (S only) |
 
-Open design question for S: keep several storage servers or exactly one (Q2).
+Decided (section 7, Q2): standalone shows exactly one storage server.
 
 ### 3.6 A one-time backup (including the handshake, R3)
 
@@ -260,7 +259,7 @@ The portal separates them (UX section 1): *Run Backup Now* opens a dialog with
 | Exchange section, shown only when Exchange is installed | Works | | KEEP |
 | VSS "administrator required" box, condition `systemInfo.mode === 'Standalone' && !is_admin` (2564) | **Can never be true.** `GetSystemInfo` returns `a.mode.String()`, which is "Service Mode", "Service Unavailable" or "In-Process (service)" (`api/mode.go:53`); the spec renamed the mode (PIPE 3.2). The engine runs in the service as LocalSystem, so the user's admin status is irrelevant | PIPE 3.2 | REMOVE |
 | VSS "the service is available" info box, `service_available` (2571) | Appears whenever the service answers, i.e. always | | REMOVE |
-| "Split the first backup" toggle (2579) and its hardcoded French flow (`executeSplitBackup`, 939-1024) | Issues one `StartBackup` per part with client-built backup-ids (`CreateBackupSplitPlan(backupDirs, backupID)`), confirm and alert text in French | OPQ 3.4 (no client-built ids), R3 (one request, one run), R4 | **REMOVE from M**; S: Q6 |
+| "Split the first backup" toggle (2579) and its hardcoded French flow (`executeSplitBackup`, 939-1024) | Issues one `StartBackup` per part with client-built backup-ids (`CreateBackupSplitPlan(backupDirs, backupID)`), confirm and alert text in French | OPQ 3.4, R3, R4; **CJ decided: remove** | **REMOVE** in every state, with `gui/backup_analysis.go` (453 lines) and `gui/backup_split_api.go` (104 lines), their Wails bindings, the `analysis:progress` listener and the `splitFirstBackup*` strings. Nothing else calls them (grepped). About 530 lines that are still 91-98% upstream, so it also shortens the distance (`docs/UPSTREAM-DISTANCE.md`) |
 | Progress card (2594-2662): percent, bar, ETA, speed, elapsed, data, chunks, current folder, phase | Fed by the 3 s `/runs/active` poll (PIPE 3.5), the right design | PIPE 3.5 | KEEP; emoji removed; show the Run ID once known |
 | Start button "Start backup" (2666-2672) | Posts `StartBackup(type, dirs, drives, excludes, backupId, vss, "")` with no server round trip | **R3** | CHANGE: see handshake below |
 | Stop button, drawn only in one-shot mode, disabled at 0% (2675) | The poll shows any run's progress, so Stop works on a scheduled run in the default mode; switching the toggle to "scheduled" removes the button while the run continues | | CHANGE: Stop lives on the progress card of any running run (hidden when locked) |
@@ -324,13 +323,12 @@ decides; absent never means permitted for any other policy.
 | Row has no detail | No way to see duration, trigger, bytes, error text in full, or the Run ID | R4, AUD 4 ("Run ID" shown to everyone who may open the run) | ADD: a tile that opens to start/end, duration, how it started, data sent, result with what to do, and **Run ID** with a copy button, labelled "Run ID" and nothing else |
 | Name of a custom run | `manual:HOSTNAME` for console-started runs | UX 1.2: "Manual backup" (portal) / "Manual backup (console)" | CHANGE with the server's naming |
 | "Re-run" (failed only) | Fills the form | | CHANGE: "Run again" for any finished run; same request |
-| "View in portal" | none | `dashboard_url` is already in the storage status | ADD, M only, when the URL is present (Q9) |
+| "View in portal" link | none | CJ declined: organization users cannot authenticate to the portal, and a scoped one-machine session is a feature of its own that widens scope against the zero-trust goal | NOT BUILT. Revisit only as that feature |
 
 | | Managed | Standalone |
 |---|---|---|
 | Source | `/runs/recent` | `/runs/recent` |
 | Run ID | Yes | Yes (the service mints it) |
-| Portal link | When the dashboard URL is known | No |
 
 ### 3.9 Restore: finding a backup, browsing, searching, files, volumes, download
 
@@ -347,12 +345,12 @@ exist if it does.
 | **"Backup ID to restore"** input (2858-2866) | Typed, defaults to the hostname, French placeholder "hostname ou ID personnalise" (2863) | **OPQ 3.4, R1** | **REMOVE**. The page starts at "Backups of this computer": the service resolves the ids it knows for this computer's sources (a new read op beside the existing `/restore/query` ops) |
 | "List snapshots" button | Explicit step | | REMOVE: the list is the first thing shown |
 | Snapshot cards: `snap.time` with a camera emoji, `snap.backup_id`, type (3018-3040) | Prints the PBS backup-id on every card | R1, OPQ | CHANGE: date and time, "Whole disk image" or "Files and folders", job name |
-| Search panel: name / regex / path, date range, "assemble missing" (2874-2990) | Crawls snapshots from a **prefix of the backup-id** (`SearchFiles(pbsID, hostPrefix, ...)`); "assemble missing" is index-building jargon | The browse design puts search on the server (`V4-BROWSE.md`, nimbus-browse decisions) | Q1; if the tab stays: CHANGE "assemble missing" to "Include backups not yet indexed (slower)" and search this computer only |
+| Search panel: name / regex / path, date range, "assemble missing" (2874-2990) | Crawls snapshots from a **prefix of the backup-id** (`SearchFiles(pbsID, hostPrefix, ...)`); "assemble missing" is index-building jargon | The browse design puts search on the server (`V4-BROWSE.md`, nimbus-browse decisions) | Decided (Q1): M has no search (server-side browse owns it); S keeps it, searches this computer only, and "assemble missing" becomes "Include backups not yet indexed (slower)" |
 | Origin banner: original path, machine, saved at, client version, VSS (3049-3071) | Sidecar data; three `t(...) \|\| 'Source d'origine'` French fallbacks | | KEEP content; remove fallbacks |
 | Tree with expand carets, checkboxes, folder sizes, shift/ctrl selection | Good | | KEEP |
 | Volume flow: disk list -> partitions table -> Browse files -> directory table with breadcrumbs | Good function. Disk names are archive file names (`String(d).replace('.img.fidx','')`, 3109, 3123, 3178) | R1: "not a snapshot path" | CHANGE: "Disk 1 (boot)" from the reported disk list; partition table KEEP; `p.reason` shown as visible text (it already is) |
 | Three native `window.alert` calls for volume errors (1567, 1585, 1624) and `confirm` for in-place restore (1351) and download-space (1754) | Native dialogs | 4.2 | CHANGE: in-app |
-| Mode picker: restore in place / to another location; in-place warning; cross-computer checkbox | In-place disabled with a reason when the OS or sidecar rules it out (good) | | KEEP; the cross-computer checkbox: Q1 (restoring another computer's backup belongs in the portal) |
+| Mode picker: restore in place / to another location; in-place warning; cross-computer checkbox | In-place disabled with a reason when the OS or sidecar rules it out (good) | | KEEP; the cross-computer checkbox is removed for M (Q1: restoring another computer's backup belongs in the portal); S keeps it |
 | Destination field + Browse; "Keep original folder structure" (hardcoded fr fallbacks 3370) | Works | | KEEP; remove fallbacks |
 | Options: overwrite, timestamps, ACLs (beta tag), alternate streams, "Package as zip" | `Package as zip` silently changes the main button from Restore to Download without changing its label (3427, 3433-3440) | | CHANGE: two buttons, "Restore to folder" and "Download as zip" |
 | Progress bar (`nc-taskbar`) with bytes, rate, ETA | Good | | KEEP |
@@ -375,7 +373,7 @@ exist if it does.
 | `status.error` printed as the Go string | English only | ENR R2: the text is en/fr/es and says what happened | CHANGE: render by code through the shared localizer |
 | Devices: model, `Number(size).toLocaleString()` followed by "B" (raw bytes), Evidence disclosure with device id, disk id, path, partition ids | Raw identifiers and byte counts | | CHANGE: model and formatted size; evidence stays collapsed |
 | Approve button and checkboxes, hidden when `status.joined` | M approves in the portal (correct); S approves here | CFG, ENR | KEEP |
-| "Dashboard" link built from `dashboard_url` + `/agents/<id>` | M only | | KEEP |
+| "Dashboard" link built from `dashboard_url` + `/agents/<id>` | Organization users cannot sign in to the portal (CJ, 2026-10-09), so the link leads nowhere they can use | | CHANGE: no link; the sentence says who approves ("Your administrator approves this computer's disks.") |
 | Security-posture banner (`GetSecurityWarnings`, Windows only): two English sentences from Go | Logged once to the agent log and drawn as a banner. **Never reported to the server** (the only callers are `main.go:206` and the binding) | **AUD 0**: nothing only in an agent log; localization | CHANGE: report with the inventory so the machine page shows it; the GUI renders it from a code in the user's language |
 | Suspended banner (`orgSuspendedBanner`) | Drawn in both the full and the locked views | F-22 | KEEP |
 | Exchange section (aware, log truncation, log-mode readout) | Machine-specific, shown when installed | | KEEP; remove the emoji prefixes |
@@ -388,7 +386,7 @@ exist if it does.
 | "Order Nimbus Backup storage" button with `utm_source=NimbusGui&utm_campaign=version-<ver>` (3495) | Sales link, tracks versions | | REMOVE |
 | Features list, Technology list ("Wails", "No GPU", "Modern interface") (3515-3535) | Marketing copy from the fork | | REMOVE |
 | `copyright`: "(c) 2026 RDEM Systems" and a link to `nimbus.rdem-systems.com` (3541-3542) | Upstream vendor | | CHANGE per Q5 |
-| `basedOn`: "Based on proxmoxbackupclient_go by tizbac"; `techStack` | The project is GPL-3 and derived from that work | license: notices must be kept | **KEEP** as a Credits and licenses line; nothing else on this tab is required |
+| `basedOn`: "Based on proxmoxbackupclient_go by tizbac"; `techStack` | The project is GPL-3 and derived from that work; most of the shared code is RDEM's (`docs/UPSTREAM-DISTANCE.md`) | license: notices stay with derived code | **KEEP** as a "Credits and licenses" line naming **Tiziano Bacocco (proxmoxbackupclient_go) and RDEM Systems**, with the GPL-3 text; nothing else on this tab is required. Revisit only when the files listed in the distance document are replaced |
 | Version | Shown | | KEEP, add build and the computer's name |
 | (new) Support contact | none | CFG 6 branding | ADD from branding when managed (Q5) |
 
@@ -399,17 +397,22 @@ generator, the fyne-cross app id.
 ### 3.12 The tray menu
 
 `tray.go`: tooltip, **Show window**, a disabled **Status** line, **Quit**. No
-specification exists (`V4-UX.md` section 9); this is therefore a proposal, not a
-reading of one.
+specification existed (`V4-UX.md` section 9); CJ approved this proposal on
+2026-10-09 and added that a running backup must show its percentage.
 
 | Element | Today | Verdict |
 |---|---|---|
-| Show window | Works | KEEP |
-| Status line (disabled item) | Carries the storage-fault latch (`updateStorageTray`) | CHANGE: last result and next run ("Last backup OK, 2 h ago") from `/runs/recent`; the storage fault stays, in neutral words until it is a real error |
-| **Quit** | Closes the window process. In a backup product the word reads as "stop backing up"; the service keeps running | CHANGE: "Close (backups keep running)" |
+| Open | "Show window" | KEEP, reworded "Open Nimbus Backup" |
+| Status line (disabled item) and tooltip | Static text and the storage-fault latch (`updateStorageTray`) | CHANGE: while a run is in flight, **"Backing up: 42%"** in both the tooltip and the status item, refreshed from `/runs/active` (the same 3 s poll the window uses); idle, "Last backup OK, 2 h ago, next 02:00" from `/runs/recent`; a real storage fault stays, neutral words until it is an error |
+| **Quit** | Closes the window process; the service keeps running, but the word reads as "stop backing up" | CHANGE: "Close (backups keep running)" |
 | Language | Follows the GUI language (`SetTrayLanguage`) | KEEP |
 
-Q7 asks whether anything else belongs in the tray.
+**Theme and font.** The tray menu and tooltip are drawn by Windows, not by the
+web view, so they cannot follow the GUI's font or color choice. The themed
+surface is the Status tab, one click from "Open". A small themed popup window
+from the tray icon would be possible, but it is a second window with its own
+polling and layout, which is machinery for a menu that already answers the
+question; not planned unless CJ asks for it.
 
 ### 3.13 Every status and error message
 
@@ -421,7 +424,7 @@ Q7 asks whether anything else belongs in the tray.
 | Success | `statusServerAdded`, `scheduleCreated`, `snapshotsFound` ("n found"), `entriesLoaded` | Noise: the list that appeared is the confirmation | Drop where the screen already shows the result |
 | Error with raw text | `showStatus('error ' + err)` at 914, 1117, 1133, 1159, 1190, 1411 | Go error string, English, no next step. Only strings containing `[NB-nnnn]` are localized (`localizeMessage`, 642) | Always a code, localized text, what to do |
 | "No runtime" | `errNoRuntime` guard in 13 handlers | Reachable only in a browser without Wails (development); dead for a user | Guard once at startup, not per handler |
-| French | `Backup n/m termine`, `echoue`, `Voulez-vous reessayer` in the split flow (996-1019) | Bypasses `t()` | Gone with the split flow (Q6) or keyed |
+| French | `Backup n/m termine`, `echoue`, `Voulez-vous reessayer` in the split flow (996-1019) | Bypasses `t()` | Gone with the split flow (section 7, Q6) |
 | Placement | Rendered at the bottom of the active pane (2344, 2815, 3472) | Below the fold at normal window sizes | Next to the control |
 
 Keep: `localizeMessage` and the `[NB-xxxx] :: detail` contract with `errcodes.go`;
@@ -487,11 +490,22 @@ translation files and reports mismatches rather than guessing.
 * Policy defaults differ and the GUI follows them: `restrict_unmanaged_backups`
   unknown means permitted; `file_restore` unknown means denied (PIPE 3.1).
 
-### 4.5 No emoji
+### 4.5 Emoji are symbols for data, not decoration
 
-None in labels, buttons, headings or messages. State is a word plus a coloured
-dot or bar. The language menu lists names, not flags. (Today: about 210 emoji
-characters in `App.jsx`; the portal uses none.) Exception: none.
+CJ, 2026-10-09: emoji stay as symbols (the backup stat glyphs), and overuse goes.
+One module, `symbols`, holds the whole allowed set; a glyph appears only through
+it, and each carries an accessible text label.
+
+| Allowed | Where | Glyphs |
+|---|---|---|
+| Metric symbols | The progress card and the status page's live run | speed, time elapsed or remaining, data size, chunks, current folder, phase |
+| State symbols | A run's result and a connection or storage state: one per state | success, failure, warning, in progress |
+| Not allowed | Buttons, tabs, section and card headings, hint and info boxes, labels, menu items, the application title, the language list (names only, no flags), placeholders | everything else |
+
+Today there are about 210 emoji characters in `App.jsx`. Most are decoration (shield in the title,
+rocket, calendar, clock, bulb, folder, camera, pencil and bin on buttons, `i` and
+bulb on every info box) go. A word and a coloured dot still carry state where a
+symbol is not drawn. The audit script (S7) rejects an emoji outside `symbols`.
 
 ### 4.6 Time, size, locale
 
@@ -517,6 +531,31 @@ en, fr and es in parity (the build already fails otherwise). No
 `t('key') || 'literal'` (thirteen dead fallbacks today, Appendix B) and no literal
 text: the audit script is extended to catch both (S4).
 
+### 4.10 Typography
+
+CJ, 2026-10-09: OpenDyslexic as the only face reads as comical, and the default
+should be a professional font that suits the product.
+
+* **Default: Inter**, bundled locally with `@fontsource/inter` (OFL-1.1, the same
+  mechanism that bundles OpenDyslexic today, so no new kind of dependency; no
+  network fetch, as the window works offline). Weights 400, 500, 700; latin and
+  latin-extended so French and Spanish accents render in-face. Tabular numerals
+  (`font-variant-numeric: tabular-nums`) on every percentage, size and rate so
+  progress does not jiggle. Fallback stack: "Segoe UI", system UI, Arial.
+* **Second font: OpenDyslexic**, kept as the accessibility choice and renamed in
+  the menu "Easy-read (OpenDyslexic)".
+* **Where the choice lives:** in the **A** dropdown (`HeaderControls`), which
+  today lists only text size. It gains a second group, "Font", beneath the three
+  sizes; the trigger still shows the **A**. Stored beside the size under
+  `nimbus.font`; `index.html`'s pre-paint script applies it as `data-font` so
+  there is no flash. CSS: the default `--nc-font` becomes Inter's stack and
+  `html[data-font="easyread"]` restores the OpenDyslexic one. `--nc-font-mono` is
+  unchanged.
+* **Locked view:** the dropdown is shown there too (3.2), since it is
+  presentation only.
+* **Tests:** a render test that both options exist and that the stored value
+  selects the attribute; the font files are present in the build output.
+
 ---
 
 ## 5. Build order
@@ -536,18 +575,19 @@ dependency.
 
 | # | Pull request | Tests (written first) | Depends on |
 |---|---|---|---|
-| S1 | **Dead code and two bugs.** Delete `handleSaveConfig`, `handleTestConnection`, `handleLoadConfigFile`, `selectedPBSID`, `restoreProgress`, the unreachable server table (2001-2047), the two VSS boxes (2564, 2571). Fix the cancel-edit tab (2685). No other change | `npm run build` (runs the i18n audit); a script that lists the `t()` keys used before and after: only removals expected | none |
+| S1 | **Dead code and two bugs.** Delete `handleSaveConfig`, `handleTestConnection`, `handleLoadConfigFile`, `selectedPBSID`, `restoreProgress`, the unreachable server table (2001-2047), the two VSS boxes (2564, 2571), and the **split-backup feature** (toggle, handler, listener, strings, `backup_analysis.go`, `backup_split_api.go`; CJ's Q6). Fix the cancel-edit tab (2685). No other change | `npm run build` (runs the i18n audit); a script that lists the `t()` keys used before and after: only removals expected; Go build and tests still pass with the two split files gone (nothing else references them) | none |
 | S2 | **Split `App.jsx` by process**: Status, Backup, Jobs, History, Restore, Setup, About; hooks `useMachineContext`, `usePolling`; modules `format`, `messages`. No behavior change | Per-component render fixtures; rendered-text snapshot per component taken from the S1 build, must be identical | S1 |
 | S3 | **Remove the upstream vendor** from the GUI, installer and metadata (Appendix A); keep the GPL credit line | A build step failing on `rdem`, `utm_` or any external image or link in `src/`, allowlisting only the credit URL; a CI grep over `installer/` for the same | Q5 for the replacement text; without it, ship the product name and no contact |
-| S4 | **Translation hygiene**: live French literals to keys; merge the duplicate key sets; delete the thirteen dead `\|\| 'literal'` fallbacks; local dates and sizes through `format`; extend `i18n-audit.mjs` to reject `\|\| '...'`, non-ASCII string literals in JS, and native dialogs | Fixture files in `scripts/` with one failing sample per new rule | S2 |
+| S3b | **Distance from the fork, tier 1** (`docs/UPSTREAM-DISTANCE.md`): rename the Go module path, replace the logo and icon bytes, delete upstream screenshots and build scripts, untrack the four committed binaries | Build; Go gates; a CI check failing on any import of the old module path or any tracked `.exe` | S3 |
+| S4 | **Translation hygiene and typography**: live French literals to keys; merge the duplicate key sets; delete the thirteen dead `\|\| 'literal'` fallbacks; local dates and sizes through `format`; the font choice of 4.10; extend `i18n-audit.mjs` to reject `\|\| '...'`, non-ASCII string literals in JS, and native dialogs | Fixture files in `scripts/` with one failing sample per new rule; the font render test of 4.10 | S2 |
 | S5 | **Context, Status and the six states** (section 2): Enrolling, Service-down, Standalone setup panel; Status as the default tab; the 3.2 changes (hostname, one "Backup storage" tile, trigger words, local days, shared localizer, header controls in the locked view) | Render tests for each state. **R1 gate:** fixtures contain a PBS host, datastore, namespace and backup-id; for every managed state the rendered text may contain none of them. Local-day grouping unit test with a 22:00 America/Chicago run. Storage fixture of finding 4 renders no welcome box | S2 |
 | S6 | **Setup**: Servers tab removed for managed; standalone gets the reduced form (Q2), one list, no Server ID or Description, no Multi-PBS box | M renders no Setup; S form field list asserted; finding-4 fixture | S5, Q2 |
-| S7 | **Notices**: one component replaces the 92 `showStatus` calls; no emoji; native dialogs replaced; errors carry codes | The audit script rejects `showStatus(`, `window.confirm`, `window.alert` and emoji outside an allowlist; render test: an error notice has no timer | S4 |
+| S7 | **Notices**: one component replaces the 92 `showStatus` calls; emoji only through `symbols`; native dialogs replaced; errors carry codes | The audit script rejects `showStatus(`, `window.confirm`, `window.alert` and any emoji outside the `symbols` module (4.5); render test: an error notice has no timer | S4 |
 | S8 | **Back up and Jobs**: "Back up now" and "Scheduled jobs" as two sections; Backup ID field and mode toggle removed; managed jobs listed read-only; local-job writes only through the local API; Stop on the progress card | Go: every `/jobs*` write route refused while locked (extend `readonly_test.go`); a file-set test that the GUI build links no job writer (the PIPE 3.1 method); new read route returns the managed set; render tests for M, S and `restrictUnmanaged` | S5; the read route (section 6) |
 | S9 | **Handshake states**: asking, accepted, each refusal reason as a persistent notice | A fake local API per refusal reason; render per state | S8; the server's `backup-request` and the service `StartBackup` PR |
 | S10 | **Restore**: "Backups of this computer", policy gate, no backup-id or server picker, new cards, "Disk 1 (boot)", two buttons, no beta box | R1 gate over restore fixtures (cards, search hits, disk names); tab absent when `fileRestore` false or unknown (M); two buttons asserted | Q1; OPQ 3.4 server-assigned ids; the "list this computer's backups" read op |
-| S11 | **History and run detail** with the Run ID, single source `/runs/recent`, "Run again", portal link | The label "Run ID" present and "Backup Job ID" absent in all three languages; render of detail tile | S8 |
-| S12 | **About, tray, storage panel, security warnings**: neutral first approval, localized storage error, security warning as a reported code | Tray text table test; storage states render | Server field for the warning report; ENR R2 wording |
+| S11 | **History and run detail** with the Run ID, single source `/runs/recent`, "Run again" | The label "Run ID" present and "Backup Job ID" absent in all three languages; render of detail tile | S8 |
+| S12 | **About, tray (with the running percentage), storage panel, security warnings**: neutral first approval, localized storage error, security warning as a reported code | Tray text table test, including the "Backing up: n%" string in en, fr, es; storage states render | Server field for the warning report; ENR R2 wording |
 | S13 | **Leftover documents** (Appendix C) | Link check over the remaining docs | none |
 
 ---
@@ -570,52 +610,37 @@ Listed so the server session and the service work are not duplicated.
 
 ---
 
-## 7. Questions for CJ
+## 7. Decisions (CJ, 2026-10-09)
 
-Decisions the audit cannot make. Each has the recommendation I would build if
-you do not object; nothing in S5 to S12 starts on the dependent steps until
-answered.
+The ten questions of the first draft, with the answers and what each changed.
 
-1. **Does the Restore tab exist on a managed machine, or is restore the portal's
-   job?** *Recommend:* it exists only when the organization permits file restore,
-   starts at "Backups of this computer", offers file, folder and volume restore
-   and download, and has no search and no restoring another computer's backup
-   (server-side browse owns both). If you say portal only, S10 shrinks to a
-   removal for managed.
-2. **What may a standalone install show of PBS?** *Recommend:* a reduced form
-   (name, address, API token ID and secret, datastore; namespace and fingerprint
-   under Advanced) and **exactly one** storage server in the GUI, since no screen
-   can route a path to a second one today. The Go map of servers stays until a
-   later cleanup.
-3. **Does a managed machine show the control server's address?** *Recommend:* the
-   organization's name, connected or not, and the last check-in; address and
-   agent id under a "Details" disclosure for support calls. Needs the
-   organization name in the status (section 6).
-4. **Do local jobs exist on a managed machine by default?** *Recommend:* only
-   while the organization does not set `restrict_unmanaged_backups`, shown as a
-   secondary section under the managed jobs. The key's default permits, so by
-   default they would exist; say if enrollment should flip that default
-   (server policy, not GUI).
-5. **Branding.** What does About show for a branded installation, and what
-   replaces "(c) RDEM Systems"? *Recommend:* logo, product name and support
-   contact from branding when managed; a plain "Nimbus Backup" with no company
-   line otherwise; keep "Based on proxmoxbackupclient_go by tizbac" as a credits
-   line (GPL-3). Does the agent receive branding at all today? I found no field.
-6. **The "split the first backup" feature.** It runs several backups with
-   client-built ids and French prompts. *Recommend:* remove it. If large first
-   backups still need it, specify it as a service feature on server-assigned
-   source ids.
-7. **The tray.** There is no specification (`V4-UX.md` section 9). *Recommend:*
-   Open, a status line (last result, next run), and "Close (backups keep
-   running)". Nothing else.
-8. **Local schedule input.** *Recommend:* presets (daily at, weekdays at, every
-   N hours) that compile to the PVE calendar expression CFG 3 already decided
-   on, rather than asking a person to type `mon..fri 02:00`.
-9. **A "View in portal" link on a run**, when the dashboard URL is known.
-   *Recommend:* yes, managed only.
-10. **Design-language defaults** (section 4): no emoji anywhere; trees and
-    directory listings keep an inner scroller, everything else is tiles; the
-    vocabulary table in 4.1. Say which to change.
+| # | Question | Answer | Effect in this document |
+|---|---|---|---|
+| 1 | Restore tab on a managed machine | Yes, when the organization permits | 3.9: drawn only when `fileRestore` is true; starts at "Backups of this computer"; no cross-computer restore; search follows the server-side browse design |
+| 2 | Standalone PBS | Reduced form, one storage server | 3.5: Name, address, API token ID and secret, datastore; namespace and fingerprint under Advanced; no Server ID, Description or Multi-PBS box. S6 |
+| 3 | Management server address on a managed machine | Organization name, state, last check-in; address under Details | 3.2, 3.4. Needs `organization_name` in the status (section 6) |
+| 4 | Local jobs on a managed machine | Only while the organization does not restrict unmanaged backups | 3.7, 3.6. S8 |
+| 5 | Branding and credit | Keep crediting tizbac if the core is still shared; measure it | `docs/UPSTREAM-DISTANCE.md`: Tiziano's original engine is 92% intact (4,100 lines, 5.7% of our code); the larger shared body (about 11,000 lines) is RDEM's. Credit stays, naming both (3.11). Whether the agent receives branding (logo, name, contact) is still open: no field exists today |
+| 6 | Split first backup | Remove it; list everything else shared with the fork; make distance | 3.6: REMOVED (about 530 shared lines). The list and a tiered plan are in `docs/UPSTREAM-DISTANCE.md`. Tier 1 (mechanical) is proposed as step S3b below |
+| 7 | Tray | Approved; show the backup percentage; themed like the GUI with font and color | 3.12: percentage added; a native menu cannot take the GUI theme, so the Status tab is the themed surface (a popup is not planned) |
+| 8 | Local schedule input | Presets that compile to the calendar expression | 3.7 |
+| 9 | Portal link on a run | No: organization users cannot sign in, and a scoped session is a separate feature that widens scope against the zero-trust goal | 3.8 row marked NOT BUILT; 3.10 loses its dashboard link; S11 without it |
+| 10 | Design-language defaults | Emoji stay as data symbols (stats, status), weed out the rest. (Trees and listings keep an inner scroller: no objection raised.) | 4.5 rewritten around a `symbols` module |
+
+Also decided: a second font under the **A** selector and a professional default
+(Inter), 4.10.
+
+**Added to the build order: S3b, distance from the fork.** Tier 1 of
+`docs/UPSTREAM-DISTANCE.md`, as its own pull request after S3: rename the Go
+module path (13 files import it), replace `gui/logo.webp` and the icon bytes in
+`clientcommon/icon.go`, delete the three upstream screenshots and the upstream
+build scripts, remove the four compiled binaries tracked in git, and add a CI
+check that fails on a new file importing the old module path. Test: the build,
+the Go gates, and that check.
+
+**Still open:** (a) whether the agent should receive branding at all (Q5, second
+half); (b) whether tier 2 and 3 of the distance plan are ever worth doing. Neither
+blocks S1 to S8.
 
 ---
 
@@ -623,7 +648,7 @@ answered.
 
 | # | Lead | Result |
 |---|---|---|
-| 1 | Upstream vendor in the product | **Confirmed and wider.** Logo fetched from `nimbus.rdem-systems.com` (3482); order-storage CTA with `utm_` (3495); first-run link with `utm_` (1987); footer link (3542); `chooseBackupUrl` in all three catalogs (`translations.js` 348, 852, 1356); `appSubtitle` on every screen; `copyright` "(c) 2026 RDEM Systems"; `installer/wix/Product.wxs` 152-155 (Programs and Features help, about, update-info and contact link to the vendor's site, repository and e-mail); `gui/wails.json` author block; `gui/main.go:183` website line; `.github/workflows/build-and-release.yml` release body (1580-1631) and attestation comment (1499); `build_gui_windows_docker.sh:21` app id; `installer/DEPLOYMENT.md`; `docs/RESTORE_GUIDE.md`; `CHANGELOG.md`; `MULTI_PBS_USER_GUIDE.md`. Not all of these are in the GUI; S3 covers GUI, installer and metadata, S13 the documents. The workflow's own repository path `rdemsystems/NimbusBackupClient` is CJ's to decide |
+| 1 | Upstream vendor in the product | **Confirmed and wider.** Logo fetched from `nimbus.rdem-systems.com` (3482); order-storage CTA with `utm_` (3495); first-run link with `utm_` (1987); footer link (3542); `chooseBackupUrl` in all three catalogs (`translations.js` 348, 852, 1356); `appSubtitle` on every screen; `copyright` "(c) 2026 RDEM Systems"; `installer/wix/Product.wxs` 152-155 (Programs and Features help, about, update-info and contact link to the vendor's site, repository and e-mail); `gui/wails.json` author block; `gui/main.go:183` website line; `.github/workflows/build-and-release.yml` release body (1580-1631) and attestation comment (1499); `build_gui_windows_docker.sh:21` app id; `installer/DEPLOYMENT.md`; `docs/RESTORE_GUIDE.md`; `CHANGELOG.md`; `MULTI_PBS_USER_GUIDE.md`. Not all of these are in the GUI; S3 covers GUI, installer and metadata, S3b the shared module path and assets, S13 the documents. Shared code is measured in `docs/UPSTREAM-DISTANCE.md`. The workflow's own repository path `rdemsystems/NimbusBackupClient` is CJ's to decide |
 | 2 | PBS forms contradict R1 | **Confirmed**, 3.5. On an enrolled machine the form is not used: `pbs_target` writes the legacy single-server fields, and the Servers tab reads the multi-server map, which is empty (finding 4) |
 | 3 | "Backup ID" contradicts opacity | **Confirmed** at 2508 (Backup) and 2858 (Restore), plus the job tile, history rows, snapshot cards and search hits |
 | 4 | Restore starts from PBS concepts | **Confirmed**, 3.9 |
@@ -666,7 +691,7 @@ the storage-identity `error`, and `errNoPBSServer` / "serveur PBS ... introuvabl
 
 | File | Lines | Verdict |
 |---|---|---|
-| `MULTI_PBS_GUIDE.md` | 348 | REMOVE: French implementation guide for a feature the GUI does not use (Q2) |
+| `MULTI_PBS_GUIDE.md` | 348 | REMOVE: French implementation guide for a feature the GUI will no longer expose (Q2) |
 | `MULTI_PBS_USER_GUIDE.md` | 266 | REMOVE: end-user guide to Multi-PBS, vendor links |
 | `README.fr.md` | 36 | Compare with `README.md` (141 lines, updated 2026-09-08); keep only if maintained in parity, otherwise REMOVE |
 | `RELEASE_NOTES.md` | 37 | CHANGE or REMOVE: "Status and notes" page from the fork; `CHANGELOG.md` carries history |
