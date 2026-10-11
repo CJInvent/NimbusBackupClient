@@ -1,9 +1,14 @@
 # Distance from the upstream projects
 
-**Status (2026-10-09).** A measurement and a list, requested by CJ: how much of
+**Status (revised 2026-10-11).** A measurement and a list, requested by CJ: how much of
 this repository is still the code it was forked from, which files, and what it
 would take to stop being related to it. No code changed. Companion to
-`docs/V4-GUI-AUDIT.md`.
+`docs/V4-GUI-AUDIT.md`; the goals and the order of work are in
+`docs/INDEPENDENCE-GOALS.md`.
+
+**Direction (CJ, 2026-10-11):** all RDEM-authored code is to be replaced;
+Tiziano's code is kept only as a reference for behavior. This work happens
+**after the features reach full stability**, not before.
 
 ## 1. Lineage, as git shows it
 
@@ -44,6 +49,41 @@ machine backup, Windows VSS) is still almost entirely here, 92% of it, but it is
 about 4,100 lines of our 66,000. The larger shared body, about 11,000 more lines,
 is RDEM's work: the restore engine, search, pxar and catalog readers, the log
 rotation, the GUI shell.
+
+### 3a. Is any of it a dependency? No.
+
+The shared files are source files that live in the fork, not libraries. This
+repository has no `vendor/` directory; third-party libraries are declared in
+`go.mod`, `go.sum` and `package.json` and were excluded from every count (as were
+`node_modules`, lock files, built `dist`, binaries and documents). One caveat for
+the protocol code: `pbscommon` implements formats that Proxmox Backup Server
+defines (chunker, archive and index formats), and the buzhash table is almost
+certainly Proxmox's published constants. Those constants and format facts are not
+the fork's to claim, and whether Proxmox's own license says anything about them is
+not checked here.
+
+### 3b. Where it sits, and whose it is (re-run 2026-10-11)
+
+Recounted against `tizbac/master` with non-blank lines only, so these totals
+(about 12,300 shared lines) differ slightly from the 15,090 above, which counted every
+line. Authorship is `git blame` on `tizbac/master` by commit identity, scaled by
+how much of each file survives. It says who committed the lines, not who owns them.
+
+| Area | Shared lines | RDEM | Tiziano | Other |
+|---|---|---|---|---|
+| Service and GUI Go (`gui/`) | 4,777 | 3,743 | 953 | 81 |
+| PBS protocol (`pbscommon`) | 2,736 | 2,272 | 430 | 34 |
+| Web UI (`gui/frontend`) | 1,810 | 1,280 | 525 | 5 |
+| Other Go (backup engines, snapshot, nbd, pkg) | 1,833 | 1,087 | 671 | 75 |
+| Tests | 1,192 | 1,065 | 126 | 1 |
+| **Total** | **12,348** | **9,446** | **2,705** | **197** |
+
+Answer to "is the RDEM code the web UI?": no. The web UI is 15% of what is shared.
+Most of it is the service-side pipeline: backup and restore engines, the PBS
+client, and the archive and catalog readers. The largest shared files by
+surviving lines: `App.jsx` 1,718 of 2,876; `pbsapi.go` 909; `backup_inline.go`
+860; `pxar.go` 747; `restore_inline.go` 635; `pxar_reader.go` 460;
+`backup_analysis.go` 365; `log_rotation.go` 341.
 
 ## 4. What is shared, by file
 
@@ -182,7 +222,7 @@ deleting the credit. There are three tiers:
    feature alone sheds about 530 shared lines.
 2. **Moderate:** group B, the files that were substantially edited. Each is
    a rewrite of a file we mostly already rewrote.
-3. **Expensive:** group A, above all the PBS wire format in `pbscommon`
+3. **Expensive (now the stated direction, after stability):** group A, above all the PBS wire format in `pbscommon`
    (`pxar.go` and `pxar_reader.go` about 1,430 lines, `buzhash.go`, `didx_reader.go`,
    `catalog_reader.go`, `pbsapi.go` about 1,500) and the restore engine
    (`gui/restore_inline.go` 835 lines). The formats are fixed by Proxmox Backup
@@ -193,6 +233,16 @@ deleting the credit. There are three tiers:
    (`chunking_test.go`, `catalog_reader_test.go`, the `snapshot` tests) are the
    evidence to look at first, and I have not run them here.
 
-My recommendation: do tier 1 now, keep the credit (naming both authors) in a
-licenses line on About, and decide on tier 3 only if a concrete reason appears,
-because it is the one tier whose cost is large and whose benefit is cosmetic.
+CJ's direction of 2026-10-11 replaces my earlier recommendation (tier 1 only):
+all RDEM code goes, in all three tiers, after the features are stable. The order,
+the provenance rule for rewritten files, the safety net and the dev-release
+mapping are in `docs/INDEPENDENCE-GOALS.md`. The credit stays until the last
+shared file is gone, and the module rename, logo and icon replacement and removal
+of the committed binaries can still be done early since they touch no behavior.
+
+Tier 1 also covers three places the first pass missed: the release text in
+`.github/workflows/build-and-release.yml` (company name, copyright, vendor links
+at lines 1026-1030 and 1580-1631), the attestation hint naming
+`rdemsystems/NimbusBackupClient` (line 1499), and `installer/wix/Product.wxs`
+(manufacturer, registry key, help and contact links) plus `installer/DEPLOYMENT.md`
+and `installer/BUILD_INSTRUCTIONS.md`.
