@@ -197,12 +197,12 @@ managed state by definition; a standalone machine has no organization to lock it
 
 | Element | Today | Spec | Verdict |
 |---|---|---|---|
-| Title `appTitle` with a shield emoji (1902) | "Nimbus Backup" | branding (CFG 6) | CHANGE: no emoji; name from branding, Q5 |
+| Title `appTitle` with a shield emoji (1902) | "Nimbus Backup" | branding (CFG 6) | CHANGE: no emoji; name from branding (4.12) |
 | Subtitle `appSubtitle` (1903) | "Backup client for Proxmox Backup Server - RDEM Systems" in all three languages | R1 (names PBS), vendor | REMOVE |
 | Tabs `servers, backup, restore, about` as clickable `div`s (1935-1947) | Not focusable, no role | accessibility; UX 8.1 rule 4 | CHANGE: buttons with tab roles. M: Status, Back up, Restore (only if `fileRestore`), About. S: Status, Back up, Restore, Setup, About |
 | Suspended banner (1910) | `<p class="card" role="alert">` | F-22 | KEEP; Start must also say why it refuses (3.6) |
 | Security warnings banner (1927-1934) | English strings from Go, agent-log only | AUD 0 | CHANGE: 3.10 |
-| Header controls: theme (auto/light/dark), accent swatches, text size, language with flag emoji | Persisted in `localStorage` | none | KEEP; language list shows names only (a flag is a country); the **A** dropdown gains the font choice (4.10); default accent from branding when managed (Q5) |
+| Header controls: theme (auto/light/dark), accent swatches, text size, language with flag emoji | Persisted in `localStorage` | none | KEEP; language list shows names only (a flag is a country); the **A** dropdown gains the font choice (4.10); default accent from branding when managed (4.12) |
 
 ### 3.4 Connecting to the control server
 
@@ -382,13 +382,13 @@ exist if it does.
 
 | Element | Today | Spec | Verdict |
 |---|---|---|---|
-| Logo `<img src="https://nimbus.rdem-systems.com/logo.webp">` (3482) | A network request to a third party every time the tab opens | privacy; vendor | REMOVE; bundled asset, or the branding logo (Q5) |
+| Logo `<img src="https://nimbus.rdem-systems.com/logo.webp">` (3482) | A network request to a third party every time the tab opens | privacy; vendor | REMOVE; the branding logo when managed, a neutral bundled mark otherwise (4.12) |
 | "Order Nimbus Backup storage" button with `utm_source=NimbusGui&utm_campaign=version-<ver>` (3495) | Sales link, tracks versions | | REMOVE |
 | Features list, Technology list ("Wails", "No GPU", "Modern interface") (3515-3535) | Marketing copy from the fork | | REMOVE |
-| `copyright`: "(c) 2026 RDEM Systems" and a link to `nimbus.rdem-systems.com` (3541-3542) | Upstream vendor | | CHANGE per Q5 |
+| `copyright`: "(c) 2026 RDEM Systems" and a link to `nimbus.rdem-systems.com` (3541-3542) | Upstream vendor | | CHANGE: owner and product line from branding (4.12), a neutral line when standalone; the credit line below is separate |
 | `basedOn`: "Based on proxmoxbackupclient_go by tizbac"; `techStack` | The project is GPL-3 and derived from that work; most of the shared code is RDEM's (`docs/UPSTREAM-DISTANCE.md`) | license: notices stay with derived code | **KEEP** as a "Credits and licenses" line naming **Tiziano Bacocco (proxmoxbackupclient_go) and RDEM Systems**, with the GPL-3 text; nothing else on this tab is required. Revisit only when the files listed in the distance document are replaced |
 | Version | Shown | | KEEP, add build and the computer's name |
-| (new) Support contact | none | CFG 6 branding | ADD from branding when managed (Q5) |
+| (new) Support contact | none | CFG 6 branding | ADD from branding when managed (4.12) |
 
 Not on screen but in the product (Appendix A): Programs and Features help, about
 and contact links in the MSI, the Wails author block, the release-notes
@@ -556,6 +556,32 @@ should be a professional font that suits the product.
 * **Tests:** a render test that both options exist and that the stored value
   selects the attribute; the font files are present in the build output.
 
+### 4.11 Small files
+
+CJ, 2026-10-11: many small files, not a few large ones that have to be searched.
+Rules, enforced by the audit script (S4) once S2 has split `App.jsx`:
+
+* No file in `gui/frontend/src` over 250 lines; one screen per folder
+  (`screens/<name>/`), one component per file, hooks and helpers in their own
+  files; `translations.js` becomes one file per language per screen.
+* A component takes props and renders; it does not fetch. Fetching lives in a hook.
+* The script reports the five largest files on every build so growth is visible.
+* The same rule is proposed for new Go files (soft limit 400 lines, reported, not
+  failed) and is part of the independence program (`docs/INDEPENDENCE-GOALS.md`).
+
+### 4.12 Branding
+
+The agent receives, from the control server, with the check-in:
+`product_name`, `logo` (a small image the agent downloads from the control server
+and caches), `accent` (a color that becomes the default accent), and a support
+contact (`support_email`, `support_phone`, `support_url`; any may be empty).
+Where it appears: the header title, the About tab, the first-run screen, the tray
+tooltip and the window title. A field that is empty is not drawn. Standalone and
+service-down use the neutral built-in name and mark, with no contact. The
+logo is never fetched from a third party (3.11). Open for the spec: whether the MSI
+property strings (Programs and Features) can be stamped by the provisioned-MSI
+build, since an MSI cannot read the check-in.
+
 ---
 
 ## 5. Build order
@@ -576,8 +602,8 @@ dependency.
 | # | Pull request | Tests (written first) | Depends on |
 |---|---|---|---|
 | S1 | **Dead code and two bugs.** Delete `handleSaveConfig`, `handleTestConnection`, `handleLoadConfigFile`, `selectedPBSID`, `restoreProgress`, the unreachable server table (2001-2047), the two VSS boxes (2564, 2571), and the **split-backup feature** (toggle, handler, listener, strings, `backup_analysis.go`, `backup_split_api.go`; CJ's Q6). Fix the cancel-edit tab (2685). No other change | `npm run build` (runs the i18n audit); a script that lists the `t()` keys used before and after: only removals expected; Go build and tests still pass with the two split files gone (nothing else references them) | none |
-| S2 | **Split `App.jsx` by process**: Status, Backup, Jobs, History, Restore, Setup, About; hooks `useMachineContext`, `usePolling`; modules `format`, `messages`. No behavior change | Per-component render fixtures; rendered-text snapshot per component taken from the S1 build, must be identical | S1 |
-| S3 | **Remove the upstream vendor** from the GUI, installer and metadata (Appendix A); keep the GPL credit line | A build step failing on `rdem`, `utm_` or any external image or link in `src/`, allowlisting only the credit URL; a CI grep over `installer/` for the same | Q5 for the replacement text; without it, ship the product name and no contact |
+| S2 | **Split `App.jsx` by process** into `screens/<name>/` folders obeying 4.11 (no file over 250 lines): Status, Backup, Jobs, History, Restore, Setup, About; hooks `useMachineContext`, `usePolling`; modules `format`, `messages`. No behavior change | Per-component render fixtures; rendered-text snapshot per component taken from the S1 build, must be identical | S1 |
+| S3 | **Remove the upstream vendor** from the GUI, installer, workflow release text and metadata (Appendix A); keep the GPL credit line; add the branding fields (4.12) | A build step failing on `rdem`, `utm_` or any external image or link in `src/`, allowlisting only the credit URL; a CI grep over `installer/` for the same | The server's branding fields (section 6); until they exist, ship the neutral name and no contact |
 | S3b | **Distance from the fork, tier 1** (`docs/UPSTREAM-DISTANCE.md`): rename the Go module path, replace the logo and icon bytes, delete upstream screenshots and build scripts, untrack the four committed binaries | Build; Go gates; a CI check failing on any import of the old module path or any tracked `.exe` | S3 |
 | S4 | **Translation hygiene and typography**: live French literals to keys; merge the duplicate key sets; delete the thirteen dead `\|\| 'literal'` fallbacks; local dates and sizes through `format`; the font choice of 4.10; extend `i18n-audit.mjs` to reject `\|\| '...'`, non-ASCII string literals in JS, and native dialogs | Fixture files in `scripts/` with one failing sample per new rule; the font render test of 4.10 | S2 |
 | S5 | **Context, Status and the six states** (section 2): Enrolling, Service-down, Standalone setup panel; Status as the default tab; the 3.2 changes (hostname, one "Backup storage" tile, trigger words, local days, shared localizer, header controls in the locked view) | Render tests for each state. **R1 gate:** fixtures contain a PBS host, datastore, namespace and backup-id; for every managed state the rendered text may contain none of them. Local-day grouping unit test with a 22:00 America/Chicago run. Storage fixture of finding 4 renders no welcome box | S2 |
@@ -598,7 +624,7 @@ Listed so the server session and the service work are not duplicated.
 
 | Need | Where | For |
 |---|---|---|
-| `organization_name` (and, if Q5 says so, branding: logo, product name, accent, support contact) in `ControlPlaneStatusMap` / the check-in | server + `controlplane_glue.go` | 3.1, 3.4, 3.11 |
+| `organization_name` and **branding** (product name, logo, accent, support contact; 4.12) in `ControlPlaneStatusMap` / the check-in | server + `controlplane_glue.go` | 3.1, 3.3, 3.4, 3.11 |
 | A read-only route that returns the managed job set (`currentManagedJobs()`), added to the `readonly.go` allowlist only if the locked view ever needs it (it does not: keep it off) | `gui/api` | 3.7 |
 | Local-job writes go through `/jobs/create`, `/jobs/update`, `/jobs/delete`; GUI binding bodies replaced | `gui/scheduler.go` | 3.7, finding 3 |
 | A restore read op: backups of this computer, resolved by the service from server-assigned source ids | `restore_service.go`, `/restore/query` | 3.9 |
@@ -620,7 +646,7 @@ The ten questions of the first draft, with the answers and what each changed.
 | 2 | Standalone PBS | Reduced form, one storage server | 3.5: Name, address, API token ID and secret, datastore; namespace and fingerprint under Advanced; no Server ID, Description or Multi-PBS box. S6 |
 | 3 | Management server address on a managed machine | Organization name, state, last check-in; address under Details | 3.2, 3.4. Needs `organization_name` in the status (section 6) |
 | 4 | Local jobs on a managed machine | Only while the organization does not restrict unmanaged backups | 3.7, 3.6. S8 |
-| 5 | Branding and credit | Keep crediting tizbac if the core is still shared; measure it | `docs/UPSTREAM-DISTANCE.md`: Tiziano's original engine is 92% intact (4,100 lines, 5.7% of our code); the larger shared body (about 11,000 lines) is RDEM's. Credit stays, naming both (3.11). Whether the agent receives branding (logo, name, contact) is still open: no field exists today |
+| 5 | Branding and credit | Keep crediting tizbac if the core is still shared; measure it. Follow-up (2026-10-11): **the agent receives branding**; all RDEM code must go, tizbac's stays as reference only | Branding is a requirement: section 4.12 and section 6. Distance: `docs/UPSTREAM-DISTANCE.md` and `docs/INDEPENDENCE-GOALS.md`; the credit stays for as long as any shared file does (3.11) |
 | 6 | Split first backup | Remove it; list everything else shared with the fork; make distance | 3.6: REMOVED (about 530 shared lines). The list and a tiered plan are in `docs/UPSTREAM-DISTANCE.md`. Tier 1 (mechanical) is proposed as step S3b below |
 | 7 | Tray | Approved; show the backup percentage; themed like the GUI with font and color | 3.12: percentage added; a native menu cannot take the GUI theme, so the Status tab is the themed surface (a popup is not planned) |
 | 8 | Local schedule input | Presets that compile to the calendar expression | 3.7 |
@@ -638,9 +664,11 @@ build scripts, remove the four compiled binaries tracked in git, and add a CI
 check that fails on a new file importing the old module path. Test: the build,
 the Go gates, and that check.
 
-**Still open:** (a) whether the agent should receive branding at all (Q5, second
-half); (b) whether tier 2 and 3 of the distance plan are ever worth doing. Neither
-blocks S1 to S8.
+**Decided 2026-10-11:** the agent receives branding (4.12); all RDEM-authored code is
+to be replaced and Tiziano's code is kept only as a behavior reference. That work
+starts **after the features reach full stability** and is specified in
+`docs/INDEPENDENCE-GOALS.md`; it does not change S1 to S13 except for the rule in
+4.11 (small files) and S3b.
 
 ---
 
