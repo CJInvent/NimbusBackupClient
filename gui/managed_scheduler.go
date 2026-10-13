@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"os"
 	"path/filepath"
 	"sync"
@@ -225,7 +226,7 @@ func (a *App) checkManagedJobs() {
 	// The state is advanced BEFORE the job is dispatched, deliberately. If it
 	// were advanced after, a backup that takes longer than the tick interval
 	// would still look due on the next tick and be started again — the
-	// runningJobs guard in executeScheduledJob would refuse the duplicate,
+	// runningJobs guard in executeJob would refuse the duplicate,
 	// but the log would fill with refusals and any future change to that
 	// guard would turn into concurrent backups of one machine.
 	managedStateMu.Lock()
@@ -249,7 +250,7 @@ func (a *App) checkManagedJobs() {
 		// requestID stays empty: nobody asked for this, the schedule came
 		// round. The unmanaged-backup gate exempts managed ids, so an org
 		// that set restrict_unmanaged_backups still gets its own jobs.
-		go a.executeScheduledJob(sj, "")
+		go a.executeJob(sj, "", api.TriggerSchedule)
 	}
 }
 

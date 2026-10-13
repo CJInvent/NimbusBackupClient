@@ -44,7 +44,7 @@ func registerScheduledRun(trigger api.RunTrigger, jobID, jobName, backupID, back
 	reg.Begin(trigger, jobID, jobName, backupID, normalizeRunKind(backupType))
 }
 
-// registerRunReporter is called by executeScheduledJob (which knows the
+// registerRunReporter is called by executeJob (which knows the
 // job's display name) BEFORE StartBackup. backupID may be "".
 func registerRunReporter(backupID, jobName, backupType, requestID string, trigger api.RunTrigger, serverJobID int64) {
 	if cpClient == nil {
@@ -101,23 +101,15 @@ func managedJobServerID(id string) int64 {
 	return n
 }
 
-func announceLocalRun(job ScheduledJob, requestID string) {
-	trigger := api.TriggerSchedule
-	if requestID != "" {
-		trigger = api.TriggerPortal
-	}
-	announceLocalRunAs(job, requestID, trigger)
-}
-
-// announceLocalRunAs is announceLocalRun with the trigger stated rather than
-// derived: a local job that asked the server first carries a request id and
-// is still the machine's own schedule, not the portal.
+// announceLocalRunAs opens both records of a run about to start in this
+// process, under the trigger executeJob states: a local job that asked the
+// server first carries a request id and is still the machine's own
+// schedule, not the portal.
 func announceLocalRunAs(job ScheduledJob, requestID string, trigger api.RunTrigger) {
-	// WHAT STARTED THIS. executeScheduledJob is reached two ways: a calendar
-	// event firing, and the portal's run_backup command -- which is the one
-	// that arrives carrying a Backup Request ID. Deriving the trigger from
-	// that here, at the only place that knows both, keeps the two records of
-	// this run (control plane and local registry) from disagreeing.
+	// WHAT STARTED THIS is stated by executeJob, the one place that knows
+	// (a local calendar event, the portal's run_backup, or the server's own
+	// dispatch), and both records of this run -- control plane and local
+	// registry -- take it from here so they cannot disagree.
 	//
 	// registerScheduledRun used to hard-code TriggerSchedule, so a run the
 	// portal asked for was labelled scheduled in the machine's own status

@@ -348,20 +348,11 @@ func calculateNextRun(scheduleTime string) string {
 	return nextRun.Format(time.RFC3339)
 }
 
-// executeScheduledJob executes a scheduled job. An empty requestID is the
-// local scheduler; a non-empty one is a control-plane run_backup (the
-// portal's button).
-func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
-	trigger := api.TriggerSchedule
-	if requestID != "" {
-		trigger = api.TriggerPortal
-	}
-	a.executeJob(job, requestID, trigger)
-}
-
-// executeJob is executeScheduledJob with what started the run stated: a
-// run_backup the SERVER dispatched from a schedule (docs/V4-DATAPATH-PROXY.md
-// §11.3) carries a request id and is still a scheduled run.
+// executeJob runs one job's backup. requestID is empty when the LOCAL
+// scheduler decided (trigger schedule), and set for a control-plane
+// run_backup: the portal's button (trigger portal), or a run the SERVER
+// dispatched from a schedule (trigger schedule, docs/V4-DATAPATH-PROXY.md
+// §11.3).
 func (a *App) executeJob(job ScheduledJob, requestID string, trigger api.RunTrigger) {
 	// An empty requestID means the LOCAL scheduler decided to run this —
 	// nobody asked for it. A non-empty one came with a control-plane

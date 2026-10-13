@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"time"
 )
 
@@ -167,7 +168,7 @@ func (a *App) HandleStartupRun() {
 		// Check if this job is already running (mutex protection)
 		// If scheduler already started it, the mutex will prevent duplicate execution
 		writeInfoLog(fmt.Sprintf("Executing startup job: %s", job.Name))
-		go a.executeScheduledJob(job, "") // cron/startup-triggered: no server request
+		go a.executeJob(job, "", api.TriggerSchedule) // cron/startup-triggered: no server request
 	}
 }
 
@@ -231,7 +232,7 @@ func (a *App) checkAndRunScheduledJobs() {
 		// Check if it's time to run (within 2 minute window to avoid missing)
 		if shouldRun {
 			writeInfoLog(fmt.Sprintf("[Scheduler] Executing scheduled job: %s", job.Name))
-			go a.executeScheduledJob(job, "") // cron-triggered: no server request
+			go a.executeJob(job, "", api.TriggerSchedule) // cron-triggered: no server request
 		}
 	}
 }
