@@ -91,6 +91,7 @@ func (a *App) restoreOptionsFor(ref SnapshotRef) (RestoreOptions, error) {
 		Datastore:       cfg.Datastore,
 		Namespace:       cfg.Namespace,
 		CertFingerprint: cfg.CertFingerprint,
+		DataPath:        cfg.DataPath,
 		BackupID:        ref.BackupID,
 		SnapshotTime:    when,
 	}, nil
@@ -122,7 +123,7 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return ListSnapshotsInline(cfg.BaseURL, cfg.AuthID, cfg.Secret,
-			cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, p.BackupID)
+			cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, p.BackupID, cfg.DataPath)
 
 	case opContents:
 		p, err := decodeParams[ListContentsParams](op, raw)
@@ -264,6 +265,7 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 			Datastore:       cfg.Datastore,
 			Namespace:       cfg.Namespace,
 			CertFingerprint: cfg.CertFingerprint,
+			DataPath:        cfg.DataPath,
 			HostPrefix:      p.HostPrefix,
 			Query:           p.Query,
 			Mode:            SearchMatchMode(p.Mode),

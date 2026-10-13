@@ -43,6 +43,7 @@ type SearchOptions struct {
 	Datastore       string
 	Namespace       string
 	CertFingerprint string
+	DataPath        *pbscommon.DataPath
 
 	HostPrefix      string
 	Query           string
@@ -181,7 +182,7 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 	searchCancelled.Store(false)
 
 	snaps, err := ListSnapshotsInline(opts.BaseURL, opts.AuthID, opts.Secret,
-		opts.Datastore, opts.Namespace, opts.CertFingerprint, opts.HostPrefix)
+		opts.Datastore, opts.Namespace, opts.CertFingerprint, opts.HostPrefix, opts.DataPath)
 	if err != nil {
 		return nil, fmt.Errorf("liste des snapshots: %v", err)
 	}
@@ -230,6 +231,7 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 			Datastore:       opts.Datastore,
 			Namespace:       opts.Namespace,
 			CertFingerprint: opts.CertFingerprint,
+			DataPath:        opts.DataPath,
 			BackupID:        tg.backupID,
 			SnapshotTime:    tg.at,
 		}

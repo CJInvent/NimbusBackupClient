@@ -196,6 +196,13 @@ func dueManagedJobs(jobs []controlplane.ManagedJob, state map[string]time.Time, 
 
 // checkManagedJobs is the managed half of the scheduler tick.
 func (a *App) checkManagedJobs() {
+	// Data path mode: the server dispatches every managed job itself, spread
+	// and admitted against its data path's capacity
+	// (docs/V4-DATAPATH-PROXY.md §11.3, §13.5). Firing them here too would
+	// double every backup.
+	if datapathProxy() {
+		return
+	}
 	jobs := currentManagedJobs()
 	if len(jobs) == 0 {
 		return

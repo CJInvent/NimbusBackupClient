@@ -89,6 +89,9 @@ func (a *App) pinFingerprintLocal(id, fingerprint string) error {
 // keeping the service the single writer of config.json. It performs the write in
 // this (service) process.
 func (a *App) PinServerFingerprint(id, fingerprint string) error {
+	if datapathProxy() {
+		return errPBSSettingsServerManaged
+	}
 	writeInfoLog(fmt.Sprintf("PinServerFingerprint(%s) called (service-side write)", id))
 	return a.pinFingerprintLocal(id, fingerprint)
 }
@@ -97,6 +100,9 @@ func (a *App) PinServerFingerprint(id, fingerprint string) error {
 // upsert. It converts the map to a PBSServer, preserves the stored secret when
 // the GUI sent an empty one (M-04 parity), and adds or updates by id.
 func (a *App) SavePBSServerFromMap(server map[string]interface{}) error {
+	if datapathProxy() {
+		return errPBSSettingsServerManaged
+	}
 	jsonData, err := json.Marshal(server)
 	if err != nil {
 		return fmt.Errorf("failed to marshal pbs server data: %w", err)
@@ -124,6 +130,9 @@ func (a *App) DeletePBSServerByID(id string) error {
 
 // SetDefaultPBSByID is the service-side write for a delegated default-server set.
 func (a *App) SetDefaultPBSByID(id string) error {
+	if datapathProxy() {
+		return errPBSSettingsServerManaged
+	}
 	writeInfoLog(fmt.Sprintf("SetDefaultPBSByID(%s) called (service-side write)", id))
 	return a.config.SetDefaultPBS(id)
 }
@@ -132,6 +141,9 @@ func (a *App) SetDefaultPBSByID(id string) error {
 // preserves stored secrets when the GUI sent empty values (M-04 parity), then
 // validates and persists.
 func (a *App) SaveConfigFromMap(configData map[string]interface{}) error {
+	if datapathProxy() {
+		return errPBSSettingsServerManaged
+	}
 	jsonData, err := json.Marshal(configData)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config data: %w", err)

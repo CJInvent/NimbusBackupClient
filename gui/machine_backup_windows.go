@@ -1063,6 +1063,7 @@ func RunMachineBackup(opts BackupOptions) error {
 	client := &pbscommon.PBSClient{
 		BaseURL:                opts.BaseURL,
 		CertFingerPrint:        opts.CertFingerprint,
+		DataPath:               opts.DataPath,
 		AuthID:                 opts.AuthID,
 		Secret:                 opts.Secret,
 		Datastore:              opts.Datastore,
@@ -1188,11 +1189,9 @@ func RunMachineBackup(opts BackupOptions) error {
 	// client.Manifest.BackupID/BackupTime are the actual coordinates PBS
 	// used for this session (BackupTime is set once, inside Connect(),
 	// and never changes afterward) -- exactly what the server needs to
-	// reconcile this run against PBS, and what lets the control plane
-	// stamp the Backup Job ID onto the snapshot itself
-	// (cpStampSnapshotNotes only fires from a real OnResult, never from
-	// the finalizer's fallback, precisely because THAT path has no
-	// trustworthy backup-time to target).
+	// reconcile this run against PBS and write the Run ID onto the
+	// snapshot itself (the server writes that comment; the finalizer's
+	// fallback has no trustworthy backup-time to give it).
 	//
 	// Every number here is measured. TotalBytes is the disk-capacity figure
 	// the engine's own log already reports ("Total disk size: ..."), the

@@ -131,12 +131,34 @@ func (e *PBSResponseError) Error() string {
 	return fmt.Sprintf("%s: HTTP %s - %s", kind, e.StatusCode, e.ResponseBody)
 }
 
+// DataPath is how a machine enrolled to a NimbusControl that runs its data
+// path reaches PBS (NimbusControl docs/V4-DATAPATH-PROXY.md): the machine's
+// client certificate, presented on every connection (the instances refuse
+// any TLS handshake without one), and the instances a grant may be redeemed
+// at, in order. BaseURL/CertFingerPrint name the first; a connection failure
+// or a 503 proxy_full moves to the next, each pinned to its own fingerprint.
+type DataPath struct {
+	Cert      *tls.Certificate
+	Endpoints []Endpoint
+}
+
+// Endpoint is one data-path instance.
+type Endpoint struct {
+	BaseURL     string
+	Fingerprint string
+}
+
 type PBSClient struct {
 	BaseURL         string
 	CertFingerPrint string
-	APIToken        string
-	Secret          string
-	AuthID          string
+
+	// DataPath is nil for a direct PBS connection (standalone, or a server in
+	// direct mode). See DataPath.
+	DataPath *DataPath
+
+	APIToken string
+	Secret   string
+	AuthID   string
 
 	Datastore string
 	Namespace string
@@ -264,11 +286,41 @@ type SnapshotsResp struct {
 // identically (audit H-02) — ListSnapshots/TestConnection previously skipped the
 // pin (InsecureSkipVerify with no fingerprint check), accepting any certificate.
 func (pbs *PBSClient) buildTLSConfig() *tls.Config {
+	return pbs.tlsConfigFor(pbs.CertFingerPrint)
+}
+
+// endpoints is where a session may be opened: BaseURL first, then the data
+// path's other instances in the grant's order. Without a data path, BaseURL
+// alone.
+func (pbs *PBSClient) endpoints() []Endpoint {
+	out := []Endpoint{{BaseURL: pbs.BaseURL, Fingerprint: pbs.CertFingerPrint}}
+	if pbs.DataPath == nil {
+		return out
+	}
+	for _, e := range pbs.DataPath.Endpoints {
+		if e.BaseURL != "" && e.BaseURL != pbs.BaseURL {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// tlsConfigFor is buildTLSConfig for one endpoint's fingerprint, carrying the
+// data path's client certificate when there is one.
+func (pbs *PBSClient) tlsConfigFor(fingerprint string) *tls.Config {
+	cfg := pbs.pinnedTLSConfig(fingerprint)
+	if pbs.DataPath != nil && pbs.DataPath.Cert != nil {
+		cfg.Certificates = []tls.Certificate{*pbs.DataPath.Cert}
+	}
+	return cfg
+}
+
+func (pbs *PBSClient) pinnedTLSConfig(fingerprint string) *tls.Config {
 	// Pinning is keyed on whether a fingerprint is configured, NOT on pbs.Insecure:
 	// some callers (e.g. nbd) set Insecure with no fingerprint and must keep working
 	// (skip verification), and a fingerprint-less pin would compare against "" and
 	// fail every connection.
-	if pbs.CertFingerPrint == "" {
+	if fingerprint == "" {
 		// No fingerprint: trust the system CA, unless explicitly insecure.
 		// MinVersion is pinned here too so the unpinned path can never
 		// negotiate TLS 1.0/1.1 if a future Go default relaxes.
@@ -295,7 +347,7 @@ func (pbs *PBSClient) buildTLSConfig() *tls.Config {
 				return fmt.Errorf("no certificates presented by the peer")
 			}
 			peerCert := cs.PeerCertificates[0]
-			expectedFingerprint := strings.ReplaceAll(pbs.CertFingerPrint, ":", "")
+			expectedFingerprint := strings.ReplaceAll(fingerprint, ":", "")
 			sum := sha256.Sum256(peerCert.Raw)
 			calculatedFingerprint := hex.EncodeToString(sum[:])
 			if !strings.EqualFold(calculatedFingerprint, expectedFingerprint) {
@@ -385,24 +437,32 @@ func (pbs *PBSClient) CheckConnectivity() (bool, error) {
 }
 
 func (pbs *PBSClient) ListSnapshots() ([]BackupManifest, error) {
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: pbs.buildTLSConfig()},
-	}
-
 	ret := make([]BackupManifest, 0)
 	var r SnapshotsResp
 	params := url.Values{}
 	params.Add("ns", pbs.Namespace)
-	fullURL := fmt.Sprintf("%s/api2/json/admin/datastore/%s/snapshots?%s", pbs.BaseURL, pbs.Datastore, params.Encode())
 
-	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
-	if err != nil {
-		return ret, err
+	// Each endpoint in turn on a connection failure (data path fallbacks);
+	// any HTTP answer is the answer.
+	var resp *http.Response
+	var err error
+	for _, ep := range pbs.endpoints() {
+		client := &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: pbs.tlsConfigFor(ep.Fingerprint)},
+		}
+		fullURL := fmt.Sprintf("%s/api2/json/admin/datastore/%s/snapshots?%s", ep.BaseURL, pbs.Datastore, params.Encode())
+		req, rerr := http.NewRequest(http.MethodGet, fullURL, nil)
+		if rerr != nil {
+			return ret, rerr
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Add("Authorization", fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
+		resp, err = client.Do(req)
+		if err == nil {
+			break
+		}
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Add("Authorization", fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
-	resp, err := client.Do(req)
 	if err != nil {
 		return ret, err
 	}
@@ -416,54 +476,6 @@ func (pbs *PBSClient) ListSnapshots() ([]BackupManifest, error) {
 	}
 	return r.Data, nil
 
-}
-
-// SetSnapshotNotes stamps a snapshot's free-text notes field via PBS's
-// admin/datastore/{store}/notes endpoint -- a SEPARATE call from the backup
-// upload protocol itself (Connect/CreateFixedIndex/Finish above), issued
-// after a snapshot already exists. This is how the Backup Job ID (the
-// run_uuid every RunReport already carries — see controlplane.RunReporter)
-// gets attached to the PBS snapshot in a machine-readable, always-present
-// place: `PUT .../notes` is the one part of PBS's API surface meant for
-// exactly this kind of free-text annotation, as opposed to the backup
-// session handshake (backup-type/id/time/store/ns only, no room for an
-// arbitrary tag — confirmed by grepping Connect's query params, not
-// assumed) or the snapshot name itself, which PBS derives entirely from
-// backup-type/id/time and cannot carry extra data.
-//
-// Same auth/TLS pattern as ListSnapshots. Best-effort by design: called
-// after a backup has ALREADY succeeded, so a failure here must never turn
-// a successful backup into a failed one -- the caller logs and moves on.
-func (pbs *PBSClient) SetSnapshotNotes(backupType, backupID string, backupTime int64, notes string) error {
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: pbs.buildTLSConfig()},
-	}
-
-	params := url.Values{}
-	params.Add("backup-type", backupType)
-	params.Add("backup-id", backupID)
-	params.Add("backup-time", fmt.Sprintf("%d", backupTime))
-	params.Add("ns", pbs.Namespace)
-	params.Add("notes", notes)
-	fullURL := fmt.Sprintf("%s/api2/json/admin/datastore/%s/notes?%s", pbs.BaseURL, pbs.Datastore, params.Encode())
-
-	req, err := http.NewRequest(http.MethodPut, fullURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Add("Authorization", fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP error: %d - %s", resp.StatusCode, string(body))
-	}
-	return nil
 }
 
 func (pbs *PBSClient) CreateFixedIndex(fic FixedIndexCreateReq) (uint64, error) {
@@ -1349,127 +1361,192 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 					return nil, fmt.Errorf("connection lost: PBS session cannot be resumed (reconnect blocked to prevent orphaned sessions)")
 				}
 
-				//This is one of the trickiest parts, GO http2 library does not support starting with http1 and upgrading to 2 after
-				//So to achieve that the function to create SSL socket has been hijacked here
-				//Here an http 1.1 request to authenticate, start the backup and require upgrade to HTTP2 is done then the socket is passed to
-				// http2.Transport handler
-				conn, err := tls.Dial(network, addr, &pbs.TLSConfig)
-				if err != nil {
-					return nil, err
-				}
-				// Stash the raw socket so Close() can force-terminate the
-				// session on shutdown even while an H2 stream is in flight.
-				pbs.activeConnMu.Lock()
-				pbs.activeConn = conn
-				pbs.activeConnMu.Unlock()
-				q := &url.Values{}
-				q.Add("backup-time", fmt.Sprintf("%d", pbs.Manifest.BackupTime))
-				q.Add("backup-type", pbs.Manifest.BackupType)
-				q.Add("store", pbs.Datastore)
-				if pbs.Namespace != "" {
-					q.Add("ns", pbs.Namespace)
-				}
-
-				q.Add("backup-id", pbs.Manifest.BackupID)
-				fmt.Println(q.Encode())
-				//q.Add("debug", "1")
-
-				// Build and log the full HTTP request
-				var requestLines []string
-				if !reader {
-					requestLines = append(requestLines, "GET /api2/json/backup?"+q.Encode()+" HTTP/1.1")
-				} else {
-					requestLines = append(requestLines, "GET /api2/json/reader?"+q.Encode()+" HTTP/1.1")
-				}
-				requestLines = append(requestLines, "Host: "+addr)
-				requestLines = append(requestLines, "Authorization: "+fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
-				if !reader {
-					requestLines = append(requestLines, "Upgrade: proxmox-backup-protocol-v1")
-				} else {
-					requestLines = append(requestLines, "Upgrade: proxmox-backup-reader-protocol-v1")
-				}
-				requestLines = append(requestLines, "Connection: Upgrade")
-
-				fullRequest := strings.Join(requestLines, "\r\n") + "\r\n\r\n"
-				// Redact the API token secret before logging the raw request —
-				// fullRequest carries "Authorization: PBSAPIToken=<id>:<secret>".
-				redactedRequest := strings.Replace(fullRequest,
-					fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret),
-					fmt.Sprintf("PBSAPIToken=%s:<redacted>", pbs.AuthID), 1)
-				fmt.Printf("=== SENDING HTTP REQUEST TO PBS ===\n%s=== END REQUEST ===\n", redactedRequest)
-
-				// Send the request
-				conn.Write([]byte(fullRequest))
-				fmt.Print("Reading response to upgrade...\n")
-				buf := make([]byte, 0)
-				for !strings.HasSuffix(string(buf), "\r\n\r\n") && !strings.HasSuffix(string(buf), "\n\n") {
-					//fmt.Println(buf)
-					b2 := make([]byte, 1)
-					nbytes, err := conn.Read(b2)
-					if err != nil || nbytes == 0 {
-						fmt.Println("Connection unexpectedly closed")
+				// Each endpoint in turn: BaseURL, then (data path only) the
+				// grant's other instances. A dial failure or an instance at
+				// capacity (503 proxy_full) moves on; any other answer --
+				// a refusal, a 401 -- is the answer.
+				var last error
+				for _, ep := range pbs.endpoints() {
+					epAddr, aerr := endpointAddr(ep.BaseURL, addr)
+					if aerr != nil {
+						last = aerr
+						continue
+					}
+					conn, err := pbs.openSession(network, epAddr, ep.Fingerprint, reader)
+					if err == nil {
+						return conn, nil
+					}
+					last = err
+					if !nextEndpointWorthTrying(err) {
 						return nil, err
 					}
-					buf = append(buf, b2[:nbytes]...)
-
-					//fmt.Println(string(b2))
+					fmt.Printf("Session not opened at %s (%v); trying the next instance\n", ep.BaseURL, err)
 				}
-				fmt.Printf("=== RECEIVED HTTP RESPONSE FROM PBS ===\n%s\n=== END RESPONSE ===\n", string(buf))
-
-				lines := strings.Split(string(buf), "\n")
-
-				if len(lines) > 0 {
-					toks := strings.Split(lines[0], " ")
-					if len(toks) > 1 && toks[1] != "101" {
-						statusCode := strings.Join(toks[1:], " ")
-						fmt.Printf("ERROR: PBS rejected upgrade with status: %s\n", statusCode)
-						fmt.Printf("Response headers:\n%s\n", string(buf))
-
-						// Read the response body (JSON error details) based on Content-Length
-						var contentLength int
-						for _, line := range lines {
-							line = strings.TrimSpace(line)
-							if strings.HasPrefix(strings.ToLower(line), "content-length:") {
-								fmt.Sscanf(strings.TrimSpace(strings.SplitN(line, ":", 2)[1]), "%d", &contentLength)
-							}
-						}
-						var responseBody string
-						if contentLength > 0 && contentLength < 4096 {
-							bodyBuf := make([]byte, contentLength)
-							totalRead := 0
-							for totalRead < contentLength {
-								n, readErr := conn.Read(bodyBuf[totalRead:])
-								if readErr != nil || n == 0 {
-									break
-								}
-								totalRead += n
-							}
-							responseBody = string(bodyBuf[:totalRead])
-							fmt.Printf("PBS error body: %s\n", responseBody)
-						}
-
-						errBody := string(buf)
-						if responseBody != "" {
-							errBody = errBody + "\nBody: " + responseBody
-						}
-						return nil, &PBSResponseError{
-							StatusCode:   statusCode,
-							ResponseBody: errBody,
-						}
-					}
-				}
-
-				fmt.Printf("Upgraderesp: %s\n", string(buf))
-				fmt.Println("Successfully upgraded to HTTP/2.")
-				if pbs.UploadLimitBytesPerSec > 0 {
-					return &rateLimitedConn{Conn: conn, limit: pbs.UploadLimitBytesPerSec, last: time.Now()}, nil
-				}
-				return conn, nil
+				return nil, last
 			},
 		},
 	}
 
 	registerActive(pbs)
+}
+
+// endpointAddr is host:port for a base URL; fallback is what the transport
+// derived for BaseURL (used when ep IS BaseURL and parsing changes nothing).
+func endpointAddr(baseURL, fallback string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		if fallback != "" {
+			return fallback, nil
+		}
+		return "", fmt.Errorf("invalid endpoint URL %q", baseURL)
+	}
+	if u.Port() == "" {
+		return net.JoinHostPort(u.Hostname(), "443"), nil
+	}
+	return u.Host, nil
+}
+
+// nextEndpointWorthTrying: a connection that never got an answer, or a data
+// path instance at its own session cap. Nothing else -- a refused credential
+// is refused everywhere, and trying it again elsewhere would only multiply the
+// refusal (and the illegal-use rows a closed grant leaves).
+func nextEndpointWorthTrying(err error) bool {
+	var rej *PBSResponseError
+	if errors.As(err, &rej) {
+		return strings.HasPrefix(rej.StatusCode, "503") && strings.Contains(rej.ResponseBody, "proxy_full")
+	}
+	return true
+}
+
+// openSession dials one endpoint, sends the HTTP/1.1 upgrade and returns the
+// socket the HTTP/2 transport takes over.
+//
+// This is one of the trickiest parts, GO http2 library does not support starting with http1 and upgrading to 2 after
+// So to achieve that the function to create SSL socket has been hijacked here
+// Here an http 1.1 request to authenticate, start the backup and require upgrade to HTTP2 is done then the socket is passed to
+// http2.Transport handler
+func (pbs *PBSClient) openSession(network, addr, fingerprint string, reader bool) (net.Conn, error) {
+	conn, err := tls.Dial(network, addr, pbs.tlsConfigFor(fingerprint))
+	if err != nil {
+		return nil, err
+	}
+	// A session that was not opened leaves no socket behind: the next
+	// endpoint, or the caller's error, is all that follows.
+	opened := false
+	defer func() {
+		if !opened {
+			_ = conn.Close()
+		}
+	}()
+	// Stash the raw socket so Close() can force-terminate the
+	// session on shutdown even while an H2 stream is in flight.
+	pbs.activeConnMu.Lock()
+	pbs.activeConn = conn
+	pbs.activeConnMu.Unlock()
+	q := &url.Values{}
+	q.Add("backup-time", fmt.Sprintf("%d", pbs.Manifest.BackupTime))
+	q.Add("backup-type", pbs.Manifest.BackupType)
+	q.Add("store", pbs.Datastore)
+	if pbs.Namespace != "" {
+		q.Add("ns", pbs.Namespace)
+	}
+
+	q.Add("backup-id", pbs.Manifest.BackupID)
+	fmt.Println(q.Encode())
+	//q.Add("debug", "1")
+
+	// Build and log the full HTTP request
+	var requestLines []string
+	if !reader {
+		requestLines = append(requestLines, "GET /api2/json/backup?"+q.Encode()+" HTTP/1.1")
+	} else {
+		requestLines = append(requestLines, "GET /api2/json/reader?"+q.Encode()+" HTTP/1.1")
+	}
+	requestLines = append(requestLines, "Host: "+addr)
+	requestLines = append(requestLines, "Authorization: "+fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
+	if !reader {
+		requestLines = append(requestLines, "Upgrade: proxmox-backup-protocol-v1")
+	} else {
+		requestLines = append(requestLines, "Upgrade: proxmox-backup-reader-protocol-v1")
+	}
+	requestLines = append(requestLines, "Connection: Upgrade")
+
+	fullRequest := strings.Join(requestLines, "\r\n") + "\r\n\r\n"
+	// Redact the API token secret before logging the raw request —
+	// fullRequest carries "Authorization: PBSAPIToken=<id>:<secret>".
+	redactedRequest := strings.Replace(fullRequest,
+		fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret),
+		fmt.Sprintf("PBSAPIToken=%s:<redacted>", pbs.AuthID), 1)
+	fmt.Printf("=== SENDING HTTP REQUEST TO PBS ===\n%s=== END REQUEST ===\n", redactedRequest)
+
+	// Send the request
+	conn.Write([]byte(fullRequest))
+	fmt.Print("Reading response to upgrade...\n")
+	buf := make([]byte, 0)
+	for !strings.HasSuffix(string(buf), "\r\n\r\n") && !strings.HasSuffix(string(buf), "\n\n") {
+		//fmt.Println(buf)
+		b2 := make([]byte, 1)
+		nbytes, err := conn.Read(b2)
+		if err != nil || nbytes == 0 {
+			fmt.Println("Connection unexpectedly closed")
+			return nil, err
+		}
+		buf = append(buf, b2[:nbytes]...)
+
+		//fmt.Println(string(b2))
+	}
+	fmt.Printf("=== RECEIVED HTTP RESPONSE FROM PBS ===\n%s\n=== END RESPONSE ===\n", string(buf))
+
+	lines := strings.Split(string(buf), "\n")
+
+	if len(lines) > 0 {
+		toks := strings.Split(lines[0], " ")
+		if len(toks) > 1 && toks[1] != "101" {
+			statusCode := strings.Join(toks[1:], " ")
+			fmt.Printf("ERROR: PBS rejected upgrade with status: %s\n", statusCode)
+			fmt.Printf("Response headers:\n%s\n", string(buf))
+
+			// Read the response body (JSON error details) based on Content-Length
+			var contentLength int
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+					fmt.Sscanf(strings.TrimSpace(strings.SplitN(line, ":", 2)[1]), "%d", &contentLength)
+				}
+			}
+			var responseBody string
+			if contentLength > 0 && contentLength < 4096 {
+				bodyBuf := make([]byte, contentLength)
+				totalRead := 0
+				for totalRead < contentLength {
+					n, readErr := conn.Read(bodyBuf[totalRead:])
+					if readErr != nil || n == 0 {
+						break
+					}
+					totalRead += n
+				}
+				responseBody = string(bodyBuf[:totalRead])
+				fmt.Printf("PBS error body: %s\n", responseBody)
+			}
+
+			errBody := string(buf)
+			if responseBody != "" {
+				errBody = errBody + "\nBody: " + responseBody
+			}
+			return nil, &PBSResponseError{
+				StatusCode:   statusCode,
+				ResponseBody: errBody,
+			}
+		}
+	}
+
+	fmt.Printf("Upgraderesp: %s\n", string(buf))
+	fmt.Println("Successfully upgraded to HTTP/2.")
+	opened = true
+	if pbs.UploadLimitBytesPerSec > 0 {
+		return &rateLimitedConn{Conn: conn, limit: pbs.UploadLimitBytesPerSec, last: time.Now()}, nil
+	}
+	return conn, nil
 }
 
 // rateLimitedConn throttles Write with a token bucket (1s of burst) so the

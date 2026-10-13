@@ -100,6 +100,11 @@ type Agent struct {
 	// owns the reacting behavior.
 	OnPBSTarget func(*PBSTarget)
 
+	// OnDatapath receives the check-in's `datapath` block every cycle (nil
+	// from an older server). Applied before OnPBSTarget and before commands:
+	// a run_backup in this response must run under the mode it shipped with.
+	OnDatapath func(*DatapathCheckin)
+
 	// HeldPBSCredential reports, on every check-in, which PBS credential this
 	// machine holds (auth-id, generation, last refusal) -- never the secret.
 	// nil return = none held; the field is then omitted.
@@ -371,10 +376,10 @@ func (a *Agent) CheckinNow() {
 	go a.Client.DeliverPendingRuns()
 	// TRACE: one line per check-in, what went and what came back (never a
 	// value that could be a secret: counts and presence only).
-	logf(LogTrace, "check-in ok in %dms: sent inventory=%v logs=%d pbs_credential=%v; got commands=%d managed_jobs=%d pbs_target=%v backup_key=%v storage_approval=%v debug_until=%d org_suspended=%v log_ack=%d",
+	logf(LogTrace, "check-in ok in %dms: sent inventory=%v logs=%d pbs_credential=%v; got commands=%d managed_jobs=%d pbs_target=%v backup_key=%v storage_approval=%v debug_until=%d org_suspended=%v log_ack=%d datapath_proxy=%v",
 		time.Since(t0).Milliseconds(), req.Inventory != nil, logEntryCount(req.Logs), req.PBSCredential != nil,
 		len(resp.Commands), len(resp.ManagedJobs), resp.PBSTarget != nil, resp.BackupKey != nil,
-		resp.StorageApproval != nil, resp.DebugUntil, resp.OrgSuspended, resp.LogAckSeq)
+		resp.StorageApproval != nil, resp.DebugUntil, resp.OrgSuspended, resp.LogAckSeq, resp.Datapath.Proxy())
 	if req.Logs != nil && a.OnLogAck != nil {
 		a.OnLogAck(resp.LogAckSeq)
 	}
@@ -427,6 +432,9 @@ func (a *Agent) CheckinNow() {
 	// The target lands before commands for the third time in this function
 	// and the same reason: a run_backup delivered in THIS response must find
 	// the destination this response named, not the previous cycle's.
+	if a.OnDatapath != nil {
+		a.OnDatapath(resp.Datapath)
+	}
 	if a.OnPBSTarget != nil {
 		a.OnPBSTarget(resp.PBSTarget)
 	}

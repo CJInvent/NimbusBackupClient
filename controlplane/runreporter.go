@@ -125,11 +125,10 @@ func (r *RunReporter) SetPBSTarget(server, datastore, namespace string) {
 	r.mu.Unlock()
 }
 
-// RunUUID returns this run's Backup Job ID — the same value every
-// RunReport for this run carries on the wire. Exposed so a caller can tag
-// the PBS snapshot itself with it (see pbscommon.SetSnapshotNotes),
-// completing the correlation chain down to the artifact PBS actually
-// stores, not just the server's own records of the run.
+// RunUUID returns this run's Run ID -- the same value every RunReport for
+// this run carries on the wire, and the one the SERVER writes into the PBS
+// snapshot's comment (nimbus-run:<id>; NimbusControl V4-AUDITABILITY S3).
+// The agent no longer writes it.
 func (r *RunReporter) RunUUID() string {
 	return r.base.RunUUID
 }

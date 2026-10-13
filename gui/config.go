@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"pbscommon"
 	"security"
 )
 
@@ -38,6 +39,16 @@ type Config struct {
 	// PBSRefusedAt is when PBS last refused the held credential (HTTP 401),
 	// unix seconds, 0 = not since it was stored. Reported on check-in.
 	PBSRefusedAt int64 `json:"pbs_refused_at,omitempty"`
+
+	// DatapathMode is the last mode the control server stated ("direct" or
+	// "proxy"; empty = never told), kept so a restart behaves correctly
+	// before its first check-in. See datapath_mode.go.
+	DatapathMode string `json:"datapath_mode,omitempty"`
+
+	// DataPath is set only on a TARGET built from a grant (grantTarget),
+	// never on the stored config: the machine certificate and the data-path
+	// instances the PBS client may open its session at.
+	DataPath *pbscommon.DataPath `json:"-"`
 
 	// ==================== BACKUP SETTINGS ====================
 	// DefaultBackupMode is the org's preferred mode ("directory" or "machine")

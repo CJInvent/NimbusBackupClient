@@ -35,9 +35,12 @@ type RestoreOptions struct {
 	Datastore       string
 	Namespace       string
 	CertFingerprint string
-	BackupID        string
-	SnapshotTime    time.Time
-	DestPath        string
+	// DataPath: set when the target came from a data-path grant. nil for a
+	// direct PBS connection.
+	DataPath     *pbscommon.DataPath
+	BackupID     string
+	SnapshotTime time.Time
+	DestPath     string
 
 	// Mode selects the destination policy. Empty defaults to alternate_abs
 	// (legacy behaviour: dest + full archive path).
@@ -59,7 +62,7 @@ type RestoreOptions struct {
 // ListSnapshotsInline lists available snapshots from PBS.
 // SECURITY: Only lists snapshots from the specified PBS server/datastore/namespace
 // to prevent cross-server snapshot access.
-func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFingerprint, backupID string) ([]SnapshotInfo, error) {
+func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFingerprint, backupID string, dp *pbscommon.DataPath) ([]SnapshotInfo, error) {
 	// GATED, and it was not until 2026-08-19. Which snapshots exist, and
 	// when, is the first screen of the restore browser — an org that turned
 	// file restore off has said this machine's console does not get that.
@@ -78,6 +81,7 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 	client := &pbscommon.PBSClient{
 		BaseURL:          baseURL,
 		CertFingerPrint:  certFingerprint,
+		DataPath:         dp,
 		AuthID:           authID,
 		Secret:           secret,
 		Datastore:        datastore,
@@ -143,6 +147,7 @@ func withSnapshotReader(opts RestoreOptions, archiveName, logTag string, progres
 	client := &pbscommon.PBSClient{
 		BaseURL:          opts.BaseURL,
 		CertFingerPrint:  opts.CertFingerprint,
+		DataPath:         opts.DataPath,
 		AuthID:           opts.AuthID,
 		Secret:           opts.Secret,
 		Datastore:        opts.Datastore,
@@ -195,6 +200,7 @@ func listSnapshotViaCatalog(opts RestoreOptions, cancel func() bool) (entries []
 	client := &pbscommon.PBSClient{
 		BaseURL:          opts.BaseURL,
 		CertFingerPrint:  opts.CertFingerprint,
+		DataPath:         opts.DataPath,
 		AuthID:           opts.AuthID,
 		Secret:           opts.Secret,
 		Datastore:        opts.Datastore,

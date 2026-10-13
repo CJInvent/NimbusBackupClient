@@ -149,7 +149,7 @@ func (a *App) cpImagePartitions(pbsID, backupID, snapshotID, backupType string) 
 		return cpErr(err.Error())
 	}
 	snaps, err := ListSnapshotsInline(cfg.BaseURL, cfg.AuthID, cfg.Secret,
-		cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, backupID)
+		cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, backupID, cfg.DataPath)
 	if err != nil {
 		return cpErr("list snapshots: " + err.Error())
 	}

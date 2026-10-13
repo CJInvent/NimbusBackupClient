@@ -92,6 +92,11 @@ type PBSCredential struct {
 // keys or discard a working configuration; both have been shipped by somebody.
 var ErrNotProvisioned = errors.New("controlplane: this server provisions no PBS credential for this machine")
 
+// ErrProxyMode: this server routes every backup through its data path, so a
+// machine holds no PBS credential at all (NimbusControl V4-DATAPATH-PROXY D2).
+// Not a fault and not a reason to retry: the machine stops asking.
+var ErrProxyMode = errors.New("controlplane: this server uses its data path; machines hold no PBS credential")
+
 // HeldPBSCredential is what this machine reports it holds, on every
 // check-in (`pbs_credential`). Never the secret: the auth-id and generation
 // stored WITH it, and when PBS last refused it (unix seconds; nil = never).
@@ -140,6 +145,8 @@ func asPBSCredentialError(err error) error {
 		return err
 	}
 	switch he.code {
+	case "proxy_mode":
+		return fmt.Errorf("%w: %s", ErrProxyMode, he.msg)
 	case "key_required":
 		return fmt.Errorf("%w: %s", ErrKeyRequired, he.msg)
 	case "not_provisioned":

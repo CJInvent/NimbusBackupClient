@@ -122,6 +122,11 @@ func sayOnce(state string, emit func()) bool {
 // into the live Config the backup engines read through EffectivePBS -- there
 // is no separate file it could own instead.
 func (a *App) applyPBSTargetFromCheckin(t *controlplane.PBSTarget) {
+	// Data path mode: this machine holds no PBS credential and never asks
+	// for one (docs/V4-DATAPATH-PROXY.md §13.1).
+	if datapathProxy() {
+		return
+	}
 	if t == nil {
 		sayOnce("none", func() {
 			writeInfoLog("[PBS] the control server provisions no PBS target for this machine; " +
@@ -312,7 +317,7 @@ func (a *App) fetchPBSCredential(fetch pbsCredentialFetcher, want PBSCredentialT
 // held, which omits the field.
 func (a *App) heldPBSCredentialReport() *controlplane.HeldPBSCredential {
 	cfg := a.config
-	if cfg == nil || cfg.Secret == "" || cfg.PBSCredentialFor == nil {
+	if cfg == nil || cfg.Secret == "" || cfg.PBSCredentialFor == nil || datapathProxy() {
 		return nil
 	}
 	out := &controlplane.HeldPBSCredential{AuthID: cfg.PBSCredentialFor.AuthID, Gen: cfg.PBSCredentialFor.Gen}

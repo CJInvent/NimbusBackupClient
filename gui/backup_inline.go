@@ -35,6 +35,9 @@ type BackupOptions struct {
 	Datastore       string
 	Namespace       string
 	CertFingerprint string
+	// DataPath: set when the target came from a data-path grant (machine
+	// certificate, instances to try). nil for a direct PBS connection.
+	DataPath        *pbscommon.DataPath
 	BackupDirs      []string // Multiple directories or drives to backup
 	BackupID        string
 	BackupType      string // "host" for directory, "vm" for machine
@@ -834,6 +837,7 @@ func runBackupInlineInternal(opts BackupOptions) (returnErr error) {
 	client := &pbscommon.PBSClient{
 		BaseURL:                opts.BaseURL,
 		CertFingerPrint:        opts.CertFingerprint,
+		DataPath:               opts.DataPath,
 		AuthID:                 opts.AuthID,
 		Secret:                 opts.Secret,
 		Datastore:              opts.Datastore,
