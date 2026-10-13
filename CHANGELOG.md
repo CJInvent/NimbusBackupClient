@@ -18,6 +18,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The data path** (NimbusControl `docs/V4-DATAPATH-PROXY.md` §13). When the
+  control server runs its data path, an enrolled machine reaches PBS only
+  through the server's instances, and only with a grant minted for one
+  operation: the portal's button and the server's dispatch carry it on
+  `run_backup`; a local job and the GUI's Back up now ask `/backup-request`
+  first; restore, browse and search use one browse grant from
+  `/restore-request`. The machine presents its own client certificate
+  (ECDSA P-256, key sealed under the same protector chain as the agent key,
+  renewed when the check-in says so) and pins each instance, moving to the
+  next on a connection failure or `proxy_full` and never after a refusal.
+  In proxy mode the machine forgets every PBS setting it held and never asks
+  for a PBS credential; the service refuses PBS settings writes; the local
+  schedule leaves managed jobs to the server.
+- **The GUI's Back up now asks the server first** on an enrolled machine
+  (V4-RUN-AUDIT 1.3a): the run carries the server's request id, and a refusal
+  is the run's error on the status panel. Unreachable server: no run, except
+  under the existing outage override in direct mode.
+
 - **Bytes actually uploaded, and the chunk counts behind them.** The PBS
   client now counts the encoded size of every chunk body PBS accepted
   (`PBSClient.UploadedBytes`), the machine engine owns its chunk counters at
@@ -44,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the upstream placeholder. Every release from here keeps it, so installs upgrade in place. A machine
   that has an MSI built with the placeholder (the test bed's dev.187) does not see this one as an
   upgrade: uninstall the old build first. Nothing was deployed with the placeholder outside the bed.
+
+### Removed
+- **The agent no longer writes the PBS snapshot comment** (V4-AUDITABILITY S1).
+  The control server writes it (`nimbus-run:<run id>`), the only writer;
+  `cpStampSnapshotNotes` and `pbscommon.SetSnapshotNotes` are gone.
 
 ### Fixed
 - **Directory backups mishandled junctions, app execution aliases and
@@ -104,11 +127,11 @@ indicator per machine.
   PBS snapshot is confirmed to exist and its size matches — closes a gap
   where a run could be marked successful before PBS had actually finished
   committing it.
-- **PBS snapshot notes.** The Backup Job ID is now stamped onto the PBS
+- **PBS snapshot notes.** The Backup Job ID was stamped onto the PBS
   snapshot itself as a `nimbus-job:<uuid>` tag, so a snapshot found in PBS
-  can be traced back to the run that created it. Directory backups only —
-  machine (image) backups don't yet report the real backup-time needed to
-  target the tag safely.
+  can be traced back to the run that created it. (Superseded: the control
+  server now writes the comment, `nimbus-run:<uuid>`, for every run with a
+  snapshot -- see [Unreleased].)
 - **Pull-on-demand full log fetch.** The portal's run report page can now
   request the agent's own local log, filtered to that run's exact time
   window (with cross-timezone handling verified against a real

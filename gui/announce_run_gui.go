@@ -3,6 +3,8 @@
 
 package main
 
+import "github.com/tizbac/proxmoxbackupclient_go/gui/api"
+
 // announceLocalRun is a no-op in the GUI build, because in that build the run
 // does not start locally.
 //
@@ -15,3 +17,13 @@ package main
 // nothing ever fills: two records of one backup, one of them permanently
 // stuck in "preparing".
 func announceLocalRun(job ScheduledJob, requestID string) {}
+
+// announceLocalRunAs is announceLocalRun's explicit-trigger form; a no-op
+// here for the same reason.
+func announceLocalRunAs(job ScheduledJob, requestID string, trigger api.RunTrigger) {}
+
+// runJob is how executeJob starts a job's backup: in this build, by asking
+// the service (StartBackup is the local API call).
+func (a *App) runJob(backupType string, backupDirs, diskTargets, excludeList []string, backupID string, useVSS bool, compression string) error {
+	return a.StartBackup(backupType, backupDirs, diskTargets, excludeList, backupID, useVSS, compression)
+}

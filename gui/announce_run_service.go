@@ -50,6 +50,11 @@ func registerRunReporter(backupID, jobName, backupType, requestID string, trigge
 	if cpClient == nil {
 		return
 	}
+	// A data-path grant that came with this request goes to the same run,
+	// under the same key (datapath_grant.go).
+	if requestID != "" {
+		bindRunGrant(requestID, backupID)
+	}
 	rep := cpClient.NewRun(jobName, backupType)
 	if requestID != "" {
 		rep.SetRequestID(requestID) // before Preparing(), so even the FIRST report carries it
@@ -97,6 +102,17 @@ func managedJobServerID(id string) int64 {
 }
 
 func announceLocalRun(job ScheduledJob, requestID string) {
+	trigger := api.TriggerSchedule
+	if requestID != "" {
+		trigger = api.TriggerPortal
+	}
+	announceLocalRunAs(job, requestID, trigger)
+}
+
+// announceLocalRunAs is announceLocalRun with the trigger stated rather than
+// derived: a local job that asked the server first carries a request id and
+// is still the machine's own schedule, not the portal.
+func announceLocalRunAs(job ScheduledJob, requestID string, trigger api.RunTrigger) {
 	// WHAT STARTED THIS. executeScheduledJob is reached two ways: a calendar
 	// event firing, and the portal's run_backup command -- which is the one
 	// that arrives carrying a Backup Request ID. Deriving the trigger from
@@ -106,10 +122,6 @@ func announceLocalRun(job ScheduledJob, requestID string) {
 	// registerScheduledRun used to hard-code TriggerSchedule, so a run the
 	// portal asked for was labelled scheduled in the machine's own status
 	// panel -- the same defect as on the server, in the other codebase.
-	trigger := api.TriggerSchedule
-	if requestID != "" {
-		trigger = api.TriggerPortal
-	}
 	serverJobID := managedJobServerID(job.ID)
 
 	registerRunReporter(job.BackupID, job.Name, job.BackupType, requestID, trigger, serverJobID)

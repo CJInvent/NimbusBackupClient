@@ -352,6 +352,11 @@ type CheckinResponse struct {
 	// their backups are encrypted, and looks identical to the configured case
 	// on every dashboard. See BackupKeyDecision in backupkey.go.
 	BackupKey *BackupKeyAd `json:"backup_key"`
+
+	// Datapath says whether this server routes backups and restores through
+	// its data path (NimbusControl docs/V4-DATAPATH-PROXY.md). nil from an
+	// older server, which is direct. See datapath.go.
+	Datapath *DatapathCheckin `json:"datapath"`
 }
 
 // RunStatus values — the server's state machine is forward-only

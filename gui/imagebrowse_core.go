@@ -70,6 +70,12 @@ const volumeScanWorkers = 32
 // the default PBS server is used. Falls back to legacy single-server fields
 // when no multi-PBS entry is configured.
 func (a *App) resolveRestorePBS(pbsID string) (*Config, error) {
+	// Proxy mode: this machine holds no PBS server at all. Every read of its
+	// own snapshots goes through the data path on a browse grant
+	// (docs/V4-DATAPATH-PROXY.md §13.4); a pbsID names nothing here.
+	if datapathProxy() {
+		return datapathBrowseTarget(currentControlPlaneClientForGrants())
+	}
 	if pbsID != "" {
 		pbs, err := a.config.GetPBSServer(pbsID)
 		if err != nil {
@@ -207,6 +213,7 @@ func (a *App) openVolumeReader(pbsID, backupID, snapshotID, backupType, diskArch
 	client := &pbscommon.PBSClient{
 		BaseURL:          cfg.BaseURL,
 		CertFingerPrint:  cfg.CertFingerprint,
+		DataPath:         cfg.DataPath,
 		AuthID:           cfg.AuthID,
 		Secret:           cfg.Secret,
 		Datastore:        cfg.Datastore,

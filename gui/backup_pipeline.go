@@ -126,7 +126,24 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 	// legacy BaseURL/AuthID/Secret/Datastore fields empty, and building
 	// options from those directly yielded "PBS connection parameters
 	// required" in service mode (audit M-01/M-04, reported in production).
-	out.pbs = a.config.EffectivePBS()
+	//
+	// PROXY MODE: the target is the grant this run was authorized with
+	// (docs/V4-DATAPATH-PROXY.md §13.3), keyed exactly as the run reporter
+	// is. No grant, no run: this machine holds no PBS credential to fall
+	// back on, by design.
+	if datapathProxy() {
+		g := takeRunGrant(req.BackupID)
+		if g == nil {
+			return nil, errNoGrant
+		}
+		t, err := grantTarget(g)
+		if err != nil {
+			return nil, err
+		}
+		out.pbs = t
+	} else {
+		out.pbs = a.config.EffectivePBS()
+	}
 	if err := out.pbs.Validate(); err != nil {
 		return nil, err
 	}
@@ -204,6 +221,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 		Datastore:       pbsCfg.Datastore,
 		Namespace:       pbsCfg.Namespace,
 		CertFingerprint: pbsCfg.CertFingerprint,
+		DataPath:        pbsCfg.DataPath,
 		BackupDirs:      targetDirs,
 		BackupID:        backupID,
 		BackupType:      r.pbsBackupType,
@@ -328,7 +346,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	// already been reported and the first report wins -- but it fails with a
 	// sentence an operator can act on, and the next run uses whatever the
 	// fetch brought.
-	if isPBSCredentialRefused(err) {
+	if isPBSCredentialRefused(err) && !datapathProxy() {
 		cpMu.Lock()
 		client := cpClient
 		cpMu.Unlock()

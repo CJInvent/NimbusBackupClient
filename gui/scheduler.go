@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
 // runningJobs tracks currently executing jobs to prevent duplicates
@@ -346,8 +348,21 @@ func calculateNextRun(scheduleTime string) string {
 	return nextRun.Format(time.RFC3339)
 }
 
-// executeScheduledJob executes a scheduled job
+// executeScheduledJob executes a scheduled job. An empty requestID is the
+// local scheduler; a non-empty one is a control-plane run_backup (the
+// portal's button).
 func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
+	trigger := api.TriggerSchedule
+	if requestID != "" {
+		trigger = api.TriggerPortal
+	}
+	a.executeJob(job, requestID, trigger)
+}
+
+// executeJob is executeScheduledJob with what started the run stated: a
+// run_backup the SERVER dispatched from a schedule (docs/V4-DATAPATH-PROXY.md
+// §11.3) carries a request id and is still a scheduled run.
+func (a *App) executeJob(job ScheduledJob, requestID string, trigger api.RunTrigger) {
 	// An empty requestID means the LOCAL scheduler decided to run this —
 	// nobody asked for it. A non-empty one came with a control-plane
 	// run_backup command, which is managed work by definition and is never
@@ -387,6 +402,24 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 		runningJobsMutex.Unlock()
 	}()
 
+	// PROXY MODE (docs/V4-DATAPATH-PROXY.md §13.4-13.5). Managed jobs are
+	// the server's to dispatch, so the local schedule never fires one; a
+	// local job asks the server first, because its grant is the only way
+	// this machine reaches PBS. Refused means not run (the server audits
+	// the refusal).
+	if requestID == "" && datapathProxy() {
+		if isManagedJobID(job.ID) {
+			writeInfoLog(fmt.Sprintf("Job %s not started here: the control server dispatches managed jobs in data path mode", job.Name))
+			return
+		}
+		rid, err := requestLocalRun(job.Name)
+		if err != nil {
+			writeWarnLog(fmt.Sprintf("Job %s not started: %v", job.Name, err))
+			return
+		}
+		requestID = rid
+	}
+
 	writeInfoLog(fmt.Sprintf("Executing scheduled job: %s", job.Name))
 
 	// Use StartBackup to route through mode detection (service or direct)
@@ -401,9 +434,9 @@ func (a *App) executeScheduledJob(job ScheduledJob, requestID string) {
 	// Control plane: open a run under the job's DISPLAY name (must match the
 	// inventory name so a success clears the server's missed-backup latch).
 	// attachControlPlaneHooks picks this up at BackupOptions construction.
-	announceLocalRun(job, requestID)
+	announceLocalRunAs(job, requestID, trigger)
 
-	err := a.StartBackup(
+	err := a.runJob(
 		job.BackupType,
 		job.BackupDirs,
 		job.DiskTargets, // persistent targets for machine backups; empty for directory backups

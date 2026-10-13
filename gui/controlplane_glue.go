@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
 var (
@@ -76,6 +78,9 @@ func (a *App) StartControlPlane() {
 	// RestartControlPlane), and the cache is only meaningful where the
 	// agent that fills it lives.
 	loadManagedJobs()
+	// The data path mode the server last stated, before the first check-in
+	// can restate it: a restart must not briefly behave as direct.
+	initDatapathMode(cfg)
 
 	cpClient = &controlplane.Client{
 		BaseURL:         cfg.ControlServerURL,
@@ -148,6 +153,7 @@ func (a *App) StartControlPlane() {
 		OnManagedJobs:     applyManagedJobsFromCheckin,
 		OnStorageApproval: a.applyStorageApproval,
 		OnBackupKey:       applyBackupKeyFromCheckin,
+		OnDatapath:        a.applyDatapathFromCheckin,
 		OnPBSTarget:       a.applyPBSTargetFromCheckin,
 		OnOrgSuspended:    applyOrgSuspended,
 		HeldPBSCredential: a.heldPBSCredentialReport,
@@ -310,6 +316,9 @@ func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 		"pending_enroll_token": cfg != nil && cfg.ControlEnrollToken != "",
 		// F-22: shown on the status card; the service owns the flag.
 		"org_suspended": orgSuspended.Load(),
+		// Data path mode (docs/V4-DATAPATH-PROXY.md §13.1): the GUI hides
+		// every PBS setting while it is true; the service refuses them.
+		"datapath_proxy": datapathProxy(),
 	}
 	if cfg != nil {
 		out["agent_id"] = cfg.ControlAgentID
@@ -543,6 +552,15 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 	case "run_backup":
 		name, _ := cmd.Payload["job"].(string)
 		requestID, _ := cmd.Payload["request_id"].(string)
+		// The server's own dispatch says so (docs/V4-DATAPATH-PROXY.md
+		// §11.3): a scheduled run it sent, not the portal's button.
+		trigger := api.TriggerPortal
+		if t, _ := cmd.Payload["trigger"].(string); t == string(api.TriggerSchedule) {
+			trigger = api.TriggerSchedule
+		}
+		// Data path mode: the grant this run is authorized with, held for
+		// the run that answers this request.
+		stashRunGrant(requestID, grantFromPayload(cmd.Payload))
 		jobs, err := a.GetScheduledJobs()
 		if err != nil {
 			return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": err.Error()}}
@@ -556,7 +574,7 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 		for _, m := range currentManagedJobs() {
 			sj := managedToScheduledJob(m)
 			if m.Name == name || sj.ID == name || fmt.Sprintf("%d", m.ID) == name {
-				go a.executeScheduledJob(sj, requestID)
+				go a.executeJob(sj, requestID, trigger)
 				return controlplane.CommandResult{OK: true, Result: map[string]interface{}{"note": "managed backup dispatched"}}
 			}
 		}
@@ -564,7 +582,7 @@ func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResu
 		for _, j := range jobs {
 			if j.Name == name || j.ID == name {
 				job := j
-				go a.executeScheduledJob(job, requestID) // long work off the check-in loop
+				go a.executeJob(job, requestID, trigger) // long work off the check-in loop
 				return controlplane.CommandResult{OK: true, Result: map[string]interface{}{"note": "backup dispatched"}}
 			}
 		}
