@@ -292,6 +292,10 @@ indicator per machine.
   indeterminate mode for phases that can't know their size yet.
 
 ### Changed
+- **The installer has its real UpgradeCode** (`{1C9B5658-BD52-44F7-BD1E-41B439EB8633}`), replacing
+  the upstream placeholder. Every release from here keeps it, so installs upgrade in place. A machine
+  that has an MSI built with the placeholder (the test bed's dev.187) does not see this one as an
+  upgrade: uninstall the old build first. Nothing was deployed with the placeholder outside the bed.
 - **Zip packaging is now a single streamed pass — zero interim storage.**
   Bytes flow PBS → chunk cache → NTFS parser → zip entry → destination; the
   old path staged the full extraction AND the zip (2× the selection's size

@@ -78,7 +78,7 @@ Modifier dans `Product.wxs` :
 ### Changer l'UUID
 L'`UpgradeCode` doit rester constant entre versions pour permettre les mises à jour :
 ```xml
-<?define UpgradeCode = "12345678-1234-1234-1234-123456789012" ?>
+<?define UpgradeCode = "1C9B5658-BD52-44F7-BD1E-41B439EB8633" ?>
 ```
 
 ### Ajouter des fichiers
