@@ -51,7 +51,7 @@ var (
 	lastPBSReachLogged string
 
 	// Reporter hand-off between the code that KNOWS the job name
-	// (executeScheduledJob) and the code that builds BackupOptions.
+	// (executeJob) and the code that builds BackupOptions.
 	// Keyed by BackupID; jobs without a fixed BackupID fall back to the
 	// single pending slot — see the honest caveat in takeRunReporter.
 )
@@ -531,7 +531,7 @@ func cpErr(msg string) controlplane.CommandResult {
 }
 
 // cpHandleCommand executes server commands. Idempotence: run_backup rides
-// on the runningJobs de-dup in executeScheduledJob, so a re-delivered
+// on the runningJobs de-dup in executeJob, so a re-delivered
 // command while the job runs is a clean no-op.
 func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResult {
 	// Portal-delegated image browsing (image_partitions / image_scan /
