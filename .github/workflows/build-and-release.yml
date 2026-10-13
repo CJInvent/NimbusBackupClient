@@ -87,8 +87,11 @@ jobs:
           FAIL=0
           for f in go.work $(git ls-files '*/go.mod' 'go.mod'); do
             GOT="$(awk '/^go /{print $2; exit}' "$f")"
-            # go.work carries a full x.y.z; go.mod carries x.y.
-            case "$f" in go.work) GOT="${GOT%.*}";; esac
+            # go.work carries a full x.y.z. A go.mod carries x.y, or x.y.0
+            # once a dependency declares x.y.0 (golang.org/x/net from v0.59
+            # does, and `go mod tidy` then requires it): the language version
+            # is the x.y either way.
+            case "$GOT" in *.*.*) GOT="${GOT%.*}";; esac
             if [ "${GOT}" != "${WANT}" ]; then
               echo "::error file=${f}::declares go ${GOT}, expected ${WANT}"
               FAIL=1
