@@ -9,7 +9,10 @@
     <?define ProductVersion = "0.2.72" ?>
   <?endif ?>
   <?define Manufacturer = "RDEM Systems" ?>
-  <?define UpgradeCode = "12345678-1234-1234-1234-123456789012" ?>
+  <!-- The product's identity for MajorUpgrade: every release keeps this value,
+       or installed machines cannot upgrade in place. Never change it
+       (NimbusControl docs/V4-CLIENT-RELEASES.md, D11). -->
+  <?define UpgradeCode = "1C9B5658-BD52-44F7-BD1E-41B439EB8633" ?>
 
   <Product Id="*"
            Name="$(var.ProductName)"
