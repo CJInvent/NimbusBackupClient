@@ -1,12 +1,12 @@
 module machinebackup
 
-go 1.26
+go 1.26.0
 
 require (
 	clientcommon v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/tawesoft/golib/v2 v2.16.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.49.0
 	pbscommon v0.0.0
 	snapshot v0.0.0
 )
@@ -18,10 +18,10 @@ require (
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/rodolfoag/gow32 v0.0.0-20230512144032-1e896a3c51aa // indirect
 	github.com/st-matskevich/go-vss v0.3.3 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20240531132922-fd00a4e0eefc // indirect
-	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 )
 
