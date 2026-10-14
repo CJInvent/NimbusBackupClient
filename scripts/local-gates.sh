@@ -29,7 +29,7 @@ ROOT="$PWD"
 # gate that runs a different version of the tool answers a different question
 # than the one that will decide your push.
 GOLANGCI_VERSION="v2.12.2"
-GO_VERSION="1.26.6"
+GO_VERSION="1.26.9"
 
 export GOWORK=off
 fail=0

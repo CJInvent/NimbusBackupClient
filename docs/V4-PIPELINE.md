@@ -619,7 +619,7 @@ encryption-gate refusal. The scheduler no longer adds a duplicate, incorrectly
 named manual entry. Scheduled/portal job names come from the adopted run;
 ad-hoc jobs are `Manual backup` with no fabricated scheduled-job ID.
 
-Local gates require Go 1.26.6, matching CI. Missing gosec fails the gate; both
+Local gates require Go 1.26.9, matching CI. Missing gosec fails the gate; both
 GUI and control-plane security scans run. Windows CI executes the actual
 image consumer against an HTTP fixture containing previous plain chunk
 addresses, and checks uploaded ciphertext, assigned digests and FIDX checksum.

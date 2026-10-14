@@ -45,7 +45,7 @@ env:
   # Pinned to an exact patch, not '1.26': setup-go resolves a bare minor to
   # whatever it feels like, which is precisely the silent-fallback the v4 spec
   # forbids. The toolchain job below asserts what actually got installed.
-  GO_VERSION: '1.26.6'
+  GO_VERSION: '1.26.9'
   # Pinned deliberately — see the govulncheck step for why the TOOL is pinned
   # while the vulnerability database is intentionally not.
   GOVULNCHECK_VERSION: 'v1.7.0'

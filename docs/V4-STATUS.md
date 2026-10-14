@@ -276,7 +276,14 @@ it nor safely skip persisting.
 Ephemeral reports `ok`, not `unavailable` — it is not a fault, and colouring a
 fleet view red for machines working as designed trains operators to ignore it.
 
-**Go is pinned to 1.26.6, not 1.26.5.** The Dependency Audit job caught two
+**Go is pinned to 1.26.9 (2026-10-14).** The Dependency Audit job found nine
+standard-library vulnerabilities reachable from this code in go1.26.6, all
+fixed in go1.26.9: net/http (GO-2026-6617, -6613, -6612, -6611, -6610, -6605,
+-6603), mime/multipart (GO-2026-6608), crypto/tls (GO-2026-6607), plus
+net/textproto and html/template findings in the same release. The same
+change moved golang.org/x/net to v0.61.0 for its HTTP/2 fixes.
+
+**Earlier: 1.26.6, not 1.26.5.** The Dependency Audit job caught two
 standard-library vulnerabilities — `GO-2026-6090` (crypto/tls) and
 `GO-2026-5972` (encoding/asn1) — both reported reachable from this code:
 `compressLogFile` → `io.Copy` → `tls.Conn.Read`, and `signal.Notify` →
