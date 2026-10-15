@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,7 @@ func TestThePipelineRunsOnlyOnItsGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := sealedGrant(t, "run-secret")
+	g.BackupIDs = []controlplane.GrantBackupID{{Source: "machine", ID: "g4k2x8d9v0q7a1b3z"}, {Source: dir, ID: "g4k2x8d9v0q7a1b3z-1"}}
 	stashRunGrant("req-1", g)
 	bindRunGrant("req-1", "M17")
 	r, err := a.resolveBackupRequest(req)
@@ -207,5 +209,55 @@ func TestOneBrowseGrantServesASessionAndIsRenewedBeforeTheServerClosesIt(t *test
 	}
 	if _, err := datapathBrowseTarget(nil); err != nil {
 		t.Fatal("a live browse grant needs no server round trip")
+	}
+}
+
+// Backup-ids in data path mode come from the grant and only from it
+// (NimbusControl docs/V4-PBS-OPACITY.md §9.1): the job's own id still keys
+// the run, but PBS sees the server's.
+func TestThePipelineWritesOnlyUnderTheGrantsIDs(t *testing.T) {
+	isolateConfigDir(t)
+	withProtector(t, "dpapi")
+	resetDatapathState(t)
+	a := &App{config: &Config{ControlAgentID: 17}}
+	dpProxy.Store(true)
+	if err := renewDatapathIdentity(newFakeSigner(t), 17, "test"); err != nil {
+		t.Fatal(err)
+	}
+	d1, d2 := t.TempDir(), t.TempDir()
+	run := func(req backupRequest, ids []controlplane.GrantBackupID) (*resolvedBackup, error) {
+		g := sealedGrant(t, "run-secret")
+		g.BackupIDs = ids
+		stashRunGrant("req-ids", g)
+		bindRunGrant("req-ids", req.BackupID)
+		return a.resolveBackupRequest(req)
+	}
+	both := []controlplane.GrantBackupID{{Source: "machine", ID: "g4k2x8d9v0q7a1b3z"},
+		{Source: d1, ID: "g4k2x8d9v0q7a1b3z-1"}, {Source: d2, ID: "g4k2x8d9v0q7a1b3z-2"}}
+
+	dirReq := backupRequest{BackupType: "directory", BackupDirs: []string{d1, d2}, BackupID: "DESKTOP-01_Docs", Compression: "fastest"}
+	r, err := run(dirReq, both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.backupID != "DESKTOP-01_Docs" || r.pbsSourceIDs[d1] != "g4k2x8d9v0q7a1b3z-1" || r.pbsSourceIDs[d2] != "g4k2x8d9v0q7a1b3z-2" {
+		t.Fatalf("the job id keys the run, the grant names PBS: key %q ids %v", r.backupID, r.pbsSourceIDs)
+	}
+
+	_, err = run(dirReq, both[:2])
+	if err == nil || !strings.Contains(err.Error(), d2) {
+		t.Fatalf("a directory the grant names no id for must refuse the run and say which: %v", err)
+	}
+	_, err = run(backupRequest{BackupType: "machine", DiskTargets: []string{"x"}, BackupID: "DESKTOP-01"}, both[1:])
+	if err == nil || !strings.Contains(err.Error(), "no backup id") {
+		t.Fatalf("an image backup without the machine id must not start: %v", err)
+	}
+
+	// The directory engine honors the ids as given and refuses a directory
+	// without one before it connects anywhere.
+	err = RunBackupInline(BackupOptions{BaseURL: "https://dp1.example.test:8007", AuthID: "nimbus@grant!x", Secret: "s",
+		Datastore: "nimbus", BackupDirs: []string{d1, d2}, SourceIDs: map[string]string{d1: "g4k2x8d9v0q7a1b3z-1"}})
+	if err == nil || !strings.Contains(err.Error(), "no server-assigned backup id for "+d2) {
+		t.Fatalf("the engine ran a directory with no server id: %v", err)
 	}
 }

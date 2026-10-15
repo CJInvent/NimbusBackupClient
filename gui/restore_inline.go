@@ -103,7 +103,12 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 	for _, m := range manifests {
 		// Partial match supports split backups: searching "JDS-SRV-1" matches
 		// "JDS-SRV-1_D_DATA" or "JDS-SRV-1_PART-A".
-		if backupID != "" && !strings.Contains(m.BackupID, backupID) {
+		//
+		// NOT through the data path: there the server names every group
+		// (g + 16 random) and the listing is already bounded to this
+		// machine's own namespace, so a filter on the configured id or the
+		// hostname -- the GUI's default -- would hide every snapshot.
+		if dp == nil && backupID != "" && !strings.Contains(m.BackupID, backupID) {
 			continue
 		}
 

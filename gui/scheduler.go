@@ -403,7 +403,7 @@ func (a *App) executeJob(job ScheduledJob, requestID string, trigger api.RunTrig
 			writeInfoLog(fmt.Sprintf("Job %s not started here: the control server dispatches managed jobs in data path mode", job.Name))
 			return
 		}
-		rid, err := requestLocalRun(job.Name)
+		rid, err := requestLocalRun(job.Name, directorySources(job.BackupType, job.BackupDirs))
 		if err != nil {
 			writeWarnLog(fmt.Sprintf("Job %s not started: %v", job.Name, err))
 			return

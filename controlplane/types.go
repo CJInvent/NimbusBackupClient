@@ -24,6 +24,11 @@ type EnrollResponse struct {
 type InventoryJob struct {
 	Name            string `json:"name"`
 	IntervalSeconds int    `json:"interval_seconds"`
+	// Sources are a DIRECTORY job's directories, exactly as the job names
+	// them. In data path mode this is how the portal's Back up now on a
+	// local job gets a backup-id for each (AGENT-API "The grant object").
+	// Empty for image jobs.
+	Sources []string `json:"sources,omitempty"`
 }
 
 // Inventory is display + expectation telemetry. Server-side it is bounded

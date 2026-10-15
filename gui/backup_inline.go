@@ -37,9 +37,13 @@ type BackupOptions struct {
 	CertFingerprint string
 	// DataPath: set when the target came from a data-path grant (machine
 	// certificate, instances to try). nil for a direct PBS connection.
-	DataPath        *pbscommon.DataPath
-	BackupDirs      []string // Multiple directories or drives to backup
-	BackupID        string
+	DataPath   *pbscommon.DataPath
+	BackupDirs []string // Multiple directories or drives to backup
+	BackupID   string
+	// SourceIDs, when set (data path mode), is the backup-id the SERVER
+	// assigned each directory, and the only id each may be written under:
+	// it replaces both the caller's BackupID and GenerateBackupID.
+	SourceIDs       map[string]string
 	BackupType      string // "host" for directory, "vm" for machine
 	UseVSS          bool
 	Compression     string   // Compression level: "fastest", "default", "better", "best"
@@ -663,7 +667,17 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 	// first), landing as separate snapshots in a single group — which makes prune
 	// keep/drop the wrong folders. A single selected directory keeps the caller's
 	// backup-id (which may have been set explicitly, e.g. by a scheduled job).
+	if opts.SourceIDs != nil {
+		for _, dir := range opts.BackupDirs {
+			if opts.SourceIDs[dir] == "" {
+				return fmt.Errorf("no server-assigned backup id for %s; the backup was not started", dir)
+			}
+		}
+	}
 	if len(opts.BackupDirs) <= 1 {
+		if opts.SourceIDs != nil {
+			opts.BackupID = opts.SourceIDs[opts.BackupDirs[0]]
+		}
 		return runBackupInlineInternal(opts)
 	}
 
@@ -689,7 +703,11 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 	for _, dir := range opts.BackupDirs {
 		dirOpts := opts
 		dirOpts.BackupDirs = []string{dir}
-		dirOpts.BackupID = GenerateBackupID(baseID, dir)
+		if opts.SourceIDs != nil {
+			dirOpts.BackupID = opts.SourceIDs[dir]
+		} else {
+			dirOpts.BackupID = GenerateBackupID(baseID, dir)
+		}
 		dirOpts.OnComplete = nil // suppress per-folder terminal callback; aggregated below
 		var dirStatus *BackupStatus
 		dirOpts.OnResult = func(s *BackupStatus) { dirStatus = s }

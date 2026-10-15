@@ -170,24 +170,40 @@ func (s *StorageState) Refuse(reason string) error {
 	return s.persist(next)
 }
 
+// ErrStorageAuthorityMoved is the error a REAL invalidation records
+// (NimbusControl docs/V4-FIRST-ENROLLMENT.md R2): approvals existed, and the
+// machine now answers to a different authority.
+const ErrStorageAuthorityMoved = "This machine was moved to a different management server; " +
+	"the approved devices from before no longer apply. Approve the devices again."
+
 // SetAuthority prevents a standalone or differently enrolled baseline from
 // becoming dashboard-authorized merely because its local revision is higher.
-func (s *StorageState) SetAuthority(authority string) error {
+//
+// It reports whether approvals were invalidated. A change with nothing
+// approved yet -- no authority recorded, or no bindings at revision 0 -- is
+// bookkeeping, not an event (V4-FIRST-ENROLLMENT R1): the new authority is
+// adopted silently and no error is set. That is every fresh machine's first
+// minutes (standalone at install, joined at enrollment), which used to be
+// reported as "requires intervention" before anyone had done anything.
+func (s *StorageState) SetAuthority(authority string) (invalidated bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if authority == "" {
-		return errors.New("storage authority is required")
+		return false, errors.New("storage authority is required")
 	}
 	if s.status.Authority == authority {
-		return nil
+		return false, nil
 	}
 	next := s.status
 	next.Authority = authority
+	if s.status.Authority == "" || (len(s.status.Bindings) == 0 && s.status.Revision == 0) {
+		return false, s.persist(next)
+	}
 	next.Bindings = nil
 	next.Revision = 0
-	next.Error = "storage management authority changed; manual approval required"
+	next.Error = ErrStorageAuthorityMoved
 	if next.Observation == "" {
 		next.Observation = StorageObservation(next.Devices)
 	}
-	return s.persist(next)
+	return true, s.persist(next)
 }

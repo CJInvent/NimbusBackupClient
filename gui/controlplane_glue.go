@@ -480,6 +480,9 @@ func (a *App) cpBuildInventory() controlplane.Inventory {
 		inv.Jobs = append(inv.Jobs, controlplane.InventoryJob{
 			Name:            j.Name,
 			IntervalSeconds: 86400,
+			// The portal's Back up now on this job gets its directories'
+			// backup-ids from here (data path mode).
+			Sources: directorySources(j.BackupType, j.BackupDirs),
 		})
 	}
 	return inv

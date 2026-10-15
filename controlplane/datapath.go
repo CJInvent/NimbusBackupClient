@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -52,6 +53,60 @@ type Grant struct {
 	Namespace       string          `json:"namespace"`
 	Kind            string          `json:"kind"` // backup | restore
 	RedeemBy        string          `json:"redeem_by"`
+	// BackupIDs are the PBS backup-ids a BACKUP grant's run may write, and
+	// the only ones the data path accepts (docs/V4-PBS-OPACITY.md §9.1 on
+	// the server). The server names every backup group; this machine never
+	// derives one from its hostname or a path in proxy mode.
+	BackupIDs []GrantBackupID `json:"backup_ids,omitempty"`
+}
+
+// GrantBackupID pairs a source with the backup-id the server assigned it:
+// Source "machine" for the image backup, otherwise a directory exactly as
+// the job names it.
+type GrantBackupID struct {
+	Source string `json:"source"`
+	ID     string `json:"id"`
+}
+
+// MachineSource is the Source of the machine (image) backup's id.
+const MachineSource = "machine"
+
+// The shape the server allocates: g + 16, and -<n> for a directory source.
+var grantBackupIDRe = regexp.MustCompile(`^g[a-z0-9]{16}(-[1-9][0-9]*)?$`)
+
+func (g *Grant) backupID(source string) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	for _, b := range g.BackupIDs {
+		if b.Source == source && grantBackupIDRe.MatchString(b.ID) {
+			return b.ID, true
+		}
+	}
+	return "", false
+}
+
+// MachineBackupID is the id an image backup writes under.
+func (g *Grant) MachineBackupID() (string, error) {
+	if id, ok := g.backupID(MachineSource); ok {
+		return id, nil
+	}
+	return "", errors.New("the control server assigned this machine no backup id; the backup was not started")
+}
+
+// SourceBackupIDs maps every directory to the id the server assigned it.
+// One missing is an error naming it: a directory without an id is not
+// backed up, never backed up under a name made up here.
+func (g *Grant) SourceBackupIDs(dirs []string) (map[string]string, error) {
+	out := make(map[string]string, len(dirs))
+	for _, d := range dirs {
+		id, ok := g.backupID(d)
+		if !ok {
+			return nil, fmt.Errorf("the control server assigned no backup id for %q; the backup was not started", d)
+		}
+		out[d] = id
+	}
+	return out, nil
 }
 
 // Validate refuses a grant the engines could not use, before anything is
@@ -115,6 +170,10 @@ type BackupRequest struct {
 	JobName string `json:"job_name"`
 	JobID   int64  `json:"job_id,omitempty"`
 	Managed bool   `json:"managed"`
+	// Sources: a directory backup's directories, exactly as the job names
+	// them, so the grant carries an id for each (max 64). Omit for an image
+	// backup.
+	Sources []string `json:"sources,omitempty"`
 }
 
 // BackupRequestResponse carries the request id, and in proxy mode the grant.
