@@ -15,8 +15,6 @@ on:
     # dead weight the v4 audit is meant to clear, and it makes this list read
     # as though more is covered than actually is.
     branches: [ main, master, v4_dev ]
-    tags:
-      - 'v*'
   pull_request:
     branches: [ main, master, v4_dev ]
   # Re-run the full gate set against a commit that is already pushed.
@@ -27,7 +25,17 @@ on:
   # produced no run at all, leaving a green-looking branch whose head had
   # never been built. A manual trigger is the difference between re-running a
   # transient failure and inventing a commit to carry one.
+  #
+  # With a CHANNEL it also cuts that release after every gate passes
+  # (NimbusControl docs/V4-CLIENT-RELEASES.md 1.2). Tags are made by the
+  # publish job, never pushed by hand, so nothing here triggers on tags.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Cut a release on this channel after the gates pass (none = gates only)
+        type: choice
+        options: [none, alpha, beta, stable]
+        default: none
 
 # One run per branch. A superseded run is cancelled rather than left to
 # compete for runners with the run that replaced it: three concurrent runs on
@@ -52,6 +60,40 @@ env:
   NODE_VERSION: '20'
 
 jobs:
+  # --- The version this run builds (docs/V4-CLIENT-RELEASES.md section 1) ---
+  # Decided once, before anything is built, so the binaries, the MSI and the
+  # release all carry the same number. L.CC from RELEASE_LINE, RR from the
+  # tags (scripts/release-version.sh, byte-identical in NimbusControl).
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
+      line: ${{ steps.v.outputs.line }}
+      msi: ${{ steps.v.outputs.msi }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        env:
+          CHANNEL: ${{ (github.event_name == 'workflow_dispatch' && inputs.channel != 'none') && inputs.channel || 'dev' }}
+        run: |
+          set -euo pipefail
+          V="$(sh scripts/release-version.sh "$CHANNEL" "$GITHUB_RUN_NUMBER")"
+          # Windows Installer compares major.minor.build as numbers only:
+          # L.CC.RR, leading zeros dropped (1.01.03 -> 1.1.3).
+          MSI="$(printf '%s' "${V%%-*}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')"
+          {
+            echo "version=$V"
+            echo "channel=$CHANNEL"
+            echo "line=$(tr -d ' \r\n' < RELEASE_LINE)"
+            echo "msi=$MSI"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $V ($CHANNEL), MSI ProductVersion $MSI"
+
   # --- Toolchain gate: the pinned Go version must be the one actually used ---
   # setup-go will happily satisfy a loose pin with a different release, and
   # go.mod's `go` directive will happily be satisfied by a NEWER toolchain
@@ -823,7 +865,7 @@ jobs:
   # Build GUI (Windows only for now)
   build-gui:
     name: Build GUI
-    needs: [security, test, workspace-tests, compile-views, frontend-gate, gitleaks]
+    needs: [version, security, test, workspace-tests, compile-views, frontend-gate, gitleaks]
     env:
       # Flips the S8/S9 signature checks from advisory to blocking. Set the
       # signing secrets (see docs/CODE-SIGNING.md) and this becomes true on
@@ -861,28 +903,14 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          # When the build is triggered by a tag push (v*), the tag is
-          # the source of truth. For branch pushes / PRs we fall back to
-          # wails.json + short SHA so dev builds get a sensible,
-          # non-overlapping version string.
-          #
-          # VERSION feeds main.appVersion via ldflags (displayed in the
-          # GUI, logged in each run banner). VERSION_MSI feeds the WiX
-          # ProductVersion, which must be a strict x.y.z numeric tuple
-          # — so on branch builds we strip the -dev-<sha> suffix for
-          # the MSI but keep it on the binary.
-          $base = (Get-Content gui/wails.json | ConvertFrom-Json).info.productVersion
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $version = "${{ github.ref_name }}" -replace "^v", ""
-            $version_msi = $version
-          } else {
-            $shortSha = "${{ github.sha }}".Substring(0, 7)
-            $version = "$base-dev-$shortSha"
-            $version_msi = $base
-          }
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-          echo "VERSION_MSI=$version_msi" >> $env:GITHUB_OUTPUT
-          echo "Building version: $version (MSI: $version_msi)"
+          # Decided by the version job. VERSION feeds main.appVersion (shown
+          # in the GUI, reported at check-in); VERSION_MSI is the strict
+          # numeric ProductVersion WiX requires (L.CC.RR without leading
+          # zeros). The full version also goes into the MSI as
+          # InstalledVersion (Product.wxs).
+          echo "VERSION=${{ needs.version.outputs.version }}" >> $env:GITHUB_OUTPUT
+          echo "VERSION_MSI=${{ needs.version.outputs.msi }}" >> $env:GITHUB_OUTPUT
+          echo "Building version: ${{ needs.version.outputs.version }} (MSI: ${{ needs.version.outputs.msi }})"
 
       - name: Resolve Go dependencies
         working-directory: gui
@@ -1125,7 +1153,7 @@ jobs:
         run: |
           # Pass the resolved version to the WiX preprocessor so MSI
           # metadata matches the tag / ldflags version.
-          candle.exe "-dProductVersion=${{ steps.version.outputs.VERSION_MSI }}" Product.wxs -ext WixUIExtension -ext WixUtilExtension
+          candle.exe "-dProductVersion=${{ steps.version.outputs.VERSION_MSI }}" "-dFullVersion=${{ steps.version.outputs.VERSION }}" Product.wxs -ext WixUIExtension -ext WixUtilExtension
           light.exe Product.wixobj -ext WixUIExtension -ext WixUtilExtension -out NimbusBackup.msi
           Copy-Item NimbusBackup.msi ../../dist/
         shell: pwsh
@@ -1334,35 +1362,28 @@ jobs:
             dist/NimbusBackup.exe
             dist/NimbusBackup.msi
 
-  # --- Development release: every push to v4_dev ----------------------------
-  # Spec section 14: dev builds must be traceable to the exact revision that
-  # produced them, and must never be mistakable for a stable release.
-  #
-  # This reuses the artifacts the gate jobs already produced rather than
-  # rebuilding them, so what gets published is byte-identical to what was
-  # tested. Version comes from the run number, so no source file is edited
-  # per build. Always a PRERELEASE.
+  # --- Publish: every push to v4_dev (dev), and a dispatched channel -------
+  # docs/V4-CLIENT-RELEASES.md (NimbusControl) sections 1 and 2.1. Reuses the
+  # artifacts the gate jobs produced, so what is published is byte-identical
+  # to what was tested. Publishes release.json (the manifest the server
+  # verifies) and SHA256SUMS. Only stable is a full release; it also gets a
+  # build-provenance attestation. The tag-triggered release job this replaces
+  # is gone: tags are made here, never pushed by hand.
   dev-release:
-    name: Dev Release (v4_dev)
-    if: github.ref == 'refs/heads/v4_dev' && github.event_name == 'push'
-    needs: [toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
+    name: Publish (${{ needs.version.outputs.channel }})
+    if: >-
+      github.ref == 'refs/heads/v4_dev' && (github.event_name == 'push'
+      || (github.event_name == 'workflow_dispatch' && inputs.channel != 'none'))
+    needs: [version, toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write      # attestation (stable only)
+      attestations: write
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Resolve build identity
-        id: id
-        run: |
-          set -euo pipefail
-          {
-            echo "version=v4.0.0-dev.${GITHUB_RUN_NUMBER}"
-            echo "short=$(git rev-parse --short "${GITHUB_SHA}")"
-            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -1370,15 +1391,17 @@ jobs:
           path: artifacts/
 
       - name: Package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
+          LINE: ${{ needs.version.outputs.line }}
         run: |
           set -euo pipefail
-          V="${{ steps.id.outputs.version }}"
+          V="v${VERSION}"
           mkdir -p release
           # runner.os values, verbatim: build-cli's matrix is
           # [ubuntu-latest, windows-latest, macos-latest] and the artifact is
-          # named cli-${{ runner.os }}. macOS was missing from the first
-          # version of this list, so dev releases silently shipped two of the
-          # three platforms the gate jobs had already built and tested.
+          # named cli-${{ runner.os }}.
           MISSING=0
           for os in Windows Linux macOS; do
             if [ -d "artifacts/cli-${os}" ]; then
@@ -1388,42 +1411,62 @@ jobs:
               MISSING=1
             fi
           done
+          [ -d artifacts/NimbusBackup-Windows ] || { echo "::error::the Windows build is missing"; MISSING=1; }
           [ "${MISSING}" = "0" ] || exit 1
-          if [ -d artifacts/NimbusBackup-Windows ]; then
-            cp artifacts/NimbusBackup-Windows/NimbusBackup.exe "release/NimbusBackup-${V}.exe"
-            cp artifacts/NimbusBackup-Windows/NimbusBackup.msi "release/NimbusBackup-${V}.msi"
-          fi
+          cp artifacts/NimbusBackup-Windows/NimbusBackup.exe "release/NimbusBackup-${V}.exe"
+          cp artifacts/NimbusBackup-Windows/NimbusBackup.msi "release/NimbusBackup-${V}.msi"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           cat > release/build-info.json <<EOF
-          {"version":"${V}","build_type":"dev","branch":"${GITHUB_REF_NAME}","commit":"${GITHUB_SHA}","build_number":"${GITHUB_RUN_NUMBER}","build_date":"${{ steps.id.outputs.date }}","repository":"${GITHUB_REPOSITORY}"}
+          {"version":"${V}","line":"${LINE}","build_type":"${CHANNEL}","branch":"${GITHUB_REF_NAME}","commit":"${GITHUB_SHA}","build_number":"${GITHUB_RUN_NUMBER}","build_date":"${DATE}","repository":"${GITHUB_REPOSITORY}"}
           EOF
+          MSI="release/NimbusBackup-${V}.msi"
+          python3 - "$VERSION" "$LINE" "$CHANNEL" "$GITHUB_SHA" "$DATE" "$MSI" > release/release.json <<'PY'
+          import hashlib, json, os, sys
+          version, line, channel, commit, created, msi = sys.argv[1:]
+          data = open(msi, 'rb').read()
+          print(json.dumps({
+              "schema": 1, "product": "backup-client", "version": version, "line": line,
+              "channel": channel, "commit": commit, "created": created,
+              "artifacts": [{"platform": "windows-amd64", "kind": "msi", "name": os.path.basename(msi),
+                             "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
+          }, indent=2))
+          PY
           (cd release && sha256sum * > SHA256SUMS)
+          cat release/release.json
           ls -lh release/
 
-      - name: Publish prerelease
+      - name: Attest build provenance (stable)
+        if: needs.version.outputs.channel == 'stable'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release/NimbusBackup*.exe
+            release/NimbusBackup*.msi
+
+      - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.id.outputs.version }}
+          tag_name: v${{ needs.version.outputs.version }}
           # Otherwise GitHub creates the tag on the default branch, which is
           # unrelated to the tested v4_dev artifacts.
           target_commitish: ${{ github.sha }}
-          name: NimbusBackupClient ${{ steps.id.outputs.version }}
-          prerelease: true
+          name: Backup client v${{ needs.version.outputs.version }}
+          prerelease: ${{ needs.version.outputs.channel != 'stable' }}
           body: |
-            **Development build — not a release. Do not install on customer machines.**
+            **Channel: ${{ needs.version.outputs.channel }}.** Line `${{ needs.version.outputs.line }}`: works with a control server on the same line.
 
             | | |
             |---|---|
-            | Version | `${{ steps.id.outputs.version }}` |
-            | Build type | `dev` |
+            | Version | `v${{ needs.version.outputs.version }}` |
+            | Channel | `${{ needs.version.outputs.channel }}` |
             | Branch | `${{ github.ref_name }}` |
             | Commit | `${{ github.sha }}` |
             | Build number | `${{ github.run_number }}` |
-            | Built (UTC) | `${{ steps.id.outputs.date }}` |
 
-            Binaries report `4.0.0-dev-${{ steps.id.outputs.short }}` via
-            `main.appVersion`; the MSI ProductVersion is `4.0.0` because WiX
-            requires a strict numeric tuple. `build-info.json` and
-            `SHA256SUMS` are attached for provenance.
+            The MSI's ProductVersion is `${{ needs.version.outputs.msi }}` (Windows Installer
+            compares numbers only); the full version is in `InstalledVersion`.
+            `release.json` is the manifest the control server verifies;
+            `SHA256SUMS` lists every file.
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1431,226 +1474,11 @@ jobs:
       - name: Verify published tag identity
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.id.outputs.version }}
+          RELEASE_TAG: v${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')
           test "${ACTUAL}" = "${GITHUB_SHA}" || {
-            echo "::error::Published dev tag does not name the tested commit"
+            echo "::error::Published tag does not name the tested commit"
             exit 1
           }
-
-  # Create release on tag
-  release:
-    name: Create Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    # toolchain included deliberately: the dev release already required it,
-    # so without it here a STABLE release verified less than a dev build did.
-    needs: [toolchain, build-cli, build-gui, windows-smoke, reparse-smoke]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      id-token: write      # mint the Sigstore OIDC token for attestation
-      attestations: write  # store the build-provenance attestation
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Full history + tags so `git describe`/`git log PREV_TAG..HEAD` in
-          # the release-notes step can compute the previous tag and list the
-          # commits since it. A shallow (depth-1) checkout has no prior tags,
-          # which left the "What's in this release" section empty.
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Create release archives
-        run: |
-          mkdir -p release
-
-          # CLI Windows
-          cd artifacts/cli-Windows && zip ../../release/nimbus-backup-cli-${{ steps.version.outputs.VERSION }}-windows.zip *
-          cd ../..
-
-          # CLI Linux
-          cd artifacts/cli-Linux && tar -czf ../../release/nimbus-backup-cli-${{ steps.version.outputs.VERSION }}-linux.tar.gz *
-          cd ../..
-
-          # CLI macOS
-          cd artifacts/cli-macOS && tar -czf ../../release/nimbus-backup-cli-${{ steps.version.outputs.VERSION }}-macos.tar.gz *
-          cd ../..
-
-          # GUI Windows - Add .exe, .msi (with and without version) and .zip
-          cd artifacts/NimbusBackup-Windows
-          cp NimbusBackup.exe ../../release/NimbusBackup-${{ steps.version.outputs.VERSION }}.exe
-          cp NimbusBackup.exe ../../release/NimbusBackup.exe
-          cp NimbusBackup.msi ../../release/NimbusBackup-${{ steps.version.outputs.VERSION }}.msi
-          cp NimbusBackup.msi ../../release/NimbusBackup.msi
-          zip ../../release/NimbusBackup-${{ steps.version.outputs.VERSION }}-windows.zip *
-          cd ../..
-
-      - name: Generate SHA256 checksums
-        run: |
-          cd release
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      # Free, OSS-friendly cryptographic provenance: attests that these exact
-      # binaries were produced by THIS workflow, from THIS commit. Verifiable
-      # with `gh attestation verify <file> --repo rdemsystems/NimbusBackupClient`.
-      # A strong trust signal for a sysadmin audience while signing is pending.
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: |
-            release/NimbusBackup*.exe
-            release/NimbusBackup*.msi
-            release/*.zip
-            release/*.tar.gz
-
-      # Best-effort: submit the Windows binaries to VirusTotal so the release
-      # page can link a live multi-engine report (transparency while the
-      # Authenticode certificate is pending). Skips cleanly if the secret is
-      # absent and never fails the release. The GUI report URL is just the
-      # file's SHA-256. We GATE the link on a clean result: a fresh hash can
-      # show transient heuristic hits, and we must not publish a link to a
-      # "2/70 detected" report as if it were proof of safety — so we poll the
-      # analysis and only emit the link when malicious+suspicious == 0.
-      - name: Submit to VirusTotal (best-effort, gated on 0 detections)
-        continue-on-error: true
-        env:
-          VT_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
-        run: |
-          if [ -z "$VT_KEY" ]; then
-            echo "VIRUSTOTAL_API_KEY not set — skipping VirusTotal submission."
-            exit 0
-          fi
-          : > vt-section.md
-          emitted=0
-          VER="${{ steps.version.outputs.VERSION }}"
-          # Use the version-stamped copies so the published label reads
-          # "NimbusBackup-v0.2.106.msi" (identical bytes → same VT report).
-          for f in "release/NimbusBackup-${VER}.exe" "release/NimbusBackup-${VER}.msi"; do
-            [ -f "$f" ] || continue
-            name=$(basename "$f")
-            sha=$(sha256sum "$f" | awk '{print $1}')
-            # Free public API: files must be <32MB (ours are); 4 req/min limit.
-            resp=$(curl -sS --max-time 180 -X POST https://www.virustotal.com/api/v3/files \
-              -H "x-apikey: $VT_KEY" --form file=@"$f" || true)
-            aid=$(jq -r '.data.id // empty' <<<"$resp" 2>/dev/null || true)
-            if [ -z "$aid" ]; then
-              echo "WARN: VirusTotal submission failed for $name — omitting link."
-              sleep 20; continue
-            fi
-            status=""; mal=0; susp=0
-            for _ in $(seq 1 10); do
-              sleep 20
-              ar=$(curl -sS --max-time 60 -H "x-apikey: $VT_KEY" "https://www.virustotal.com/api/v3/analyses/$aid" || true)
-              status=$(jq -r '.data.attributes.status // empty' <<<"$ar" 2>/dev/null || true)
-              if [ "$status" = "completed" ]; then
-                mal=$(jq  -r '(.data.attributes.stats.malicious  // 0) | tonumber? // 0' <<<"$ar" 2>/dev/null || echo 0)
-                susp=$(jq -r '(.data.attributes.stats.suspicious // 0) | tonumber? // 0' <<<"$ar" 2>/dev/null || echo 0)
-                break
-              fi
-            done
-            if [ "$status" != "completed" ]; then
-              echo "WARN: VirusTotal analysis not completed in time for $name — omitting link."
-              continue
-            fi
-            if [ "$((mal + susp))" -gt 0 ]; then
-              echo "WARN: VirusTotal reports $mal malicious / $susp suspicious for $name ($sha) — omitting link to avoid publishing a non-clean report."
-              continue
-            fi
-            if [ "$emitted" -eq 0 ]; then
-              { echo ""; echo "### 🛡️ VirusTotal reports — 0 detections"; echo ""; } >> vt-section.md
-              emitted=1
-            fi
-            echo "- [\`$name\`](https://www.virustotal.com/gui/file/$sha) — clean" >> vt-section.md
-          done
-          if [ -s vt-section.md ]; then cat vt-section.md; else echo "No clean VirusTotal links to publish."; fi
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-
-          # Create release notes from RELEASE_NOTES.md + recent commits
-          cat > RELEASE_BODY.md << 'EOFNOTES'
-          # 🚀 Nimbus Backup ${{ steps.version.outputs.VERSION }}
-
-          > ⚠️ **Windows flagged the download as a virus?** This is a known false positive (unsigned Go/Wails binary) — *not* a virus. See [why this happens and how to verify the download](https://nimbus.rdem-systems.com/en/antivirus-false-positive/) · [🇫🇷 FR](https://nimbus.rdem-systems.com/faux-positif-antivirus/). A code-signing certificate (SignPath Foundation) is on the way.
-
-          ## 📝 What's in this release
-
-          EOFNOTES
-
-          # Get commits since last tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            echo "### Changes since ${PREV_TAG}" >> RELEASE_BODY.md
-            echo "" >> RELEASE_BODY.md
-            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges >> RELEASE_BODY.md
-            echo "" >> RELEASE_BODY.md
-          fi
-
-          # Publish the SHA-256 checksums on the release page itself so users
-          # can verify integrity without downloading SHA256SUMS.txt first.
-          echo "" >> RELEASE_BODY.md
-          echo "### 🔐 SHA-256 checksums" >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          echo "Verify with \`Get-FileHash <file> -Algorithm SHA256\` (PowerShell) or \`sha256sum -c SHA256SUMS.txt\`." >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          echo '```' >> RELEASE_BODY.md
-          cat release/SHA256SUMS.txt >> RELEASE_BODY.md
-          echo '```' >> RELEASE_BODY.md
-
-          # VirusTotal links (produced by the best-effort step above, if any)
-          if [ -f vt-section.md ]; then
-            cat vt-section.md >> RELEASE_BODY.md
-          fi
-
-          # Add full status from RELEASE_NOTES.md
-          echo "" >> RELEASE_BODY.md
-          echo "---" >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          cat RELEASE_NOTES.md >> RELEASE_BODY.md
-
-          # Add tested with section
-          echo "" >> RELEASE_BODY.md
-          echo "---" >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          echo "### Tested with NimbusBackup" >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          echo "This release has been tested against NimbusBackup managed PBS — [🇬🇧 EN](https://nimbus.rdem-systems.com/en/blog/backup-windows-proxmox-backup-server/?utm_source=github) · [🇫🇷 FR](https://nimbus.rdem-systems.com/blog/sauvegarder-windows-proxmox-backup-server/?utm_source=github)." >> RELEASE_BODY.md
-
-          # Add links at the end (FR bare URL + EN /en/ variant)
-          echo "" >> RELEASE_BODY.md
-          echo "---" >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          echo "**RDEM Systems** — [🇬🇧 EN](https://www.rdem-systems.com/en/) · [🇫🇷 FR](https://www.rdem-systems.com/)" >> RELEASE_BODY.md
-          echo "" >> RELEASE_BODY.md
-          echo "**Nimbus Backup — Fully managed Proxmox Backup Server datastores** — [🇬🇧 EN](https://nimbus.rdem-systems.com/en/?utm_source=github) · [🇫🇷 FR](https://nimbus.rdem-systems.com/?utm_source=github)" >> RELEASE_BODY.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: RELEASE_BODY.md
-          files: release/*
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update latest release badge
-        if: ${{ !contains(steps.version.outputs.VERSION, '-') }}
-        run: |
-          echo "Latest stable release: ${{ steps.version.outputs.VERSION }}"

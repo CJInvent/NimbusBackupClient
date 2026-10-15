@@ -155,6 +155,27 @@ installed to `C:\ProgramData\NimbusBackup\provisioning.json`.
 The stock MSI is unchanged: with no profile the installer behaves exactly as
 it does today, and the agent starts standalone.
 
+## The MSI property `PROVISIONING_PROFILE` (the server's installer page)
+
+The control server's Download installer page (NimbusControl
+`docs/V4-CLIENT-RELEASES.md` 4.1) does not rebuild the MSI. It writes the
+profile into the stock MSI's Property table as `PROVISIONING_PROFILE`
+(base64 of the profile JSON) with msitools and gives the copy a new
+PackageCode. The same property works on the command line:
+
+```
+msiexec /i NimbusBackup-v1.01.00-dev.5.msi /qn PROVISIONING_PROFILE=<base64>
+```
+
+The MSI writes it to `HKLM\SOFTWARE\NimbusBackup\Provisioning`, value
+`Profile`, in a subkey whose ACL is SYSTEM and Administrators only. The service
+reads it before `provisioning.json`, applies it under the same rules, then
+overwrites and deletes the subkey (and any `provisioning.json` beside it). A
+value that is not base64 is refused and deleted.
+
+The MSI also writes the full release version to
+`HKLM\SOFTWARE\NimbusBackup\InstalledVersion`.
+
 ## Server-side obligations (NimbusControl Phase 6)
 
 1. Generate profiles per org with a one-time enrollment token.

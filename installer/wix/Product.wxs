@@ -8,6 +8,13 @@
   <?ifndef ProductVersion ?>
     <?define ProductVersion = "0.2.72" ?>
   <?endif ?>
+  <!-- The full release version (1.01.03-dev.57), which ProductVersion cannot
+       hold. Written to HKLM\SOFTWARE\NimbusBackup\InstalledVersion: what the
+       deployment script and the control server compare
+       (NimbusControl docs/V4-CLIENT-RELEASES.md 1.3). -->
+  <?ifndef FullVersion ?>
+    <?define FullVersion = "$(var.ProductVersion)" ?>
+  <?endif ?>
   <?define Manufacturer = "RDEM Systems" ?>
   <!-- The product's identity for MajorUpgrade: every release keeps this value,
        or installed machines cannot upgrade in place. Never change it
@@ -92,30 +99,49 @@
 
     <!-- Start Menu shortcut -->
     <DirectoryRef Id="ApplicationProgramsFolder">
-      <Component Id="ApplicationShortcut" Guid="*">
+      <Component Id="ApplicationShortcut" Guid="*" Win64="yes">
         <Shortcut Id="ApplicationStartMenuShortcut"
                   Name="Nimbus Backup"
                   Description="Backup client for Proxmox Backup Server"
                   Target="[INSTALLFOLDER]NimbusBackup.exe"
                   WorkingDirectory="INSTALLFOLDER"/>
         <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall"/>
-        <RegistryValue Root="HKCU"
-                       Key="Software\RDEMSystems\NimbusBackup"
-                       Name="installed"
-                       Type="integer"
-                       Value="1"
+        <!-- Per-machine (HKLM), so an install run as SYSTEM by the
+             deployment script is the same as one run by an administrator. -->
+        <RegistryValue Root="HKLM"
+                       Key="Software\NimbusBackup"
+                       Name="InstalledVersion"
+                       Type="string"
+                       Value="$(var.FullVersion)"
                        KeyPath="yes"/>
       </Component>
 
-      <!-- Auto-start registry entry (conditional) -->
-      <Component Id="AutoStartRegistry" Guid="*">
+      <!-- Auto-start of the tray GUI for every user who signs in (conditional) -->
+      <Component Id="AutoStartRegistry" Guid="*" Win64="yes">
         <Condition>AUTOSTART = "1"</Condition>
-        <RegistryValue Root="HKCU"
+        <RegistryValue Root="HKLM"
                        Key="Software\Microsoft\Windows\CurrentVersion\Run"
                        Name="NimbusBackup"
                        Type="string"
                        Value="&quot;[INSTALLFOLDER]NimbusBackup.exe&quot; --minimized"
                        KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+
+    <!-- The enrollment injected by the control server's installer page
+         (PROVISIONING_PROFILE, base64 of the profile JSON; NimbusControl
+         docs/V4-CLIENT-RELEASES.md 4.1). Its own subkey, whose ACL is SYSTEM
+         and Administrators only (LockPermissions replaces the inherited ACL),
+         because it holds an enrollment token. The service consumes and
+         deletes it on start (gui/provisioning.go). -->
+    <DirectoryRef Id="TARGETDIR">
+      <Component Id="ProvisioningRegistry" Guid="*" Win64="yes">
+        <Condition>PROVISIONING_PROFILE</Condition>
+        <RegistryKey Root="HKLM" Key="Software\NimbusBackup\Provisioning">
+          <Permission User="SYSTEM" GenericAll="yes" />
+          <Permission User="Administrators" GenericAll="yes" />
+          <RegistryValue Name="Profile" Type="string" Value="[PROVISIONING_PROFILE]" KeyPath="yes" />
+        </RegistryKey>
       </Component>
     </DirectoryRef>
 
@@ -142,6 +168,7 @@
       <ComponentRef Id="ServiceExecutable" />
       <ComponentRef Id="ApplicationShortcut" />
       <ComponentRef Id="AutoStartRegistry" />
+      <ComponentRef Id="ProvisioningRegistry" />
       <?ifdef ProvisioningProfile ?>
       <ComponentRef Id="ProvisioningProfile" />
       <?endif?>
@@ -210,43 +237,43 @@
     <!-- Custom dialogs (WiX UI extension) -->
     <UI>
       <!-- Custom dialog for uninstall -->
-      <Dialog Id="NimbusUninstallDlg" Width="370" Height="270" Title="[ProductName] - Désinstallation">
+      <Dialog Id="NimbusUninstallDlg" Width="370" Height="270" Title="[ProductName] - Uninstall">
         <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes">
-          <Text>{\WixUI_Font_Title}Désinstallation de [ProductName]</Text>
+          <Text>{\WixUI_Font_Title}Uninstall [ProductName]</Text>
         </Control>
 
         <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="30" Transparent="yes" NoPrefix="yes">
-          <Text>Souhaitez-vous conserver votre configuration et vos logs ?</Text>
+          <Text>Keep your configuration and logs?</Text>
         </Control>
 
         <Control Id="ConfigInfo" Type="Text" X="25" Y="60" Width="320" Height="60" Transparent="yes" NoPrefix="yes">
-          <Text>La configuration est stockée dans :\nC:\ProgramData\NimbusBackup\
+          <Text>The configuration is stored in:\nC:\ProgramData\NimbusBackup\
 
-Cela inclut :
-• config.json (serveurs PBS, identifiants)
-• jobs.json (tâches planifiées)
-• debug-gui.log et debug-service.log
+It includes:
+• config.json (servers and credentials)
+• the scheduled jobs
+• the logs
           </Text>
         </Control>
 
         <Control Id="KeepConfigRadio" Type="RadioButtonGroup" X="25" Y="130" Width="320" Height="50" Property="KEEP_CONFIG">
           <RadioButtonGroup Property="KEEP_CONFIG">
-            <RadioButton Text="Conserver la configuration" Value="1" X="0" Y="0" Width="300" Height="15" />
-            <RadioButton Text="Supprimer la configuration" Value="0" X="0" Y="20" Width="300" Height="15" />
+            <RadioButton Text="Keep the configuration" Value="1" X="0" Y="0" Width="300" Height="15" />
+            <RadioButton Text="Delete the configuration" Value="0" X="0" Y="20" Width="300" Height="15" />
           </RadioButtonGroup>
         </Control>
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Retour">
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
           <Publish Event="NewDialog" Value="MaintenanceTypeDlg">1</Publish>
         </Control>
 
-        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Désinstaller">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Uninstall">
           <Publish Event="EndDialog" Value="Return">1</Publish>
         </Control>
 
-        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Annuler">
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>

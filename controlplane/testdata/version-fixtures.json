@@ -1,0 +1,182 @@
+{
+  "_comment": [
+    "SHARED VERSION FIXTURES (docs/V4-CLIENT-RELEASES.md section 1).",
+    "Read verbatim by the server (Releases\\Version, tests/release_version.php) and the agent",
+    "(controlplane/version.go, vendored byte-identical at controlplane/testdata/). Both sides",
+    "assert this file's SHA-256, so neither can change it alone."
+  ],
+  "parse": [
+    {
+      "in": "1.01.03",
+      "ok": true,
+      "l": 1,
+      "cc": 1,
+      "rr": 3,
+      "channel": "stable",
+      "build": 0,
+      "line": "1.01"
+    },
+    {
+      "in": "v1.01.03",
+      "ok": true,
+      "l": 1,
+      "cc": 1,
+      "rr": 3,
+      "channel": "stable",
+      "build": 0,
+      "line": "1.01"
+    },
+    {
+      "in": "1.01.03-dev.57",
+      "ok": true,
+      "l": 1,
+      "cc": 1,
+      "rr": 3,
+      "channel": "dev",
+      "build": 57,
+      "line": "1.01"
+    },
+    {
+      "in": "1.01.03-alpha.1",
+      "ok": true,
+      "l": 1,
+      "cc": 1,
+      "rr": 3,
+      "channel": "alpha",
+      "build": 1,
+      "line": "1.01"
+    },
+    {
+      "in": "1.02.00-beta.12",
+      "ok": true,
+      "l": 1,
+      "cc": 2,
+      "rr": 0,
+      "channel": "beta",
+      "build": 12,
+      "line": "1.02"
+    },
+    {
+      "in": "2.100.07",
+      "ok": true,
+      "l": 2,
+      "cc": 100,
+      "rr": 7,
+      "channel": "stable",
+      "build": 0,
+      "line": "2.100"
+    },
+    {
+      "in": "1.1.3",
+      "ok": false
+    },
+    {
+      "in": "1.01.3",
+      "ok": false
+    },
+    {
+      "in": "1.01.03-rc.1",
+      "ok": false
+    },
+    {
+      "in": "1.01.03-dev",
+      "ok": false
+    },
+    {
+      "in": "1.01.03-dev.0x1",
+      "ok": false
+    },
+    {
+      "in": "4.0.0-dev.220",
+      "ok": false
+    },
+    {
+      "in": "4.0.0-dev-226595c",
+      "ok": false
+    },
+    {
+      "in": " 1.01.03",
+      "ok": false
+    },
+    {
+      "in": "1.01.03\n",
+      "ok": false
+    },
+    {
+      "in": "",
+      "ok": false
+    }
+  ],
+  "order": [
+    "1.00.99",
+    "1.01.00-dev.1",
+    "1.01.00-dev.2",
+    "1.01.00-dev.10",
+    "1.01.00-alpha.1",
+    "1.01.00-alpha.2",
+    "1.01.00-beta.1",
+    "1.01.00",
+    "1.01.01-dev.1",
+    "1.01.09",
+    "1.01.10-dev.3",
+    "1.01.10",
+    "1.02.00-dev.1",
+    "1.02.00",
+    "1.10.00",
+    "2.01.00-dev.1"
+  ],
+  "compatible": [
+    {
+      "a": "1.01.03",
+      "b": "1.01.00-dev.4",
+      "ok": true
+    },
+    {
+      "a": "1.01.03",
+      "b": "1.02.03",
+      "ok": false
+    },
+    {
+      "a": "1.01.03",
+      "b": "2.01.03",
+      "ok": false
+    },
+    {
+      "a": "1.01.03",
+      "b": "4.0.0-dev.220",
+      "ok": false
+    }
+  ],
+  "follows": [
+    {
+      "channel": "stable",
+      "accepts": [
+        "stable"
+      ]
+    },
+    {
+      "channel": "beta",
+      "accepts": [
+        "beta",
+        "stable"
+      ]
+    },
+    {
+      "channel": "alpha",
+      "accepts": [
+        "alpha",
+        "beta",
+        "stable"
+      ]
+    },
+    {
+      "channel": "dev",
+      "accepts": [
+        "dev",
+        "alpha",
+        "beta",
+        "stable"
+      ]
+    }
+  ]
+}

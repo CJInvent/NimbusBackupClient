@@ -2,8 +2,12 @@ package main
 
 // Provisioning ingestion — the client half of docs/MSI-PROVISIONING.md.
 //
-// A preconfigured MSI drops provisioning.json beside config.json. The SERVICE
-// consumes it on startup, before StartControlPlane, and destroys it. The GUI
+// A profile arrives one of two ways: provisioning.json beside config.json (a
+// preconfigured build, or the deployment script), or the MSI property
+// PROVISIONING_PROFILE, which the MSI writes to
+// HKLM\SOFTWARE\NimbusBackup\Provisioning (an installer with the enrollment
+// injected by the server, NimbusControl docs/V4-CLIENT-RELEASES.md 4.1). The
+// SERVICE consumes it on startup, before StartControlPlane, and destroys it. The GUI
 // never touches it: config writes are the service's job (dev rule 2), and this
 // is a config write carrying a credential.
 //
@@ -19,6 +23,7 @@ package main
 //     provisioning artifact into a permanent one (dev rule 10).
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,18 +49,13 @@ func provisioningPath() (string, error) {
 // Returns true when settings were applied and the caller should proceed to
 // enrollment with the new configuration.
 func (a *App) ApplyProvisioningProfile() bool {
-	path, err := provisioningPath()
-	if err != nil {
-		return false
-	}
-	raw, err := os.ReadFile(path) // #nosec G304 -- fixed path under ProgramData
-	if err != nil {
+	raw, destroy := takeProvisioningProfile()
+	if raw == nil {
 		return false // absent is the normal case for a hand-installed agent
 	}
-
-	// From here on the file is consumed no matter what happens: a profile that
-	// cannot be applied must not sit on disk holding a live org token.
-	defer destroyProvisioningFile(path)
+	// From here on the profile is consumed no matter what happens: one that
+	// cannot be applied must not sit on the machine holding a live org token.
+	defer destroy()
 
 	profile, err := controlplane.ParseProfile(raw)
 	if err != nil {
@@ -97,6 +97,46 @@ func (a *App) ApplyProvisioningProfile() bool {
 	}
 	writeInfoLog("[provisioning] profile applied; enrollment will run on this start")
 	return true
+}
+
+// takeProvisioningProfile returns the profile's bytes and how to destroy its
+// source, or nil when there is none. The registry (the MSI property) is read
+// first; a file beside it is destroyed too, so neither can be applied later.
+func takeProvisioningProfile() ([]byte, func()) {
+	path, perr := provisioningPath()
+	destroyFile := func() {
+		if perr == nil {
+			if _, err := os.Stat(path); err == nil {
+				destroyProvisioningFile(path)
+			}
+		}
+	}
+	if b64, ok := readProvisioningRegistry(); ok {
+		destroy := func() {
+			if err := deleteProvisioningRegistry(); err != nil {
+				writeWarnLog(fmt.Sprintf("[provisioning] WARNING: could not remove the MSI's profile from the registry: %v "+
+					"-- it still contains an enrollment token, delete HKLM\\SOFTWARE\\NimbusBackup\\Provisioning manually", err))
+			} else {
+				writeInfoLog("[provisioning] the MSI's profile was consumed and removed from the registry")
+			}
+			destroyFile()
+		}
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			writeErrorLog(fmt.Sprintf("[provisioning] REFUSED the MSI's profile: not base64: %v", err))
+			destroy()
+			return nil, nil
+		}
+		return raw, destroy
+	}
+	if perr != nil {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- fixed path under ProgramData
+	if err != nil {
+		return nil, nil
+	}
+	return raw, func() { destroyProvisioningFile(path) }
 }
 
 // applyProvisionedEncryption records the org's encryption answer from the
