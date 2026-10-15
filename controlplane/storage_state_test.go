@@ -102,7 +102,7 @@ func TestStorageAuthorityChangeInvalidatesLocalApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.SetAuthority("standalone"); err != nil {
+	if _, err = s.SetAuthority("standalone"); err != nil {
 		t.Fatal(err)
 	}
 	d := storageFixture()
@@ -113,7 +113,7 @@ func TestStorageAuthorityChangeInvalidatesLocalApproval(t *testing.T) {
 	if err = s.Approve(approval); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.SetAuthority("joined:server-a-agent-1"); err != nil {
+	if _, err = s.SetAuthority("joined:server-a-agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	st := s.Snapshot()
@@ -131,16 +131,59 @@ func TestStorageAuthorityChangeInvalidatesLocalApproval(t *testing.T) {
 	if err = s.Approve(approval); err != nil {
 		t.Fatalf("new dashboard revision blocked by old local revision: %v", err)
 	}
-	if err = s.SetAuthority("joined:server-a-agent-1"); err != nil {
+	if _, err = s.SetAuthority("joined:server-a-agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.Resolve([]string{"boot"}); err != nil {
 		t.Fatal("unchanged authority invalidated dashboard approval")
 	}
-	if err = s.SetAuthority("joined:server-a-agent-2"); err != nil {
+	if _, err = s.SetAuthority("joined:server-a-agent-2"); err != nil {
 		t.Fatal(err)
 	}
-	if s.Snapshot().Error == "" || len(s.Snapshot().Bindings) != 0 {
-		t.Fatal("re-enrollment retained prior authority")
+	if s.Snapshot().Error != ErrStorageAuthorityMoved || len(s.Snapshot().Bindings) != 0 {
+		t.Fatal("re-enrollment retained prior authority, or did not say why it was invalidated")
+	}
+}
+
+// V4-FIRST-ENROLLMENT R1: a fresh machine goes from nothing to standalone (at
+// install) to joined (at enrollment) with nothing approved yet. That is
+// bookkeeping, not an event: no error, nothing invalidated, through a restart.
+func TestAFreshMachineChangesAuthorityWithoutAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storage.json")
+	s, err := OpenStorageState(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{"standalone", "joined:server-a-agent-1"} {
+		inv, err := s.SetAuthority(step)
+		if err != nil || inv {
+			t.Fatalf("%s: invalidated=%v err=%v; nothing was approved, nothing can be invalidated", step, inv, err)
+		}
+		if st := s.Snapshot(); st.Error != "" || st.Authority != step {
+			t.Fatalf("%s: error %q authority %q", step, st.Error, st.Authority)
+		}
+	}
+	// The same after the inventory succeeded: devices seen, none approved.
+	if err = s.Observe([]StorageDevice{storageFixture()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if inv, err := s.SetAuthority("joined:server-a-agent-2"); err != nil || inv || s.Snapshot().Error != "" {
+		t.Fatalf("observed but unapproved storage: invalidated=%v err=%v error %q", inv, err, s.Snapshot().Error)
+	}
+	s, err = OpenStorageState(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := s.Snapshot(); st.Error != "" || st.Authority != "joined:server-a-agent-2" || len(st.Devices) != 1 {
+		t.Fatalf("after a restart: %+v", st)
+	}
+	// Control: with an approval, the same change IS an invalidation, and says so.
+	d := storageFixture()
+	if err = s.Approve(StorageApproval{Revision: 3, Observation: s.Snapshot().Observation,
+		Bindings: []StorageBinding{{Target: "boot", Device: d}}}); err != nil {
+		t.Fatal(err)
+	}
+	if inv, err := s.SetAuthority("joined:server-b-agent-9"); err != nil || !inv || s.Snapshot().Error != ErrStorageAuthorityMoved {
+		t.Fatalf("approved storage moved to another server: invalidated=%v err=%v error %q", inv, err, s.Snapshot().Error)
 	}
 }

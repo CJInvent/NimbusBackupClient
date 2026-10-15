@@ -208,14 +208,20 @@ func storageWireStatus(st controlplane.StorageStatus) controlplane.StorageStatus
 func (a *App) bindStorageAuthority(s *controlplane.StorageState) error {
 	authority := "standalone"
 	if a.config != nil && a.config.ControlServerURL != "" {
+		// Joined but not enrolled yet: there is no authority to record. The
+		// enrollment that follows sets it (V4-FIRST-ENROLLMENT §3.1).
+		if a.config.ControlAgentID == 0 {
+			return nil
+		}
 		authority = fmt.Sprintf("joined:%x", sha256.Sum256([]byte(fmt.Sprintf("%s#%d", strings.TrimRight(a.config.ControlServerURL, "/"), a.config.ControlAgentID))))
 	}
 	before := s.Snapshot().Authority
-	if err := s.SetAuthority(authority); err != nil {
+	invalidated, err := s.SetAuthority(authority)
+	if err != nil {
 		return err
 	}
-	if before != authority {
-		writeWarnLog(fmt.Sprintf("[StorageIdentity] authority changed from %q to %q; prior bindings invalidated; manual approval required", before, authority))
+	if invalidated {
+		writeWarnLog(fmt.Sprintf("[StorageIdentity] authority changed from %q to %q; prior approvals invalidated; manual approval required", before, authority))
 	}
 	return nil
 }
