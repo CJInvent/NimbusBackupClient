@@ -74,7 +74,15 @@ type backupRequest struct {
 // resolvedBackup is a request after normalization and validation: everything
 // the option assembly needs, with nothing left to decide.
 type resolvedBackup struct {
-	backupID        string
+	// backupID keys this run's reporter, registry entry and grant (the
+	// job's own id); in data path mode it is NOT what PBS sees.
+	backupID string
+	// Data path mode only: the ids the server assigned in the grant, which
+	// replace backupID on the wire (docs/V4-PBS-OPACITY.md §9.1 on the
+	// server). pbsMachineID for an image backup, pbsSourceIDs (directory ->
+	// id) for a directory backup.
+	pbsMachineID    string
+	pbsSourceIDs    map[string]string
 	compression     string
 	pbsBackupType   string // "host" | "vm"
 	sourceValidator func(uintptr, string) error
@@ -141,6 +149,19 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 			return nil, err
 		}
 		out.pbs = t
+		// The ids come from the grant and only from it. A directory the
+		// server named no id for is not backed up -- the whole run is
+		// refused before anything is read, and the reason names it.
+		switch req.BackupType {
+		case "machine":
+			if out.pbsMachineID, err = g.MachineBackupID(); err != nil {
+				return nil, err
+			}
+		case "directory":
+			if out.pbsSourceIDs, err = g.SourceBackupIDs(req.BackupDirs); err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		out.pbs = a.config.EffectivePBS()
 	}
@@ -281,6 +302,14 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	// status panel.
 	cpFinish, runUUID := attachControlPlaneHooks(&opts)
 	runFinish, historyName := attachRunRegistry(&opts)
+	// AFTER the hooks: they find this run's reporter and registry entry by
+	// the job's own id. What PBS sees is the server's (data path mode).
+	if r.pbsMachineID != "" {
+		opts.BackupID = r.pbsMachineID
+	}
+	if r.pbsSourceIDs != nil {
+		opts.SourceIDs = r.pbsSourceIDs
+	}
 	historyID := runUUID
 	if historyID == "" {
 		historyID = fmt.Sprintf("local-%d", time.Now().UnixNano())

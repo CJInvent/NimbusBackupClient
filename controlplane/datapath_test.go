@@ -178,3 +178,63 @@ func TestCheckinDeliversTheDatapathBlockBeforeCommands(t *testing.T) {
 		t.Fatal("an older server (no block) must read as direct")
 	}
 }
+
+// Backup-ids come from the server (NimbusControl docs/V4-PBS-OPACITY.md §9.1):
+// the handshake sends the directories, the grant answers an id for each, and
+// nothing here is ever made up from a hostname or a path.
+func TestBackupIDsComeFromTheGrantAndOnlyFromIt(t *testing.T) {
+	ids := `,"backup_ids":[{"source":"machine","id":"g4k2x8d9v0q7a1b3z"},{"source":"C:\\Data","id":"g4k2x8d9v0q7a1b3z-1"},` +
+		`{"source":"D:\\Shares","id":"g4k2x8d9v0q7a1b3z-2"},{"source":"E:\\Bad","id":"../escape"}]}`
+	d := newDPServer(t, map[string]func(http.ResponseWriter){
+		"/api/agent/v1/backup-request": func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`{"request_id":"7f0c6f9e-1111-4222-8333-444455556666","grant":` +
+				strings.TrimSuffix(testGrant, "}") + ids + `}`))
+		},
+	})
+	resp, err := d.client().RequestBackup(BackupRequest{JobName: "Docs", Sources: []string{`C:\Data`, `D:\Shares`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, _ := d.got["/api/agent/v1/backup-request"]["sources"].([]any)
+	if len(sent) != 2 || sent[0] != `C:\Data` || sent[1] != `D:\Shares` {
+		t.Fatalf("the handshake must name the directories exactly as the job does, sent %v", sent)
+	}
+	if id, err := resp.Grant.MachineBackupID(); err != nil || id != "g4k2x8d9v0q7a1b3z" {
+		t.Fatalf("machine id %q %v", id, err)
+	}
+	m, err := resp.Grant.SourceBackupIDs([]string{`D:\Shares`, `C:\Data`})
+	if err != nil || m[`C:\Data`] != "g4k2x8d9v0q7a1b3z-1" || m[`D:\Shares`] != "g4k2x8d9v0q7a1b3z-2" {
+		t.Fatalf("source ids %v %v", m, err)
+	}
+	if _, err := resp.Grant.SourceBackupIDs([]string{`C:\Data`, `F:\Missing`}); err == nil || !strings.Contains(err.Error(), `F:\\Missing`) {
+		t.Fatalf("a directory with no id must refuse the run and name the directory, got %v", err)
+	}
+	if _, err := resp.Grant.SourceBackupIDs([]string{`c:\data`}); err == nil {
+		t.Fatal("a source is matched exactly, never case-folded into another directory's id")
+	}
+	if _, err := resp.Grant.SourceBackupIDs([]string{`E:\Bad`}); err == nil {
+		t.Fatal("an id not in the server's shape is refused, not used as a PBS path")
+	}
+	var none *Grant
+	if _, err := none.MachineBackupID(); err == nil {
+		t.Fatal("no grant, no id")
+	}
+	if _, err := (&Grant{}).MachineBackupID(); err == nil {
+		t.Fatal("a grant naming no ids yields none")
+	}
+}
+
+func TestInventoryJobsCarryTheirDirectories(t *testing.T) {
+	b, err := json.Marshal(&Inventory{Jobs: []InventoryJob{
+		{Name: "Docs", IntervalSeconds: 86400, Sources: []string{`C:\Data`}},
+		{Name: "Image", IntervalSeconds: 86400},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `{"name":"Docs","interval_seconds":86400,"sources":["C:\\Data"]}`) ||
+		!strings.Contains(s, `{"name":"Image","interval_seconds":86400}`) {
+		t.Fatalf("inventory jobs: %s", s)
+	}
+}

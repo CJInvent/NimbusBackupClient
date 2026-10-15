@@ -217,6 +217,18 @@ func TestAGrantArrivesWithItsCommand(t *testing.T) {
 	if pg == nil || pg.Datastore != "nimbus" || len(pg.Fallbacks) != 1 || pg.Fallbacks[0].Fingerprint != "BB" {
 		t.Fatalf("payload grant %+v", pg)
 	}
+	p["grant"].(map[string]interface{})["backup_ids"] = []interface{}{
+		map[string]interface{}{"source": "machine", "id": "g4k2x8d9v0q7a1b3z"},
+		map[string]interface{}{"source": `C:\Data`, "id": "g4k2x8d9v0q7a1b3z-1"}}
+	if ids, err := grantFromPayload(p).SourceBackupIDs([]string{`C:\Data`}); err != nil || ids[`C:\Data`] != "g4k2x8d9v0q7a1b3z-1" {
+		t.Fatalf("a command's grant must carry its backup-ids: %v %v", ids, err)
+	}
+	if got := directorySources("directory", []string{`C:\Data`}); len(got) != 1 || got[0] != `C:\Data` {
+		t.Fatalf("a directory job names its directories: %v", got)
+	}
+	if directorySources("machine", []string{`C:\Data`}) != nil {
+		t.Fatal("an image job names no directory sources")
+	}
 	if grantFromPayload(map[string]interface{}{}) != nil {
 		t.Fatal("a command without a grant produced one")
 	}

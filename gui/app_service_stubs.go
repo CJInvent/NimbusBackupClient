@@ -54,7 +54,8 @@ func (a *App) StartBackup(backupType string, backupDirs, diskTargets, excludeLis
 	}
 	if c := currentControlPlaneClient(); c != nil {
 		const jobName = "Manual backup"
-		resp, err := c.RequestBackup(controlplane.BackupRequest{JobName: jobName, Managed: false})
+		resp, err := c.RequestBackup(controlplane.BackupRequest{JobName: jobName, Managed: false,
+			Sources: directorySources(backupType, backupDirs)})
 		var refused *controlplane.RefusedError
 		switch {
 		case err == nil:
