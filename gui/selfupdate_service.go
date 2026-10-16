@@ -301,3 +301,10 @@ func reportUpdate(r controlplane.UpdateResult) {
 		writeWarnLog(fmt.Sprintf("[update] could not report %s for %s: %v", r.Outcome, r.Version, err))
 	}
 }
+
+// setSelfUpdatePending sets the version the status card shows as installing.
+func setSelfUpdatePending(version string) {
+	selfUpdateMu.Lock()
+	selfUpdatePending = version
+	selfUpdateMu.Unlock()
+}

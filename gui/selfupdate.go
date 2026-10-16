@@ -76,12 +76,6 @@ func scheduledRunOffLine(requestID string) (bool, string) {
 	return true, agentLineMessage(agentLineState, agentLineNeeds)
 }
 
-func setSelfUpdatePending(version string) {
-	selfUpdateMu.Lock()
-	selfUpdatePending = version
-	selfUpdateMu.Unlock()
-}
-
 // selfUpdateStatus is what the status card shows: the line state and the
 // version being installed.
 func selfUpdateStatus() map[string]interface{} {
