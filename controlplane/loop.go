@@ -127,6 +127,11 @@ type Agent struct {
 	// machine the same way a suspension does.
 	OnOrgSuspended func(suspended bool)
 
+	// OnUpdate receives the check-in's `update` and `agent_line` every cycle
+	// (both nil from an older server; update nil when there is nothing to
+	// install). Self-update and the line check live behind it.
+	OnUpdate func(offer *UpdateOffer, line *AgentLine)
+
 	AgentVersion string
 
 	// PolicyMaxAge optionally bounds how long a delivered policy stays in
@@ -391,6 +396,9 @@ func (a *Agent) CheckinNow() {
 	// server sent with it, not the previous cycle's.
 	if a.OnOrgSuspended != nil {
 		a.OnOrgSuspended(resp.OrgSuspended)
+	}
+	if a.OnUpdate != nil {
+		a.OnUpdate(resp.Update, resp.AgentLine)
 	}
 
 	if resp.CheckinSeconds >= 30 { // refuse absurd values; floor at 30 s

@@ -375,6 +375,12 @@ func (a *App) executeJob(job ScheduledJob, requestID string, trigger api.RunTrig
 		writeInfoLog(skippedForSuspension(job.Name))
 		return
 	}
+	// The server refuses an agent on another release line (V4-CLIENT-RELEASES
+	// §1.4); a scheduled run would be refused at the data path.
+	if off, why := scheduledRunOffLine(requestID); off {
+		writeInfoLog(fmt.Sprintf("Job %s not started: %s", job.Name, why))
+		return
+	}
 
 	// Check if job is already running
 	runningJobsMutex.Lock()

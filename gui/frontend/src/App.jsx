@@ -23,6 +23,7 @@ import makeHistoryActions from './screens/history/historyActions'
 
 import Header from './screens/frame/Header'
 import OrgSuspendedBanner from './screens/frame/OrgSuspendedBanner'
+import ReleaseBanners from './screens/frame/ReleaseBanners'
 import SecurityWarnings from './screens/frame/SecurityWarnings'
 import Tabs from './screens/frame/Tabs'
 import LockedView from './screens/status/LockedView'
@@ -75,6 +76,7 @@ function App() {
       <Header />
 
       <OrgSuspendedBanner cpStatus={cpStatus} />
+      <ReleaseBanners status={cpStatus} />
       <StorageIdentityPanel status={cpStatus?.storage_identity} onChanged={st => setCpStatus(s => ({ ...s, storage_identity: st }))} />
 
       {pick.picker && (

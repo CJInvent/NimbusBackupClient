@@ -93,6 +93,21 @@ func (r *restoreJobRegistry) begin(op string) *restoreJob {
 	return j
 }
 
+// running counts the jobs still in flight: a self-update waits for zero.
+func (r *restoreJobRegistry) running() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, j := range r.jobs {
+		j.mu.Lock()
+		if j.state.Running {
+			n++
+		}
+		j.mu.Unlock()
+	}
+	return n
+}
+
 func (r *restoreJobRegistry) get(id string) (*restoreJob, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

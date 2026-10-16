@@ -139,6 +139,11 @@ func (a *App) StartControlPlane() {
 		writeWarnLog(fmt.Sprintf("[controlplane] run records unavailable (%v): a run interrupted by a restart will stay running on the server", err))
 	}
 
+	// The install a previous service started (self-update, §7.2 step 5).
+	if finishSelfUpdateAtStart != nil {
+		finishSelfUpdateAtStart(cpClient)
+	}
+
 	resetCheckinLogState()
 	// The control-plane package's lines keep their severity (WARN/ERROR are
 	// what reach the server), and the service opens its persistent queue of
@@ -156,6 +161,7 @@ func (a *App) StartControlPlane() {
 		OnDatapath:        a.applyDatapathFromCheckin,
 		OnPBSTarget:       a.applyPBSTargetFromCheckin,
 		OnOrgSuspended:    applyOrgSuspended,
+		OnUpdate:          applyUpdateFromCheckin,
 		HeldPBSCredential: a.heldPBSCredentialReport,
 		// V4-RUN-AUDIT §4: queued WARN/ERROR lines ride the check-in, the
 		// server's ack trims the queue, and the server's per-machine debug
@@ -319,6 +325,10 @@ func (a *App) ControlPlaneStatusMap() map[string]interface{} {
 		// Data path mode (docs/V4-DATAPATH-PROXY.md §13.1): the GUI hides
 		// every PBS setting while it is true; the service refuses them.
 		"datapath_proxy": datapathProxy(),
+	}
+	// Release line and self-update (V4-CLIENT-RELEASES §1.4, §7.2).
+	for k, v := range selfUpdateStatus() {
+		out[k] = v
 	}
 	if cfg != nil {
 		out["agent_id"] = cfg.ControlAgentID

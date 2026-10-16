@@ -104,6 +104,8 @@ func (s *NimbusService) run() {
 	// API server each knew only about their own runs, which is why a
 	// scheduled backup was invisible to the GUI.
 	SetRunRegistry(s.apiServer.Runs())
+	// A self-update waits for console restores too.
+	activeRestores = s.apiServer.ActiveRestoreCount
 
 	// The lockdown control. A predicate rather than a value because the
 	// policy arrives on a check-in: an org that locks a machine expects that

@@ -22,6 +22,9 @@ export const cases = [
   ['SecurityWarnings', `${S}/frame/SecurityWarnings.jsx`, { warnings: ['Windows Defender real-time protection is off'] }],
   ['Tabs', `${S}/frame/Tabs.jsx`, { activeTab: 'backup', onSelect: F.noop }],
   ['Tabs (fr)', `${S}/frame/Tabs.jsx`, { activeTab: 'servers', onSelect: F.noop }, 'fr'],
+  ['ReleaseBanners update', `${S}/frame/ReleaseBanners.jsx`, { status: { update_pending: '1.01.04' } }],
+  ['ReleaseBanners older line', `${S}/frame/ReleaseBanners.jsx`, { status: { agent_line: 'older', agent_line_needs: '1.02.00' } }],
+  ['ReleaseBanners newer line (fr)', `${S}/frame/ReleaseBanners.jsx`, { status: { agent_line: 'newer', agent_line_needs: '1.00.07' } }, 'fr'],
   ['StatusNotice', `${S}/frame/StatusNotice.jsx`, { status, show: true }],
 
   // status page
