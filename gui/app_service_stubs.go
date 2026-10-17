@@ -33,9 +33,6 @@ func (a *App) GetConfigWithHostname() map[string]interface{} {
 	return result
 }
 
-// emitAnalysisProgress is a no-op in the service process (no GUI event sink).
-func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {}
-
 // StartBackup starts a backup somebody asked for AT THE MACHINE: the GUI's
 // button, or the local API.
 //

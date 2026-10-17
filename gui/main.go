@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"pbscommon"
 	"security"
 
@@ -779,21 +778,6 @@ func (a *App) PinPBSServerFingerprint(id, fingerprint string) error {
 }
 
 // ==================== END MULTI-PBS MANAGEMENT ====================
-
-// emitAnalysisProgress forwards split size-analysis progress to the GUI as an
-// "analysis:progress" event (done/total folders sized + bytes so far). Used only
-// on the explicit-split path so a multi-minute scan of a large volume shows
-// movement instead of a frozen spinner.
-func (a *App) emitAnalysisProgress(done, total int, scannedBytes uint64) {
-	if a.ctx == nil {
-		return
-	}
-	runtime.EventsEmit(a.ctx, "analysis:progress", map[string]interface{}{
-		"done":  done,
-		"total": total,
-		"bytes": scannedBytes,
-	})
-}
 
 // StartBackup asks the SERVICE to run a backup. It is the only thing this
 // binding does.

@@ -1,8 +1,8 @@
 package main
 
 // V4-BETA-FIXES §13.2 on the GUI side: the run outcome when online-only files
-// were left out (R1), and the split plan and size estimate applying the
-// writer's classification (R4, F-73). The classifier is injected so Windows
+// were left out (R1), and the size estimate applying the writer's
+// classification (R4, F-73). The classifier is injected so Windows
 // entries can be presented on Linux; the real NTFS proof of the rule itself is
 // pbscommon's Windows smoke.
 

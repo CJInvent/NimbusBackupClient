@@ -39,7 +39,8 @@ import (
 // And one the GUI copy was missing: split settings were read from a.config
 // rather than from the resolved pbsCfg, so a multi-PBS-only configuration —
 // exactly the one audit M-01/M-04 was raised about — silently ignored the
-// per-server DisableSplit and SplitSizeBytes.
+// per-server split settings (since removed with the split feature itself,
+// docs/V4-GUI-AUDIT.md S1).
 //
 // Neither list was a decision. They are what two copies of one function look
 // like after a year of fixes landing in whichever copy the bug was reported
@@ -249,11 +250,6 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 		UseVSS:          req.UseVSS,
 		Compression:     compression,
 		ExcludeList:     req.ExcludeList,
-		// From the RESOLVED server, not from a.config: the GUI copy read
-		// these from the legacy top-level fields, so a multi-PBS-only
-		// configuration ignored the per-server split settings entirely.
-		DisableSplit:    pbsCfg.DisableSplit,
-		SplitSizeBytes:  pbsCfg.SplitSizeBytes(),
 		UploadLimitMbps: a.config.UploadLimitMbps,
 
 		OnProgress: func(percent float64, message string) {

@@ -7,7 +7,7 @@ import HeaderControls from './components/HeaderControls'
 import PathPicker from './components/PathPicker'
 
 // Wails runtime imports (will be available when built with Wails)
-let GetConfigWithHostname, SaveConfig, TestConnection, StartBackup, StopBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListVolumeFiles, DownloadFilesFromVolume, LastVolumeListTruncated, ListVolumePartitions, RestoreFilesFromVolume, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListVolumeDirectory, CancelVolumeFileRestore
+let GetConfigWithHostname, StartBackup, StopBackup, ListSnapshots, ListSnapshotContents, GetSnapshotMeta, RestoreSnapshot, ListPhysicalDisks, GetVersion, EventsOn, SearchFiles, CancelSearch, GetControlServerStatus, SaveControlServerConfig, SetTrayLanguage, CheckDownloadSpace, DownloadSelection, ListVolumeFiles, DownloadFilesFromVolume, LastVolumeListTruncated, ListVolumePartitions, RestoreFilesFromVolume, ListDrives, ListFolders, CreateFolder, DefaultSaveDir, ListVolumeDirectory, CancelVolumeFileRestore
 let SaveScheduledJob, UpdateScheduledJob, GetScheduledJobs, DeleteScheduledJob, GetJobHistory, GetSystemInfo, GetLastBackupDirs, GetSecurityWarnings, GetExchangeStatus, QueryExchangeLogMode
 // Run registry: the service's record of what is running, whatever started it
 let GetActiveRuns, GetRecentRuns
@@ -34,8 +34,6 @@ if (window.go) {
   ListVolumeDirectory = window.go.main.App.ListVolumeDirectory
   CancelVolumeFileRestore = window.go.main.App.CancelVolumeFileRestore
   DownloadFilesFromVolume = window.go.main.App.DownloadFilesFromVolume
-  SaveConfig = window.go.main.App.SaveConfig
-  TestConnection = window.go.main.App.TestConnection
   StartBackup = window.go.main.App.StartBackup
   StopBackup = window.go.main.App.StopBackup
   ListSnapshots = window.go.main.App.ListSnapshots
@@ -97,7 +95,6 @@ function App() {
   // Multi-PBS states
   const [pbsServers, setPbsServers] = useState([])
   const [defaultPBSID, setDefaultPBSID] = useState('')
-  const [selectedPBSID, setSelectedPBSID] = useState('')
   const [editingServer, setEditingServer] = useState(null)
   const [serverFormData, setServerFormData] = useState({
     id: '',
@@ -148,9 +145,6 @@ function App() {
       : []
   const [progress, setProgress] = useState(0)
   const [backupPhase, setBackupPhase] = useState('')   // current engine phase, shown once in the card
-  // Opt-in: split this backup into parts (for the first backup of a large volume).
-  // Off by default → no size analysis, the backup starts immediately.
-  const [splitFirstBackup, setSplitFirstBackup] = useState(false)
 
   // Scheduling states
   const [backupMode, setBackupMode] = useState('oneshot') // 'oneshot' or 'scheduled'
@@ -212,7 +206,6 @@ function App() {
     ads: false   // disabled in UI until NTFS sidecar lands
   })
   const [restoreLoading, setRestoreLoading] = useState(false)
-  const [restoreProgress, setRestoreProgress] = useState(0)
   // Unified task progress for scan / restore / zip download. Fed by every
   // restore:progress event; visible from first event until 100% (with a short
   // linger) — it does NOT blink between emits, unlike the old status toasts.
@@ -469,7 +462,6 @@ function App() {
     if (!EventsOn) return
     const unsubP = EventsOn('restore:progress', (data) => {
       const pct = Math.round(data.percent || 0)
-      setRestoreProgress(pct)
       // Indeterminate when the phase can't know its size (no totals yet).
       const indet = !(data.total_bytes > 0) && pct === 0
       setTaskProg({
@@ -488,7 +480,6 @@ function App() {
     })
     const unsubC = EventsOn('restore:complete', (data) => {
       setRestoreLoading(false)
-      setRestoreProgress(data.success ? 100 : 0)
       showStatus(data.success ? `✅ ${data.message}` : `❌ ${data.message}`, data.success ? 'success' : 'error')
     })
     return () => {
@@ -502,19 +493,6 @@ function App() {
     if (!EventsOn) return
     const unsub = EventsOn('search:progress', (data) => {
       setSearchProgress({ percent: Math.round((data.percent || 0) * 100), message: data.message || '' })
-    })
-    return () => { if (unsub) unsub() }
-  }, [])
-
-  // Split size-analysis progress (explicit-split path only) — folder-by-folder so
-  // a multi-minute scan of a large volume shows movement instead of a frozen spinner.
-  useEffect(() => {
-    if (!EventsOn) return
-    const unsub = EventsOn('analysis:progress', (data) => {
-      const done = data.done || 0
-      const total = data.total || 0
-      const gb = ((data.bytes || 0) / (1024 * 1024 * 1024)).toFixed(1)
-      showStatus(`📊 ${t('splitAnalyzing')} ${done}/${total} (${gb} GB)`, 'info')
     })
     return () => { if (unsub) unsub() }
   }, [])
@@ -626,7 +604,6 @@ function App() {
         if (GetDefaultPBSID) {
           const defaultID = await GetDefaultPBSID()
           setDefaultPBSID(defaultID || '')
-          setSelectedPBSID(defaultID || '')
         }
       } catch (err) {
         console.error('Failed to load PBS servers:', err)
@@ -840,190 +817,6 @@ function App() {
 
   // ==================== END MULTI-PBS HANDLERS ====================
 
-  const handleSaveConfig = async () => {
-    if (!SaveConfig) {
-      showStatus('❌ ' + t('errNoRuntime'), 'error')
-      return
-    }
-
-    try {
-      // Trim all string values to remove whitespace (with safe fallback for undefined)
-      const trimmedConfig = {
-        baseurl: (config.baseurl || '').trim(),
-        certfingerprint: (config.certfingerprint || '').trim(),
-        authid: (config.authid || '').trim(),
-        secret: (config.secret || '').trim(),
-        datastore: (config.datastore || '').trim(),
-        namespace: (config.namespace || '').trim(),
-        backupdir: (config.backupdir || '').trim(),
-        'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
-        usevss: config.usevss !== undefined ? config.usevss : true,
-        upload_limit_mbps: Number(config.upload_limit_mbps) || 0,
-        exchange_aware: !!config.exchange_aware,
-        exchange_log_truncation: !!config.exchange_log_truncation
-      }
-      await SaveConfig(trimmedConfig)
-      setConfig(trimmedConfig)
-      showStatus(`✅ ${t('statusConfigSaved')}`, 'success')
-    } catch (err) {
-      showStatus(`❌ ${t('errPrefix')}: ${err}`, 'error')
-    }
-  }
-
-  const handleTestConnection = async () => {
-    if (!TestConnection) {
-      showStatus('❌ ' + t('errNoRuntime'), 'error')
-      return
-    }
-
-    // Test with current form values (no need to save first). Declared outside the
-    // try so the TOFU retest in catch can reuse these already-normalized fields.
-    const testConfig = {
-      baseurl: (config.baseurl || '').trim(),
-      certfingerprint: (config.certfingerprint || '').trim(),
-      authid: (config.authid || '').trim(),
-      secret: (config.secret || '').trim(),
-      datastore: (config.datastore || '').trim(),
-      namespace: (config.namespace || '').trim(),
-      backupdir: (config.backupdir || '').trim(),
-      'backup-id': (config['backup-id'] || '').trim() || hostname, // Use hostname if empty
-      usevss: config.usevss !== undefined ? config.usevss : true
-    }
-
-    try {
-      await TestConnection(testConfig)
-      showStatus(`✅ ${t('statusConnectionOK')}`, 'success')
-    } catch (err) {
-      // Self-signed cert + no fingerprint yet: discover, re-test pinned, fill the
-      // form so a Save persists it (legacy single-server config).
-      if (isCertError(err) && !(config.certfingerprint || '').trim() && GetServerFingerprint) {
-        try {
-          const fp = await GetServerFingerprint((config.baseurl || '').trim())
-          if (window.confirm(t('tofuConfirm').replace('{host}', config.baseurl).replace('{fp}', fp))) {
-            // Reuse the already-normalized testConfig (trimmed fields) for the pinned retest.
-            await TestConnection({ ...testConfig, certfingerprint: fp })
-            setConfig(prev => ({ ...prev, certfingerprint: fp }))
-            showStatus(`✅ ${t('statusFingerprintPinnedSave')}`, 'success')
-            return
-          }
-        } catch (fpErr) {
-          showStatus(`❌ ${t('statusFingerprintFailed')} ${fpErr}`, 'error')
-          return
-        }
-      }
-      showStatus(`❌ ${err}`, 'error')
-    }
-  }
-
-  const handleLoadConfigFile = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      try {
-        const loadedConfig = JSON.parse(evt.target.result)
-        setConfig(loadedConfig)
-        showStatus(`✅ ${t('statusConfigLoaded')}`, 'success')
-      } catch (err) {
-        showStatus(`❌ ${t('statusInvalidJSON')}`, 'error')
-      }
-    }
-    reader.readAsText(file)
-  }
-
-  // Execute split backup for large volumes (explicit opt-in via the split toggle).
-  // CreateBackupSplitPlan runs the size analysis the user asked for (bounded, and
-  // reporting folder-by-folder progress via the "analysis:progress" event) and
-  // returns one job per part; we then run a backup per part.
-  const executeSplitBackup = async (dirList) => {
-    if (!window.go || !window.go.main.App.CreateBackupSplitPlan) {
-      showStatus('❌ ' + t('errSplitUnavailable'), 'error')
-      return
-    }
-
-    try {
-      showStatus(`📊 ${t('splitAnalyzing')}`, 'info')
-      const splitPlan = await window.go.main.App.CreateBackupSplitPlan(
-        dirList,
-        config['backup-id'] || hostname
-      )
-
-      // If the analysis didn't yield a real split (volume below threshold, scan
-      // incomplete, or splitting disabled), the single "job" only covers the
-      // enumerated subfolders and would DROP files sitting directly under the
-      // selected root. Fall back to a normal full backup of the roots, which
-      // always captures everything.
-      if (!splitPlan || splitPlan.length <= 1) {
-        setProgress(5)
-        await StartBackup(
-          backupType,
-          dirList,
-          selectedDrives,
-          excludesForType(),
-          config['backup-id'],
-          config.usevss,
-          ''
-        )
-        return
-      }
-
-      showStatus(`🔄 ${t('splitLaunching').replace('{n}', splitPlan.length)}`, 'info')
-
-      // Execute split jobs sequentially
-      for (let i = 0; i < splitPlan.length; i++) {
-        const job = splitPlan[i]
-        showStatus(
-          `📦 Backup ${job.index}/${job.total_jobs}: ${job.size_fmt}...`,
-          'info'
-        )
-
-        try {
-          await StartBackup(
-            backupType,
-            job.folders,
-            selectedDrives,
-            // Merge user exclusions with this job's own (a root-remainder job
-            // excludes the subfolders already covered by other jobs — v2-H-01).
-            [...excludesForType(), ...(job.exclude_list || [])],
-            job.backup_id,
-            config.usevss,
-            ''
-          )
-
-          // Wait for completion (simplified - in production, use event polling)
-          showStatus(
-            `✅ Backup ${job.index}/${job.total_jobs} terminé`,
-            'success'
-          )
-        } catch (err) {
-          showStatus(
-            `❌ Backup ${job.index}/${job.total_jobs} échoué: ${err}`,
-            'error'
-          )
-
-          const retry = window.confirm(
-            `Le backup ${job.index}/${job.total_jobs} a échoué.\n\n` +
-            `Voulez-vous réessayer ce backup avant de continuer?`
-          )
-
-          if (retry) {
-            i-- // Retry same job
-          } else {
-            throw new Error(`Split backup ${job.index} failed`)
-          }
-        }
-      }
-
-      showStatus(
-        `🎉 Tous les backups partiels terminés avec succès (${splitPlan.length}/${splitPlan.length})`,
-        'success'
-      )
-    } catch (err) {
-      showStatus(`❌ ${t('errSplitBackup')}: ${err}`, 'error')
-    }
-  }
-
   const handleStartBackup = async () => {
     if (!StartBackup) {
       showStatus('❌ ' + t('errNoRuntime'), 'error')
@@ -1040,17 +833,6 @@ function App() {
 
     if (backupType === 'machine' && selectedDrives.length === 0) {
       showStatus('❌ ' + t('errNeedDisk'), 'error')
-      return
-    }
-
-    // Splitting is now an explicit, opt-in choice (the "split this backup" toggle),
-    // intended for the first backup of a large volume. When it's off we never size
-    // the directories — the backup starts immediately, so a whole-drive root like
-    // C:\ can no longer hang on the analysis. When it's on, executeSplitBackup runs
-    // the (bounded, progress-reporting) size analysis the user asked for, then runs
-    // one backup per part. Subsequent backups are left unsplit (full).
-    if (splitFirstBackup && backupType === 'directory' && backupMode === 'oneshot') {
-      await executeSplitBackup(dirList)
       return
     }
 
@@ -1181,7 +963,7 @@ function App() {
     showStatus(`📥 ${t('loadingSnapshotContents')}`, 'info')
     const effectiveBackupId = snap.backup_id || restoreBackupId
     try {
-      // Backend uses the snapshot's actual backup_id (snap.backup_id) so split
+      // Backend uses the snapshot's actual backup_id (snap.backup_id) so multi-folder
       // backups list their real contents, not the partial search term.
       const entries = await ListSnapshotContents(restorePBSID || '', effectiveBackupId, snap.unix, forceRefresh)
       setSnapshotEntries(entries || [])
@@ -1364,7 +1146,6 @@ function App() {
     }
 
     setRestoreLoading(true)
-    setRestoreProgress(0)
     showStatus(`🔄 ${t('statusRestoring').replace('{time}', selectedSnapshot.time)}`, 'info')
 
     try {
@@ -1471,7 +1252,7 @@ function App() {
 
   // Reconstruct the absolute on-disk location a file came from, by joining the
   // backup's original_path (from the meta sidecar) with the archive-relative
-  // path. Critical for split backups, where each part is a separate backup-id
+  // path. Critical for multi-folder backups, where each folder is a separate backup-id
   // and the relative tree alone doesn't tell you which physical folder/drive a
   // file belonged to. Returns null when the snapshot has no meta sidecar.
   const absOriginPath = (archivePath) => {
@@ -1995,57 +1776,6 @@ function App() {
                 )}
               </div>
 
-              {/* Add Server Form - Prominent when no servers */}
-              <div className="card">
-                <h3>➕ {t('addYourServer')}</h3>
-              <table style={{width: '100%', marginTop: '15px'}}>
-                <thead>
-                  <tr>
-                    <th>{t('name')}</th>
-                    <th>{t('url')}</th>
-                    <th>{t('datastore')}</th>
-                    <th>{t('status')}</th>
-                    <th>{t('actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pbsServers.map(server => (
-                    <tr key={server.id}>
-                      <td>
-                        <strong>{server.name}</strong>
-                        {server.id === defaultPBSID && <span style={{marginLeft: '5px', color: 'var(--nc-warn)'}}>⭐ {t('default')}</span>}
-                        {server.description && <div style={{fontSize: '0.85em', color: 'var(--nc-text-dim)'}}>{server.description}</div>}
-                      </td>
-                      <td>{server.baseurl}</td>
-                      <td>{server.datastore}/{server.namespace || '-'}</td>
-                      <td>
-                        {serverStatus[server.id] === 'testing' && <span style={{color: 'var(--nc-accent)'}}>🔄 {t('testing')}</span>}
-                        {serverStatus[server.id] === 'online' && <span style={{color: 'var(--nc-ok)'}}>🟢 {t('online')}</span>}
-                        {serverStatus[server.id] === 'offline' && <span style={{color: 'var(--nc-err)'}}>🔴 {t('offline')}</span>}
-                        {!serverStatus[server.id] && <span style={{color: 'var(--nc-text-dim)'}}>⚪ {t('untested')}</span>}
-                      </td>
-                      <td>
-                        <button onClick={() => handleTestPBSConnection(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
-                          🔍 {t('test')}
-                        </button>
-                        <button onClick={() => handleEditServer(server)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
-                          ✏️ {t('edit')}
-                        </button>
-                        {server.id !== defaultPBSID && (
-                          <button className="btn btn-warn" onClick={() => handleSetDefaultPBS(server.id)} style={{marginRight: '5px', padding: '5px 10px', fontSize: '0.9em'}}>
-                            ⭐ {t('setAsDefault')}
-                          </button>
-                        )}
-                        <button className="btn btn-danger" onClick={() => handleDeletePBSServer(server.id)} style={{padding: '5px 10px', fontSize: '0.9em'}}>
-                          🗑️ {t('delete')}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-          </div>
-
           {/* Add/Edit Server Form */}
           <div className="card">
             <h3>{editingServer ? `✏️ ${t('editServer')}` : `➕ ${t('addYourServer')}`}</h3>
@@ -2561,35 +2291,7 @@ function App() {
                 </div>
               </div>
             )}
-            {config.usevss && systemInfo.mode === 'Standalone' && !systemInfo.is_admin && (
-              <div className="info-box" style={{marginTop: '10px', backgroundColor: 'var(--nc-warn-bg)', borderColor: 'var(--nc-warn-border)'}}>
-                ⚠️ <strong>{t('vssAdminRequired')}</strong><br/>
-                {t('vssAdminHint')}
-              </div>
-            )}
-            {config.usevss && systemInfo.service_available && (
-              <div className="info-box" style={{marginTop: '10px', backgroundColor: 'color-mix(in srgb, var(--nc-accent) 8%, var(--nc-panel-head))', borderColor: 'color-mix(in srgb, var(--nc-accent) 35%, var(--nc-border))'}}>
-                ℹ️ <strong>{t('vssServiceAvailable')}</strong><br/>
-                {t('vssServiceHint')}
-              </div>
-            )}
           </div>
-
-          {backupType === 'directory' && backupMode === 'oneshot' && (
-            <div className="form-group">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={splitFirstBackup}
-                  onChange={(e) => setSplitFirstBackup(e.target.checked)}
-                />
-                {t('splitFirstBackup')}
-              </label>
-              <div className="info-box" style={{marginTop: '10px', backgroundColor: 'var(--nc-panel-head)', borderColor: 'var(--nc-border)'}}>
-                ℹ️ {t('splitFirstBackupHint')}
-              </div>
-            </div>
-          )}
 
           {progress > 0 && progress < 100 && (
             <div style={{marginTop: '20px', marginBottom: '20px', padding: '15px', backgroundColor: 'var(--nc-panel-head)', borderRadius: '8px', border: '1px solid var(--nc-border)'}}>
@@ -2682,7 +2384,6 @@ function App() {
               setBackupDirs('')
               setExcludeList('')
               setBackupType('directory')
-              setActiveTab('scheduled')
               showStatus(`✖️ ${t('statusEditCancelled')}`, 'info')
             }}>
               ✖️ {t('cancel')}

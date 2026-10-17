@@ -231,8 +231,9 @@ a healthy Last error: No error line is not a warning. PBS reachability logs use
 true, false, or unknown, matching inventory semantics.
 
 * **Directory mode** — `backup_inline.go`: streams PXAR, DIDX dynamic chunking
-  with dedup, junction/locked-file skip with reporting, optional auto-split
-  for large first backups (`backup_split_api.go`, `backup_analysis.go`).
+  with dedup, junction/locked-file skip with reporting. Each selected folder is
+  its own backup group. (The opt-in "split the first backup" feature was
+  removed in `docs/V4-GUI-AUDIT.md` S1.)
 * **What the directory writer does with each entry** (`pbscommon/reparse.go`,
   `pbscommon/pxar.go`; NimbusControl `docs/V4-BETA-FIXES.md` §13.2, F-71 to
   F-74). Every entry is classified from its attributes and, for a reparse
