@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "i18n-audit": "node scripts/i18n-audit.mjs",
     "prebuild": "node scripts/i18n-audit.mjs",
+    "postbuild": "node scripts/check-dist.mjs",
     "test": "node --test test/render.test.mjs"
   },
   "dependencies": {

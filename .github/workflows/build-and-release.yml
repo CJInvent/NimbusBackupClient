@@ -1196,6 +1196,34 @@ jobs:
           Copy-Item NimbusBackup.msi ../../dist/
         shell: pwsh
 
+      # The cabinet must be LZX (Product.wxs MediaTemplate CompressionLevel).
+      # light.exe silently falls back to MSZip if the attribute is dropped,
+      # and nothing else would notice a ~1 MB regression. Also prints the
+      # payload sizes so growth is visible release to release.
+      - name: MSI payload compression (LZX)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Host "::error::MSI compression: $($_.Exception.Message)"; exit 1 }
+          $sz = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sz) { $sz = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path $sz)) { throw "7-Zip not found; cannot inspect the MSI cabinet" }
+          $msi = (Resolve-Path 'dist/NimbusBackup.msi').Path
+          $listing = & $sz l -slt $msi
+          if ($LASTEXITCODE -ne 0) { throw "7z could not list $msi (exit $LASTEXITCODE)" }
+          $methods = @($listing | Where-Object { $_ -match '^Method = ' } | ForEach-Object { ($_ -split ' = ', 2)[1] })
+          # A positive precondition first: an empty list would pass a
+          # "nothing is MSZip" check vacuously.
+          if ($methods.Count -eq 0) { throw "no compressed cabinet entries found in $msi" }
+          $notLzx = @($methods | Where-Object { $_ -notmatch '^LZX' })
+          if ($notLzx.Count -gt 0) {
+            throw "cabinet is not LZX-compressed (methods: $(($methods | Sort-Object -Unique) -join ', ')); check MediaTemplate CompressionLevel in Product.wxs"
+          }
+          $listing | Where-Object { $_ -match '^(Path|Size) = ' } | ForEach-Object { Write-Host $_ }
+          $methodList = ($methods | Sort-Object -Unique) -join ', '
+          $msiBytes = (Get-Item $msi).Length
+          Write-Host "MSI $msiBytes bytes, cabinet method $methodList"
+
       # S9 — the installer customers actually run. Until now this was a manual
       # checklist (MSI_UNINSTALL_TEST.md), which means in practice it was
       # verified when someone remembered to. Exercises both KEEP_CONFIG

@@ -1,0 +1,29 @@
+/* Bundled fonts, WOFF2 only.
+ *
+ * @fontsource's own per-weight CSS (400.css, 700.css) lists a WOFF fallback
+ * after each WOFF2 file, and Vite copies every url() it sees into dist, so the
+ * MSI shipped both formats: ~260 KB of WOFF that never loads. The window is
+ * WebView2 (Chromium), which has read WOFF2 since its first release, so these
+ * faces name the WOFF2 file alone. The files still come from the
+ * @fontsource/opendyslexic package; only the declaration is ours.
+ *
+ * scripts/check-dist.mjs (postbuild) fails the build if a .woff reaches dist
+ * again, or if a file a url() here names is missing from the output.
+ *
+ * OpenDyslexic, OFL-1.1.
+ */
+@font-face {
+  font-family: 'OpenDyslexic';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('@fontsource/opendyslexic/files/opendyslexic-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'OpenDyslexic';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url('@fontsource/opendyslexic/files/opendyslexic-latin-700-normal.woff2') format('woff2');
+}
