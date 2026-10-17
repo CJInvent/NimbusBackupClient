@@ -361,8 +361,9 @@ func NewRunUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// PostCommandArtifact streams a file (typically an extraction zip) to the
-// control server as the binary artifact of a completed command. Separate
+// PostCommandArtifact streams a file to the control server as the binary
+// artifact of a completed command: a run's log excerpt (fetch_run_log), the
+// only artifact the server accepts now that it reads backups itself. Separate
 // from PostCommandResult because command results are small JSON by contract
 // (the server enforces a small body cap on them); artifacts are bulk data
 // with their own, larger cap and disk-backed handling server-side.

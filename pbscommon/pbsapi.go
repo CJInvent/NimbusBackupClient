@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/net/http2"
@@ -492,13 +493,13 @@ func (pbs *PBSClient) CreateFixedIndex(fic FixedIndexCreateReq) (uint64, error) 
 
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return 0, err
 	}
 
 	if resp2.StatusCode != http.StatusOK {
 		resp1, _ := io.ReadAll(resp2.Body)
-		fmt.Println("Error making request:", string(resp1), string(resp2.Proto))
+		debugf("Error making request: %v %v", string(resp1), string(resp2.Proto))
 		return 0, fmt.Errorf("request failed: %s %s", string(resp1), resp2.Proto)
 	}
 
@@ -509,10 +510,10 @@ func (pbs *PBSClient) CreateFixedIndex(fic FixedIndexCreateReq) (uint64, error) 
 	var R IndexCreateResp
 	err = json.Unmarshal(resp1, &R)
 	if err != nil {
-		fmt.Println("Error parsing JSON:", err)
+		debugf("Error parsing JSON: %v", err)
 		return 0, err
 	}
-	fmt.Println("Writer id: ", R.WriterID)
+	debugf("Writer id: %v", R.WriterID)
 	defer resp2.Body.Close()
 	f := File{
 		CryptMode: pbs.indexCryptMode(),
@@ -545,7 +546,7 @@ func (pbs *PBSClient) AssignFixedChunks(writerid uint64, digests []string, offse
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 	defer resp2.Body.Close()
@@ -578,7 +579,7 @@ func (pbs *PBSClient) CloseFixedIndex(writerid uint64, checksum string, totalsiz
 
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 	defer resp2.Body.Close()
@@ -615,46 +616,46 @@ func redactedHeaders(h http.Header) http.Header {
 }
 
 func (pbs *PBSClient) CreateDynamicIndex(name string) (uint64, error) {
-	fmt.Printf("=== CreateDynamicIndex START ===\n")
-	fmt.Printf("Archive name: %s\n", name)
-	fmt.Printf("BaseURL: %s\n", pbs.BaseURL)
+	debugf("=== CreateDynamicIndex START ===")
+	debugf("Archive name: %s", name)
+	debugf("BaseURL: %s", pbs.BaseURL)
 
 	// Use json.Marshal to properly escape special characters and ensure valid JSON
 	payload := map[string]string{"archive-name": name}
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Printf("ERROR: Failed to marshal JSON: %v\n", err)
+		debugf("ERROR: Failed to marshal JSON: %v", err)
 		return 0, fmt.Errorf("failed to marshal JSON payload: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", pbs.BaseURL+"/dynamic_index", bytes.NewBuffer(jsonPayload))
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create request: %v\n", err)
+		debugf("ERROR: Failed to create request: %v", err)
 		return 0, err
 	}
 
 	req.Header.Add("Authorization", fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret))
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 
-	fmt.Printf("Sending POST request to: %s\n", req.URL.String())
-	fmt.Printf("Headers: %+v\n", redactedHeaders(req.Header))
+	debugf("Sending POST request to: %s", req.URL.String())
+	debugf("Headers: %+v", redactedHeaders(req.Header))
 
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Printf("ERROR: HTTP request failed: %v\n", err)
-		fmt.Printf("ERROR: Error type: %T\n", err)
+		debugf("ERROR: HTTP request failed: %v", err)
+		debugf("ERROR: Error type: %T", err)
 		return 0, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp2.Body.Close()
 
-	fmt.Printf("Response status: %d %s\n", resp2.StatusCode, resp2.Status)
-	fmt.Printf("Response proto: %s\n", resp2.Proto)
+	debugf("Response status: %d %s", resp2.StatusCode, resp2.Status)
+	debugf("Response proto: %s", resp2.Proto)
 
 	if resp2.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp2.Body)
-		fmt.Printf("ERROR: PBS returned non-200 status\n")
-		fmt.Printf("Status: %d\n", resp2.StatusCode)
-		fmt.Printf("Body: %s\n", string(bodyBytes))
+		debugf("ERROR: PBS returned non-200 status")
+		debugf("Status: %d", resp2.StatusCode)
+		debugf("Body: %s", string(bodyBytes))
 		return 0, fmt.Errorf("PBS returned HTTP %d: %s", resp2.StatusCode, string(bodyBytes))
 	}
 
@@ -665,10 +666,10 @@ func (pbs *PBSClient) CreateDynamicIndex(name string) (uint64, error) {
 	var R IndexCreateResp
 	err = json.Unmarshal(resp1, &R)
 	if err != nil {
-		fmt.Println("Error parsing JSON:", err)
+		debugf("Error parsing JSON: %v", err)
 		return 0, err
 	}
-	fmt.Println("Writer id: ", R.WriterID)
+	debugf("Writer id: %v", R.WriterID)
 	defer resp2.Body.Close()
 	f := File{
 		CryptMode: pbs.indexCryptMode(),
@@ -884,12 +885,12 @@ func (pbs *PBSClient) putChunk(writerid uint64, digest string, encoded []byte, p
 	}
 	req, err := http.NewRequest("POST", pbs.BaseURL+suburl+q.Encode(), bytes.NewBuffer(outBuffer))
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 
@@ -897,7 +898,7 @@ func (pbs *PBSClient) putChunk(writerid uint64, digest string, encoded []byte, p
 
 	if resp2.StatusCode != http.StatusOK {
 		resp1, _ := io.ReadAll(resp2.Body)
-		fmt.Println("Error making request:", string(resp1), string(resp2.Proto))
+		debugf("Error making request: %v %v", string(resp1), string(resp2.Proto))
 		return fmt.Errorf("Error making request: %s %s", string(resp1), string(resp2.Proto))
 	}
 
@@ -928,7 +929,7 @@ func (pbs *PBSClient) AssignDynamicChunks(writerid uint64, digests []string, off
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 	defer resp2.Body.Close()
@@ -961,7 +962,7 @@ func (pbs *PBSClient) CloseDynamicIndex(writerid uint64, checksum string, totals
 
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 	defer resp2.Body.Close()
@@ -1082,7 +1083,7 @@ func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
 
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return err
 	}
 
@@ -1380,7 +1381,7 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 					if !nextEndpointWorthTrying(err) {
 						return nil, err
 					}
-					fmt.Printf("Session not opened at %s (%v); trying the next instance\n", ep.BaseURL, err)
+					debugf("Session not opened at %s (%v); trying the next instance", ep.BaseURL, err)
 				}
 				return nil, last
 			},
@@ -1452,7 +1453,7 @@ func (pbs *PBSClient) openSession(network, addr, fingerprint string, reader bool
 	}
 
 	q.Add("backup-id", pbs.Manifest.BackupID)
-	fmt.Println(q.Encode())
+	debugf("%v", q.Encode())
 	//q.Add("debug", "1")
 
 	// Build and log the full HTTP request
@@ -1477,25 +1478,25 @@ func (pbs *PBSClient) openSession(network, addr, fingerprint string, reader bool
 	redactedRequest := strings.Replace(fullRequest,
 		fmt.Sprintf("PBSAPIToken=%s:%s", pbs.AuthID, pbs.Secret),
 		fmt.Sprintf("PBSAPIToken=%s:<redacted>", pbs.AuthID), 1)
-	fmt.Printf("=== SENDING HTTP REQUEST TO PBS ===\n%s=== END REQUEST ===\n", redactedRequest)
+	debugf("=== SENDING HTTP REQUEST TO PBS ===\n%s=== END REQUEST ===", redactedRequest)
 
 	// Send the request
 	conn.Write([]byte(fullRequest))
-	fmt.Print("Reading response to upgrade...\n")
+	debugf("Reading response to upgrade...")
 	buf := make([]byte, 0)
 	for !strings.HasSuffix(string(buf), "\r\n\r\n") && !strings.HasSuffix(string(buf), "\n\n") {
 		//fmt.Println(buf)
 		b2 := make([]byte, 1)
 		nbytes, err := conn.Read(b2)
 		if err != nil || nbytes == 0 {
-			fmt.Println("Connection unexpectedly closed")
+			debugf("Connection unexpectedly closed")
 			return nil, err
 		}
 		buf = append(buf, b2[:nbytes]...)
 
 		//fmt.Println(string(b2))
 	}
-	fmt.Printf("=== RECEIVED HTTP RESPONSE FROM PBS ===\n%s\n=== END RESPONSE ===\n", string(buf))
+	debugf("=== RECEIVED HTTP RESPONSE FROM PBS ===\n%s\n=== END RESPONSE ===", string(buf))
 
 	lines := strings.Split(string(buf), "\n")
 
@@ -1503,8 +1504,8 @@ func (pbs *PBSClient) openSession(network, addr, fingerprint string, reader bool
 		toks := strings.Split(lines[0], " ")
 		if len(toks) > 1 && toks[1] != "101" {
 			statusCode := strings.Join(toks[1:], " ")
-			fmt.Printf("ERROR: PBS rejected upgrade with status: %s\n", statusCode)
-			fmt.Printf("Response headers:\n%s\n", string(buf))
+			debugf("ERROR: PBS rejected upgrade with status: %s", statusCode)
+			debugf("Response headers:\n%s", string(buf))
 
 			// Read the response body (JSON error details) based on Content-Length
 			var contentLength int
@@ -1526,7 +1527,7 @@ func (pbs *PBSClient) openSession(network, addr, fingerprint string, reader bool
 					totalRead += n
 				}
 				responseBody = string(bodyBuf[:totalRead])
-				fmt.Printf("PBS error body: %s\n", responseBody)
+				debugf("PBS error body: %s", responseBody)
 			}
 
 			errBody := string(buf)
@@ -1540,8 +1541,8 @@ func (pbs *PBSClient) openSession(network, addr, fingerprint string, reader bool
 		}
 	}
 
-	fmt.Printf("Upgraderesp: %s\n", string(buf))
-	fmt.Println("Successfully upgraded to HTTP/2.")
+	debugf("Upgraderesp: %s", string(buf))
+	debugf("Successfully upgraded to HTTP/2.")
 	opened = true
 	if pbs.UploadLimitBytesPerSec > 0 {
 		return &rateLimitedConn{Conn: conn, limit: pbs.UploadLimitBytesPerSec, last: time.Now()}, nil
@@ -1648,7 +1649,7 @@ func (pbs *PBSClient) DownloadPreviousToBytes(archivename string) ([]byte, error
 	}
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return nil, err
 	}
 	defer resp2.Body.Close()
@@ -1675,10 +1676,13 @@ func (pbs *PBSClient) DownloadToBytes(archivename string) ([]byte, error) { //In
 	}
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return nil, err
 	}
 	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		return nil, httpStatusError(resp2, "download of "+archivename)
+	}
 
 	ret, err := io.ReadAll(resp2.Body)
 
@@ -1771,10 +1775,13 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 	}
 	resp2, err := pbs.Client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		debugf("Error making request: %v", err)
 		return nil, err
 	}
 	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		return nil, httpStatusError(resp2, "chunk "+digest)
+	}
 
 	ret, err := io.ReadAll(resp2.Body)
 
@@ -1820,6 +1827,41 @@ func (pbs *PBSClient) GetChunkData(digest string) ([]byte, error) {
 // DebugLogFn, when set by the host application, receives diagnostic lines
 // from hot paths (timings, retries). Nil = silent. Set once at startup.
 var DebugLogFn func(string)
+
+// debugf is the only way this package says anything that is not an error it
+// returns. Never stdout: NimbusControl's volume reader is built from this
+// package, and its stdout is the reader's data channel
+// (NimbusControl docs/V4-CLIENT-CHANGES-FOR-SERVER-BROWSE.md section 3.1).
+func debugf(format string, args ...any) {
+	if DebugLogFn != nil {
+		DebugLogFn(fmt.Sprintf(format, args...))
+	}
+}
+
+// httpStatusError is a non-200 answer from PBS, said as one: the status and
+// the start of what PBS sent back, on one line (section 3.2). Without it the
+// error page is handed back as the index or chunk that was asked for, and the
+// person browsing reads "bad magic" instead of "permission check failed".
+func httpStatusError(resp *http.Response, what string) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	text := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return ' '
+		}
+		return r
+	}, string(body))), " ")
+	if len(text) > 300 {
+		cut := 300
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut] + "..."
+	}
+	if text == "" {
+		return fmt.Errorf("PBS HTTP %d for %s", resp.StatusCode, what)
+	}
+	return fmt.Errorf("PBS HTTP %d for %s: %s", resp.StatusCode, what, text)
+}
 
 // AuditLogFn receives the record of what this client did to a snapshot's
 // bytes: which key, which crypt-mode, which files encrypted, which not.

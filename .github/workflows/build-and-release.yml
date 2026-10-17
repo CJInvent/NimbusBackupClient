@@ -315,6 +315,23 @@ jobs:
           run_view linux service
           exit $fail
 
+      # NimbusControl builds its volume reader from these two packages, for
+      # Linux, at a pinned client SHA (NimbusControl
+      # docs/V4-CLIENT-CHANGES-FOR-SERVER-BROWSE.md section 2). A gui, Wails or
+      # Windows-only import outside a _windows.go file would break the
+      # server's next pin bump; it breaks this job first instead.
+      - name: Build the server reader's packages for Linux
+        env:
+          GOWORK: off
+          CGO_ENABLED: '0'
+          GOOS: linux
+        run: |
+          for m in pbscommon imagebrowse; do
+            ( cd "$m" && go mod download && go build ./... ) \
+              && echo "OK   $m builds for linux, cgo off" \
+              || { echo "::error::$m does not build for Linux (the server's volume reader needs it)"; exit 1; }
+          done
+
   # Security and quality checks
   security:
     name: Security Checks

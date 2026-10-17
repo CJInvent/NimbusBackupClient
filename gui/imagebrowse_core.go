@@ -23,12 +23,13 @@ package main
 //     mapping an image and booting it. That is a real, separate capability and
 //     the phrase is reserved for it. Do not use it for anything in this file.
 //
-// imagebrowse_core.go — VOLUME (machine/image) backup browsing, shared by
-// BOTH processes: the GUI's Browse tab AND the service's control-plane
-// delegation (the NimbusControl portal browses image backups by sending
-// commands that land here — see controlplane_glue.go). Progress reporting is
-// abstracted behind a.ibEmit so this file carries no Wails dependency: enumerate partitions, walk a partition's file tree, and download or
-// restore a selection out of a raw disk image without restoring the image.
+// imagebrowse_core.go — VOLUME (machine/image) backup browsing for the
+// machine's own Browse tab (the console asks, the service executes). The
+// portal no longer asks a machine to browse: NimbusControl reads a backup
+// itself with its volume reader. Progress reporting is abstracted behind
+// a.ibEmit so this file carries no Wails dependency: enumerate partitions,
+// walk a partition's file tree, and download or restore a selection out of a
+// raw disk image without restoring the image.
 //
 // Data path: PBS reader session -> pbscommon.FIDXReaderAt (lazy, chunk-LRU)
 // -> imagebrowse partition parse -> NTFS / FAT / exFAT reader over an
