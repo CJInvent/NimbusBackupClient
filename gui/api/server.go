@@ -81,6 +81,9 @@ func NewServer(addr string, handler BackupHandler, token string) *Server {
 // the whole point: one store, every trigger.
 func (s *Server) Runs() *RunRegistry { return s.runs }
 
+// ActiveRestoreCount is the number of console restore jobs still running.
+func (s *Server) ActiveRestoreCount() int { return s.restoreJobs.running() }
+
 // SetVersion stamps the build version reported by /status.
 func (s *Server) SetVersion(v string) { s.version = v }
 

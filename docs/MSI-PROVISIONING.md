@@ -155,6 +155,50 @@ installed to `C:\ProgramData\NimbusBackup\provisioning.json`.
 The stock MSI is unchanged: with no profile the installer behaves exactly as
 it does today, and the agent starts standalone.
 
+## The MSI property `PROVISIONING_PROFILE` (the server's installer page)
+
+The control server's Download installer page (NimbusControl
+`docs/V4-CLIENT-RELEASES.md` 4.1) does not rebuild the MSI. It writes the
+profile into the stock MSI's Property table as `PROVISIONING_PROFILE`
+(base64 of the profile JSON) with msitools and gives the copy a new
+PackageCode. The same property works on the command line:
+
+```
+msiexec /i NimbusBackup-v1.01.00-dev.5.msi /qn PROVISIONING_PROFILE=<base64>
+```
+
+The MSI writes it to `HKLM\SOFTWARE\NimbusBackup\Provisioning`, value
+`Profile`, in a subkey whose ACL is SYSTEM and Administrators only. The service
+reads it before `provisioning.json`, applies it under the same rules, then
+overwrites and deletes the subkey (and any `provisioning.json` beside it). A
+value that is not base64 is refused and deleted.
+
+The MSI also writes the full release version to
+`HKLM\SOFTWARE\NimbusBackup\InstalledVersion`.
+
+## Self-update (NimbusControl `docs/V4-CLIENT-RELEASES.md` 7)
+
+When a check-in carries `update`, the service waits until no backup and no
+console restore is running, downloads the MSI into
+`C:\ProgramData\NimbusBackup\update\` (SYSTEM and Administrators only), checks
+its size and SHA-256 against the offer, reports `started`, and runs
+`install.cmd` there through a one-time SYSTEM scheduled task named
+`NimbusBackupUpdate`. The batch file runs `msiexec /i agent.msi /qn /norestart
+/l*v install.log` and writes the exit code to `exit.txt`. `pending.json` in the
+same folder stops a second install from starting for an hour.
+
+The service that starts afterwards waits up to ten minutes for `exit.txt`,
+reports `installed` (exit 0 or 3010 and its own version is the one offered) or
+`failed` with the exit code and the last 8 KB of the log (redacted), then
+deletes the folder and the task. The server stops offering a version that
+failed twice.
+
+When the check-in's `agent_line` is not `ok`, the agent is on another release
+line than its server: scheduled backups are skipped with a log line, and the
+GUI shows one line saying which version is needed. Without signatures the agent
+trusts its pinned control server for what it installs (the risk is stated in
+the server's spec, 7.4).
+
 ## Server-side obligations (NimbusControl Phase 6)
 
 1. Generate profiles per org with a one-time enrollment token.

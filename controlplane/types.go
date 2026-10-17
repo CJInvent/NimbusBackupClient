@@ -362,6 +362,12 @@ type CheckinResponse struct {
 	// its data path (NimbusControl docs/V4-DATAPATH-PROXY.md). nil from an
 	// older server, which is direct. See datapath.go.
 	Datapath *DatapathCheckin `json:"datapath"`
+
+	// Update is the release this machine should install, nil when there is
+	// nothing to do; AgentLine is its version against the server's line
+	// (NimbusControl docs/V4-CLIENT-RELEASES.md §1.4, §7). See update.go.
+	Update    *UpdateOffer `json:"update"`
+	AgentLine *AgentLine   `json:"agent_line"`
 }
 
 // RunStatus values — the server's state machine is forward-only

@@ -1,6 +1,9 @@
 const translations = {
   fr: {
     orgSuspendedBanner: "Sauvegardes suspendues par votre prestataire : les sauvegardes planifiées ne s'exécutent pas tant que votre organisation n'est pas réactivée.",
+    updatePendingBanner: "Mise à jour de l'agent vers {version} en cours : le service redémarre pendant l'installation.",
+    agentLineOlderBanner: "Cet agent doit être mis à jour vers {version} pour son serveur de contrôle : les sauvegardes planifiées ne s'exécutent pas d'ici là.",
+    agentLineNewerBanner: "Cet agent est plus récent que son serveur de contrôle, qui doit être mis à jour vers {version} : les sauvegardes planifiées ne s'exécutent pas d'ici là.",
     storageTitle: "Identité du stockage",
     storageError: "Identité du stockage : intervention requise",
     storageReview: "Vérifiez les identités des disques et partitions avant de valider les périphériques sélectionnés.",
@@ -481,6 +484,9 @@ const translations = {
   },
   en: {
     orgSuspendedBanner: "Backups suspended by your provider: scheduled backups do not run until your organization is reactivated.",
+    updatePendingBanner: "Updating the agent to {version}: the service restarts during the install.",
+    agentLineOlderBanner: "This agent must be updated to {version} for its control server: scheduled backups do not run until then.",
+    agentLineNewerBanner: "This agent is newer than its control server, which must be updated to {version}: scheduled backups do not run until then.",
     storageTitle: "Storage identity",
     storageError: "Storage identity requires intervention",
     storageReview: "Review the device and partition identities before approving selected devices.",
@@ -961,6 +967,9 @@ const translations = {
   },
   es: {
     orgSuspendedBanner: "Copias de seguridad suspendidas por su proveedor: las copias programadas no se ejecutan hasta que se reactive su organización.",
+    updatePendingBanner: "Actualizando el agente a {version}: el servicio se reinicia durante la instalación.",
+    agentLineOlderBanner: "Este agente debe actualizarse a {version} para su servidor de control: las copias programadas no se ejecutan hasta entonces.",
+    agentLineNewerBanner: "Este agente es más reciente que su servidor de control, que debe actualizarse a {version}: las copias programadas no se ejecutan hasta entonces.",
     storageTitle: "Identidad del almacenamiento",
     storageError: "La identidad del almacenamiento requiere intervención",
     storageReview: "Revise las identidades de los discos y particiones antes de aprobar los dispositivos seleccionados.",
