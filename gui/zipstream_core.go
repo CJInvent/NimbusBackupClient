@@ -16,10 +16,10 @@ package main
 // deflate would burn a core to shave little, and Store keeps throughput at
 // I/O speed AND makes the progress/ETA math honest (bytes in == bytes out).
 //
-// SERVICE-ONLY, since the restore rewire. Both callers live there now: a
-// console "Package as ZIP" arrives over the local API as an image-download
-// job, and the portal's delegated image_extract streams into its artifact
-// upload. One implementation, two callers, neither of them in the GUI.
+// SERVICE-ONLY, since the restore rewire. Its callers live there: a console
+// "Package as ZIP" arrives over the local API as an image-download job. (The
+// portal's delegated image_extract was the other one, until the server
+// started reading backups itself.) None of them is in the GUI.
 
 import (
 	"archive/zip"

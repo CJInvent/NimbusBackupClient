@@ -79,6 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/V4-FIRST-ENROLLMENT.md` section 7). A binding with no recorded
   identity strength is refused instead of matched by id (every approval
   records one; nothing deployed holds one).
+- **Portal-delegated image browsing** (NimbusControl
+  `docs/V4-CLIENT-CHANGES-FOR-SERVER-BROWSE.md` §1). The server reads backups
+  itself; `gui/controlplane_browse.go` and its console stub are gone, and an
+  `image_*` command from an old server is refused as unsupported.
 - **The agent no longer writes the PBS snapshot comment** (V4-AUDITABILITY S1).
   The control server writes it (`nimbus-run:<run id>`), the only writer;
   `cpStampSnapshotNotes` and `pbscommon.SetSnapshotNotes` are gone.
@@ -107,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The server's audit log records a storage authority move** (R2): after
   approvals are invalidated by a change of control server, the storage report
   carries `previous_authority` until the next approval.
+- **`pbscommon` no longer writes to stdout** (§3.1): its 43 prints go
+  through `DebugLogFn` (the agent's log, the server reader's TRACE relay), so
+  the server's volume reader no longer has to capture stdout to keep its data
+  channel clean.
+- **A PBS error page is no longer read as an index or a chunk** (§3.2):
+  `DownloadToBytes` and `GetChunkData` return `PBS HTTP <status> for <what>:
+  <what PBS said>` instead of "bad magic" or "short chunk response".
 - **Directory backups mishandled junctions, app execution aliases and
   online-only files (F-71).** Since Go 1.23 a junction is reported as an
   irregular file rather than a link, so the writer opened it: the profile's

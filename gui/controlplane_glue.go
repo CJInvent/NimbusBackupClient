@@ -536,9 +536,9 @@ func cpCheckPBSReachability(cfg *Config) *bool {
 
 // cpErr is the shape a failed command reports back to the portal.
 //
-// Untagged, unlike the browse handlers it mostly serves: the run-log handler
-// is compiled into both builds and uses it too, and one helper with two
-// tagged copies is a worse answer than one helper.
+// Untagged: the run-log and folder-picker handlers are compiled into both
+// builds and use it, and one helper with two tagged copies is a worse answer
+// than one helper.
 func cpErr(msg string) controlplane.CommandResult {
 	return controlplane.CommandResult{OK: false, Result: map[string]interface{}{"error": msg}}
 }
@@ -547,11 +547,11 @@ func cpErr(msg string) controlplane.CommandResult {
 // on the runningJobs de-dup in executeJob, so a re-delivered
 // command while the job runs is a clean no-op.
 func (a *App) cpHandleCommand(cmd controlplane.Command) controlplane.CommandResult {
-	// Portal-delegated image browsing (image_partitions / image_scan /
-	// image_dir / image_extract) — see controlplane_browse.go.
-	if res, handled := a.cpHandleBrowseCommand(cmd); handled {
-		return res
-	}
+	// No image_* commands: the server reads a backup itself and never asks a
+	// machine to (NimbusControl docs/V4-BROWSE.md §14,
+	// docs/V4-CLIENT-CHANGES-FOR-SERVER-BROWSE.md §1). One from an old server
+	// falls through to "unsupported command" below.
+	//
 	// Portal-delegated LIVE filesystem browsing (list_dir) for the directory
 	// job's target picker — see controlplane_fsbrowse.go.
 	if res, handled := a.cpHandleFSBrowseCommand(cmd); handled {

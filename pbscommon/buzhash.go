@@ -1,7 +1,6 @@
 package pbscommon
 
 import (
-	"fmt"
 	"math/bits"
 )
 
@@ -70,7 +69,7 @@ func (self *Chunker) New(chunk_size_avg uint64) {
 	self.break_test_minimum = break_test_minimum
 	self.window = make([]byte, 64)
 
-	fmt.Printf("Chunk size min is %d , max %d\n", self.chunk_size_min, self.chunk_size_max)
+	debugf("Chunk size min is %d , max %d", self.chunk_size_min, self.chunk_size_max)
 }
 
 func (self *Chunker) Scan(data []byte) uint64 {
