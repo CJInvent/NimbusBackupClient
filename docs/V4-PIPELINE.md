@@ -495,7 +495,8 @@ steps 1-2 are additive and independently shippable.
    control-plane commands originate inside the service and never touch this
    API; what stops is the console driving them.
 
-   The PANEL is built too: `src/StatusPanel.jsx`, rendered **instead of**
+   The PANEL is built too: `src/StatusPanel.jsx` (since GUI audit S2,
+   `src/screens/status/StatusPanel.jsx`), rendered **instead of**
    the tabbed UI rather than alongside it with the controls disabled. A
    greyed-out Start button still tells a user the capability exists and
    invites them to find out why it is off; an absent one does not.
