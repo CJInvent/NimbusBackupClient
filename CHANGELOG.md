@@ -73,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the upstream placeholder. Every release from here keeps it, so installs upgrade in place. A machine
   that has an MSI built with the placeholder (the test bed's dev.187) does not see this one as an
   upgrade: uninstall the old build first. Nothing was deployed with the placeholder outside the bed.
+- **Smaller installer.** The MSI's cabinet is LZX instead of MSZip (`CompressionLevel="high"` on
+  the `MediaTemplate`; CI now fails if the cabinet is anything else and prints the payload sizes),
+  and the GUI bundles its fonts as WOFF2 only: @fontsource's stock CSS also shipped a WOFF copy of
+  each face (~260 KB) that WebView2 never loads. The faces are declared in
+  `gui/frontend/src/fonts.css`, and a `postbuild` check (`scripts/check-dist.mjs`) fails the build
+  if a non-WOFF2 font reaches `dist` or a CSS `url()` names a missing file.
 
 ### Removed
 - **Storage identity compatibility paths** (NimbusControl

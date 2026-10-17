@@ -39,7 +39,12 @@
       DowngradeErrorMessage="A newer version of [ProductName] is already installed."
       Schedule="afterInstallInitialize"
       AllowSameVersionUpgrades="yes" />
-    <MediaTemplate EmbedCab="yes" />
+    <!-- CompressionLevel="high" is LZX:21. light.exe's default is MSZip
+         (deflate), which left ~1 MB on the table for a payload that is two
+         Go binaries. Set here rather than as light -dcl:high so every build
+         path gets it: CI, build.bat and scripts/build-provisioned-msi.ps1.
+         CI's "MSI payload compression" step fails if the cabinet is not LZX. -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Installation directory -->
     <Directory Id="TARGETDIR" Name="SourceDir">
