@@ -7,6 +7,7 @@ package pbscommon
 // read calls say what PBS answered.
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -100,6 +101,10 @@ func TestReadsReportThePBSStatusAndBody(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "bad magic") {
 		t.Fatalf("the error page was parsed as an index: %v", err)
+	}
+	var he *HTTPStatusError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusForbidden {
+		t.Fatalf("not a typed status error: %#v", err)
 	}
 	_, err = pbs.GetChunkData(strings.Repeat("ab", 32))
 	if err == nil || !strings.Contains(err.Error(), "PBS HTTP 404") || !strings.Contains(err.Error(), "no such chunk") {

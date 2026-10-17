@@ -1838,10 +1838,26 @@ func debugf(format string, args ...any) {
 	}
 }
 
-// httpStatusError is a non-200 answer from PBS, said as one: the status and
-// the start of what PBS sent back, on one line (section 3.2). Without it the
-// error page is handed back as the index or chunk that was asked for, and the
-// person browsing reads "bad magic" instead of "permission check failed".
+// HTTPStatusError is a non-200 answer from PBS to a read (an index, a blob, a
+// chunk), said as one: the status and the start of what PBS sent back, on one
+// line (NimbusControl docs/V4-CLIENT-CHANGES-FOR-SERVER-BROWSE.md section 3.2).
+// Without it the error page was handed back as the index or chunk that was
+// asked for, and the person browsing read "bad magic" instead of "permission
+// check failed". Typed, so a caller can tell a missing snapshot (404) from a
+// refusal (403) without reading the sentence.
+type HTTPStatusError struct {
+	StatusCode int
+	What       string // "download of drive-scsi0.img.fidx", "chunk <digest>"
+	Body       string // one line, at most 300 bytes and an ellipsis
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("PBS HTTP %d for %s", e.StatusCode, e.What)
+	}
+	return fmt.Sprintf("PBS HTTP %d for %s: %s", e.StatusCode, e.What, e.Body)
+}
+
 func httpStatusError(resp *http.Response, what string) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	text := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
@@ -1857,10 +1873,7 @@ func httpStatusError(resp *http.Response, what string) error {
 		}
 		text = text[:cut] + "..."
 	}
-	if text == "" {
-		return fmt.Errorf("PBS HTTP %d for %s", resp.StatusCode, what)
-	}
-	return fmt.Errorf("PBS HTTP %d for %s: %s", resp.StatusCode, what, text)
+	return &HTTPStatusError{StatusCode: resp.StatusCode, What: what, Body: text}
 }
 
 // AuditLogFn receives the record of what this client did to a snapshot's
