@@ -1,13 +1,13 @@
 package controlplane
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func storageFixture() StorageDevice {
-	return StorageDevice{ID: "v1:" + strings.Repeat("a", 64), DiskID: "gpt:a", Path: "disk0", SizeBytes: 1000, Boot: true, BootVerified: true, Partitions: []StoragePartition{{ID: "partition-a", Offset: 10, Size: 990, Boot: true}}}
+	return StorageDevice{ID: "v1:" + strings.Repeat("a", 64), DiskID: "gpt:a", Path: "disk0", SizeBytes: 1000, Boot: true, BootVerified: true,
+		Partitions: []StoragePartition{{ID: "partition-a", Offset: 10, Size: 990, Boot: true}}, IdentityStrength: IdentityStrong}
 }
 func TestStorageBindingFollowsIdentityAcrossRenumbering(t *testing.T) {
 	expected := storageFixture()
@@ -171,26 +171,19 @@ func TestStorageStrengthChangeNeedsApproval(t *testing.T) {
 	}
 }
 
-// Bindings approved before strengths existed resolve exactly as they did:
-// by id, whatever the device now reports. Approving again records it.
-func TestStorageBindingWithoutRecordedStrength(t *testing.T) {
+// NimbusControl docs/V4-FIRST-ENROLLMENT.md section 10.3: every approval
+// records a strength, and a binding without one is refused, even on the very
+// device it names (the "approved before strengths existed" path is gone).
+func TestStorageBindingWithoutRecordedStrengthIsRefused(t *testing.T) {
 	approved := weakFixture("1")
 	approved.IdentityStrength = ""
 	binding := StorageBinding{Target: "device:" + approved.ID, Device: approved}
-	same := weakFixture("1")
-	if _, err := ResolveStorageBinding(binding, []StorageDevice{same}); err != nil {
-		t.Fatalf("pre-F-39 binding broke on upgrade: %v", err)
-	}
-	if _, err := ResolveStorageBinding(binding, []StorageDevice{weakFixture("2")}); err == nil {
-		t.Fatal("pre-F-39 binding matched a different id")
+	if _, err := ResolveStorageBinding(binding, []StorageDevice{weakFixture("1")}); err == nil {
+		t.Fatal("a binding with no recorded strength resolved")
 	}
 }
 
-func TestStorageObservationUnchangedWithoutNewFields(t *testing.T) {
-	b, _ := json.Marshal(storageFixture())
-	if strings.Contains(string(b), "identity_strength") || strings.Contains(string(b), "model") {
-		t.Fatalf("an unchanged pre-F-39 device serializes differently: %s", b)
-	}
+func TestStorageUnknownStrengthIsRefused(t *testing.T) {
 	d := storageFixture()
 	d.IdentityStrength = "medium"
 	st := StorageStatus{Devices: []StorageDevice{d}}

@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgrade: uninstall the old build first. Nothing was deployed with the placeholder outside the bed.
 
 ### Removed
+- **Storage identity compatibility paths** (NimbusControl
+  `docs/V4-FIRST-ENROLLMENT.md` section 7). A binding with no recorded
+  identity strength is refused instead of matched by id (every approval
+  records one; nothing deployed holds one).
 - **The agent no longer writes the PBS snapshot comment** (V4-AUDITABILITY S1).
   The control server writes it (`nimbus-run:<run id>`), the only writer;
   `cpStampSnapshotNotes` and `pbscommon.SetSnapshotNotes` are gone.
@@ -94,6 +98,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cancelling a job edit emptied the window** (GUI audit S1): it selected a
   tab named `scheduled`, which does not exist, so no pane was shown until a tab
   was clicked. It now stays on the backup tab.
+- **A failed storage inventory says why, and a transient one is retried**
+  (NimbusControl `docs/V4-FIRST-ENROLLMENT.md` 3.4). The error carries the
+  exit status and what PowerShell printed (its position lines and echoed
+  script dropped), or "timed out after 30s", with "(N attempts)" when it was
+  retried: up to three attempts, 2 s then 5 s apart, none started after 40 s.
+  A killed query no longer leaves the check-in waiting on a child's pipe.
+- **The server's audit log records a storage authority move** (R2): after
+  approvals are invalidated by a change of control server, the storage report
+  carries `previous_authority` until the next approval.
 - **Directory backups mishandled junctions, app execution aliases and
   online-only files (F-71).** Since Go 1.23 a junction is reported as an
   irregular file rather than a link, so the writer opened it: the profile's

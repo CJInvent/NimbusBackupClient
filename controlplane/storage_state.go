@@ -158,6 +158,7 @@ func (s *StorageState) Approve(approval StorageApproval) error {
 	next.Bindings = approval.Bindings
 	next.Revision = approval.Revision
 	next.Error = ""
+	next.PreviousAuthority = ""
 	return s.persist(next)
 }
 
@@ -199,6 +200,7 @@ func (s *StorageState) SetAuthority(authority string) (invalidated bool, err err
 	if s.status.Authority == "" || (len(s.status.Bindings) == 0 && s.status.Revision == 0) {
 		return false, s.persist(next)
 	}
+	next.PreviousAuthority = s.status.Authority
 	next.Bindings = nil
 	next.Revision = 0
 	next.Error = ErrStorageAuthorityMoved

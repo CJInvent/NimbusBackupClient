@@ -1,9 +1,11 @@
 package controlplane
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -185,5 +187,64 @@ func TestAFreshMachineChangesAuthorityWithoutAnError(t *testing.T) {
 	}
 	if inv, err := s.SetAuthority("joined:server-b-agent-9"); err != nil || !inv || s.Snapshot().Error != ErrStorageAuthorityMoved {
 		t.Fatalf("approved storage moved to another server: invalidated=%v err=%v error %q", inv, err, s.Snapshot().Error)
+	}
+}
+
+// R2 on the server (NimbusControl docs/V4-FIRST-ENROLLMENT.md section 10.2):
+// a real invalidation records the authority the approvals were made under, so
+// the report can carry it to the server's audit log, and the next approval
+// clears it. A fresh machine's silent adoption (R1) records nothing.
+func TestStorageAuthorityMoveRecordsThePreviousAuthority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storage.json")
+	s, err := OpenStorageState(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{"standalone", "joined:" + strings.Repeat("a", 64)} {
+		if _, err = s.SetAuthority(step); err != nil {
+			t.Fatal(err)
+		}
+		if p := s.Snapshot().PreviousAuthority; p != "" {
+			t.Fatalf("%s: nothing was approved, so nothing moved; previous authority %q", step, p)
+		}
+	}
+	d := storageFixture()
+	if err = s.Observe([]StorageDevice{d}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Approve(StorageApproval{Revision: 2, Observation: s.Snapshot().Observation,
+		Bindings: []StorageBinding{{Target: "boot", Device: d}}}); err != nil {
+		t.Fatal(err)
+	}
+	before := "joined:" + strings.Repeat("a", 64)
+	after := "joined:" + strings.Repeat("b", 64)
+	if _, err = s.SetAuthority(after); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Snapshot()
+	if st.PreviousAuthority != before || st.Authority != after {
+		t.Fatalf("after the move: authority %q previous %q", st.Authority, st.PreviousAuthority)
+	}
+	b, _ := json.Marshal(st)
+	if !strings.Contains(string(b), `"previous_authority":"`+before+`"`) {
+		t.Fatalf("the report does not carry the previous authority: %s", b)
+	}
+	s, err = OpenStorageState(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Snapshot().PreviousAuthority != before {
+		t.Fatal("the previous authority did not survive a restart")
+	}
+	if err = s.Approve(StorageApproval{Revision: 1, Observation: s.Snapshot().Observation,
+		Bindings: []StorageBinding{{Target: "boot", Device: d}}}); err != nil {
+		t.Fatal(err)
+	}
+	if p := s.Snapshot().PreviousAuthority; p != "" {
+		t.Fatalf("the approval under the new authority did not clear the previous one: %q", p)
+	}
+	b, _ = json.Marshal(s.Snapshot())
+	if strings.Contains(string(b), "previous_authority") {
+		t.Fatalf("a cleared previous authority is still on the wire: %s", b)
 	}
 }

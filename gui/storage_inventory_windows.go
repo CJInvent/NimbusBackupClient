@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"controlplane"
 	"crypto/sha256"
 	"encoding/hex"
@@ -51,14 +50,18 @@ func discoverStorageDevices() ([]controlplane.StorageDevice, error) {
 	if err != nil {
 		return nil, fmt.Errorf("identify running Windows directory: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", storageInventoryScript)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	out, err := cmd.Output()
+	// Bounded retry, and the reason in the error (V4-FIRST-ENROLLMENT 3.4):
+	// a failure latches until someone approves, so it must say why, and a
+	// transient one should not latch at all.
+	out, err := retryStorageInventory(func() ([]byte, error) {
+		return runInventoryCommand(storageInventoryTimeout, func(cmd *exec.Cmd) {
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		}, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", storageInventoryScript)
+	}, inventoryClock{now: time.Now, sleep: time.Sleep})
 	if err != nil {
 		return nil, fmt.Errorf("read Windows storage identity: %w", err)
 	}
+	// Deterministic failures from here: not retried.
 	if len(out) > 1024*1024 {
 		return nil, fmt.Errorf("storage inventory exceeds limit")
 	}
