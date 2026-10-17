@@ -1117,8 +1117,17 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($vi.ProductVersion)) {
             throw "NimbusBackupSVC.exe has no ProductVersion"
           }
-          if ($vi.ProductVersion -notlike "${{ steps.version.outputs.VERSION_MSI }}*") {
-            throw "NimbusBackupSVC.exe reports version '$($vi.ProductVersion)', expected it to start with '${{ steps.version.outputs.VERSION_MSI }}'"
+          # Two forms of one version (docs: NimbusControl V4-CLIENT-RELEASES
+          # section 1): the string table carries the full L.CC.RR[-channel]
+          # (what the GUI and check-in report), the fixed numeric field the
+          # MSI form without leading zeros (1.01.03 -> 1.1.3). Each is checked
+          # against its own source.
+          if ($vi.ProductVersion -ne "${{ steps.version.outputs.VERSION }}") {
+            throw "NimbusBackupSVC.exe reports version '$($vi.ProductVersion)', expected '${{ steps.version.outputs.VERSION }}'"
+          }
+          $fixed = "$($vi.ProductMajorPart).$($vi.ProductMinorPart).$($vi.ProductBuildPart)"
+          if ($fixed -ne "${{ steps.version.outputs.VERSION_MSI }}") {
+            throw "NimbusBackupSVC.exe numeric version is '$fixed', expected '${{ steps.version.outputs.VERSION_MSI }}'"
           }
           Write-Host "S8 OK: service binary carries vendor identity and version metadata."
 
