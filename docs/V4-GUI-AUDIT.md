@@ -1,7 +1,8 @@
 # v4: audit of the client GUI against the operating model
 
-**Status (2026-10-16).** S1 is built (`feat/gui-audit-s1`; section 5 says what
-it removed). S2 to S13 are specification. Written against `v4_dev` at `226595c`;
+**Status (2026-10-17).** S1 is built (`feat/gui-audit-s1`; section 5 says what
+it removed). S2 is built on top of it (`feat/gui-audit-s2`; section 5, "S2 as
+built"). S3 to S13 are specification. Written against `v4_dev` at `226595c`;
 every line number below is `gui/frontend/src/App.jsx` at that commit unless
 another file is named, so after S1 the App.jsx line numbers past the removed
 blocks are stale by up to a few hundred lines. CJ's answers of 2026-10-09 are
@@ -632,6 +633,60 @@ kept its value and is now `sizeScanBudget` beside `classifyEntry` and
 backup tab. Translation keys: 24 removed in each language (the split strings,
 the dead handlers' status lines, the unreachable table's labels, the VSS
 boxes); the before/after list of `t()` keys shows removals only.
+
+**S2 as built (2026-10-17).** `App.jsx` (3,257 lines after S1) is a 117-line
+root. The layout:
+
+* `lib/`: `bindings.js` (every Wails binding, read once at load as before),
+  `format.js`, `messages.js` (`localizeMessage`), `snapshots.js` (what a
+  snapshot is, the tree, in-place and cross-host rules).
+* `hooks/`: all state and every call to the service. `usePolling`,
+  `useMachineContext` (the control server's status and the lock, both 30 s;
+  section 2's derived states are computed in S5, where the screens use them,
+  not before), `useStatusMessage`, `useAppData`, `useSecurity`,
+  `usePbsServers`, `useControlServerForm`, `useBackupForm`, `useBackupRun`
+  (the 3 s run poll), `useScheduler`, `usePicker`, `useRestoreState` and
+  `useRestore`, `useStatusPanel`.
+* `screens/<name>/`: `frame`, `status`, `setup`, `backup`, `jobs`, `history`,
+  `restore`, `about`. One component per file, rendering its props; the
+  handlers that call the service are action files beside them
+  (`serverActions.js`, `backupActions.js`, `restore/*Actions.js`), made per
+  render over the current state exactly as they were inside `App`.
+  `StatusPanel.jsx` moved to `screens/status/` and split the same way
+  (`useStatusPanel` + `StatusPanelView`).
+
+The tabs did not change: Jobs and History are folders, but still render on
+the Backup tab, as they did. `translations.js` (1,444 lines) is not split:
+S4 merges its duplicate key sets first, and splitting before that would be
+done twice. `index.css` is outside the 250-line rule's test (JavaScript
+only). `components/` is untouched; `StorageIdentityPanel` and `PathPicker`
+still call the service themselves (S12 and S10 take them).
+
+**How "no behavior change" was shown.** The row above asks for snapshots
+"taken from the S1 build". A component that did not exist in S1 cannot be
+rendered from it, so the proof was done on the whole window instead: both
+builds were served side by side, loaded in Chromium against the same fake
+service (every binding with fixed answers, a fixed clock, Chicago time), and
+driven through the same twelve scenarios: locked and locked in French, no
+storage server, editing a server, a run in flight with Exchange, the form in
+every mode including editing and cancelling a job, a file backup's tree with
+expand, select, shift- and ctrl-select, in place and cross-host, a disk image
+through partitions, folders, breadcrumbs, sorting and back, a search and
+"prepare restore", About in French, and every banner. After each of the 62
+steps the body's HTML and every form control's value were compared. They
+were identical, except one attribute: S1 left an empty `style=""` on the
+folder field after switching from a machine backup back to a folder backup,
+because React reused the machine branch's `div`; S2's two branches are
+different components, so the element is new. Nothing renders differently.
+The harness was a one-off and is not committed; the render tests are what
+guards the screens from here: `npm test` renders every screen component from
+a fixture (70 cases, en, fr and es) and compares its text with
+`test/render.snapshots.json`, and fails a screen that reaches the bindings or
+a JavaScript file over 250 lines. The Frontend Gate runs it.
+
+**Found while proving it, not fixed (no behavior change in S2).** Clicking a
+folder's *name* in a file backup's tree toggles it twice (the name and its
+row both handle the click), so nothing happens; the caret works. For S10.
 ---
 
 ## 6. What this needs from outside the GUI
