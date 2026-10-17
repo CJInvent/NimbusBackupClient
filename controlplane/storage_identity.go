@@ -25,9 +25,9 @@ type StorageDevice struct {
 	// (an NAA or EUI-64 designator or a serial), IdentityWeak when it reports
 	// none, or only the slot it sits in, so its ID is derived and the disk is
 	// found by its GUID, size and layout instead. Empty only for a device with
-	// no GUID either (unapprovable) and in bindings approved before this field
-	// existed. omitempty keeps the observation of an unchanged older report
-	// byte-identical.
+	// no ID at all (no GUID either: it cannot be approved), which is why it is
+	// omitempty. Every approval records it, and a binding without it is
+	// refused (NimbusControl docs/V4-FIRST-ENROLLMENT.md section 10.3).
 	IdentityStrength string `json:"identity_strength,omitempty"`
 	// Model is the disk's friendly name, for display only. It never decides a
 	// binding.
@@ -57,12 +57,18 @@ type StorageApproval struct {
 	Bindings    []StorageBinding `json:"bindings"`
 }
 type StorageStatus struct {
-	Authority   string           `json:"authority,omitempty"`
-	Observation string           `json:"observation"`
-	Revision    int64            `json:"revision"`
-	Error       string           `json:"error,omitempty"`
-	Devices     []StorageDevice  `json:"devices"`
-	Bindings    []StorageBinding `json:"bindings"`
+	Authority string `json:"authority,omitempty"`
+	// PreviousAuthority is the authority the approvals were made under, set
+	// when a change of authority invalidated them (V4-FIRST-ENROLLMENT R2)
+	// and cleared by the next approval. It rides the report so the server
+	// records the move in its audit log, not only this machine's log
+	// (NimbusControl docs/V4-FIRST-ENROLLMENT.md section 10.2).
+	PreviousAuthority string           `json:"previous_authority,omitempty"`
+	Observation       string           `json:"observation"`
+	Revision          int64            `json:"revision"`
+	Error             string           `json:"error,omitempty"`
+	Devices           []StorageDevice  `json:"devices"`
+	Bindings          []StorageBinding `json:"bindings"`
 }
 
 // StorageObservation binds an approval to fresh identity evidence. Open paths
@@ -90,9 +96,8 @@ func StorageObservation(devices []StorageDevice) string {
 // ambiguous, never a guess). Size and partition evidence must match either
 // way. A hardware serial that appeared or disappeared since approval is an
 // ordinary identifier change: it needs a new approval, and the new
-// identifiers can be approved like any others.
-// A binding approved before strengths existed ("") resolves exactly as it did
-// then: by ID, with no strength check; approving again records the strength.
+// identifiers can be approved like any others. A binding with no recorded
+// strength is refused (validateStorageDevice): every approval records one.
 func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (StorageDevice, error) {
 	var zero StorageDevice
 	if err := validateStorageDevice(binding.Device); err != nil {
@@ -126,7 +131,7 @@ func ResolveStorageBinding(binding StorageBinding, devices []StorageDevice) (Sto
 		return zero, fmt.Errorf("storage identity missing or ambiguous for target %s", binding.Target)
 	}
 	current := matches[0]
-	if approved != "" && current.IdentityStrength != approved {
+	if current.IdentityStrength != approved {
 		return zero, serialChangedError(binding.Target, approved, current.IdentityStrength)
 	}
 	if current.Path == "" || current.DiskID != binding.Device.DiskID || current.SizeBytes != binding.Device.SizeBytes {
@@ -207,8 +212,8 @@ func validateStorageDevice(d StorageDevice) error {
 	if _, err := hex.DecodeString(d.ID[3:]); err != nil {
 		return errors.New("invalid storage device identity")
 	}
-	if d.IdentityStrength != "" && d.IdentityStrength != IdentityStrong && d.IdentityStrength != IdentityWeak {
-		return errors.New("invalid storage identity strength")
+	if d.IdentityStrength != IdentityStrong && d.IdentityStrength != IdentityWeak {
+		return errors.New("storage target requires complete device and partition evidence")
 	}
 	parts := append([]StoragePartition(nil), d.Partitions...)
 	sort.Slice(parts, func(i, j int) bool { return parts[i].Offset < parts[j].Offset })
