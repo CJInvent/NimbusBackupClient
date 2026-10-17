@@ -58,6 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore.**
 
 ### Changed
+- **The GUI's front end is split by screen** (GUI audit S2,
+  `docs/V4-GUI-AUDIT.md` section 5). `App.jsx` (3,257 lines) is now a
+  117-line root over `hooks/` (state and every call to the service),
+  `screens/<name>/` (components that render what they are given) and `lib/`
+  (bindings, formatting, snapshot helpers); `StatusPanel.jsx` moved into
+  `screens/status/`. No JavaScript file in `src/` is over 250 lines except
+  `translations.js` (S4). Nothing a person sees or does changed: the old and
+  new builds were driven through 62 states against the same fake service and
+  rendered the same DOM. New: `npm test` (render fixtures with text
+  snapshots, and checks that no screen calls the service and no file grows
+  past 250 lines), run by the Frontend Gate.
 - **The installer has its real UpgradeCode** (`{1C9B5658-BD52-44F7-BD1E-41B439EB8633}`), replacing
   the upstream placeholder. Every release from here keeps it, so installs upgrade in place. A machine
   that has an MSI built with the placeholder (the test bed's dev.187) does not see this one as an

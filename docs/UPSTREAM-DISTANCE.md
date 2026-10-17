@@ -85,6 +85,11 @@ surviving lines: `App.jsx` 1,718 of 2,876; `pbsapi.go` 909; `backup_inline.go`
 860; `pxar.go` 747; `restore_inline.go` 635; `pxar_reader.go` 460;
 `backup_analysis.go` 365; `log_rotation.go` 341.
 
+*Since this was measured:* GUI audit S1 deleted `backup_analysis.go`, and S2
+(2026-10-17) split `App.jsx` into `screens/`, `hooks/` and `lib/`. The split
+moved lines without rewriting them, so the shared share of the web UI is
+unchanged until the measurement is re-run against the new paths.
+
 ## 4. What is shared, by file
 
 **A. Essentially untouched (80% or more of lines unchanged)** (19 files, 5361 upstream lines, 5003 still unchanged)

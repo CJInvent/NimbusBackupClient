@@ -351,6 +351,12 @@ DOM: no COM, no shell APIs, no way to fault the process. See rule 8.
   `npm run i18n-audit` (`scripts/i18n-audit.mjs`), which also fails on
   hardcoded strings in JSX and runs as `prebuild` before every frontend
   build. It found 66 hardcoded strings on first run.
+* Frontend layout (GUI audit S2): `src/App.jsx` composes `hooks/` (state,
+  and every call to the service through `lib/bindings.js`) and
+  `screens/<name>/` (one component per file, rendering only its props).
+  `npm test` renders every screen component from a fixture and compares its
+  text with `test/render.snapshots.json`; it also fails a screen that calls
+  the service and any JavaScript file over 250 lines.
 * Backend: all user-facing Go errors are canonical `[NB-xxxx]` codes
   (`errcodes.go`): `1xxx` config, `2xxx` backup, `3xxx` restore/search. Logs
   record code + stable English base (grep-able, language-independent); the
@@ -638,7 +644,7 @@ now run every gate.
 | S9b | **Provisioned MSI smoke** — build a preconfigured MSI from a profile, install it, assert the payload lands where the service looks; assert a malformed profile fails the BUILD; assert the stock MSI carries no profile | The provisioning contract end to end, and that one org's enrollment token cannot ship to every customer | windows | **green, non-blocking** |
 | S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + binaries present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly | The installer customers actually run, and the uninstall contract that a customer's PBS credentials survive unless they say otherwise | windows | **green, non-blocking** — advisory until it has a track record on hosted runners |
 | S10 | **VSS snapshot smoke (Windows)** — real snapshot through the production path; asserts the 0.2.150 diagnostics reach `LogFn`, then the lifecycle and cleanup | The most privileged thing the product does. The diagnostics assertion holds even where a runner refuses to snapshot — silence means the "prints into the void in a service" regression is back | windows | **green, non-blocking** — same reason |
-| S11 | **Frontend gate, early** — `npm run i18n-audit` + full frontend build on ubuntu | Parity/hardcoded-string violations fail in a minute on a cheap runner instead of 20 minutes into the Windows Wails build, where the audit previously only ran as a `prebuild` hook | ubuntu | **green** |
+| S11 | **Frontend gate, early** — `npm run i18n-audit`, the screen render tests (`npm test`) + full frontend build on ubuntu | Parity/hardcoded-string violations fail in a minute on a cheap runner instead of 20 minutes into the Windows Wails build, where the audit previously only ran as a `prebuild` hook | ubuntu | **green** |
 | S12 | **CLI start smoke** — every `dist/proxmoxbackup-*` runs `-h` on its build OS under a portable watchdog; empty output or a startup crash fails | Cross-compiled binaries at least start (init panics, missing dynamic deps) before they reach a customer | all three | **green** |
 
 Explicitly **out of CI**, and labeled rather than pretended: full machine-image

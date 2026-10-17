@@ -123,7 +123,8 @@ way. Outcomes:
 - direct execution became a **service-side** toggle, not a GUI one: the
   service is what the control plane talks to, so org policy can render the
   toggle inert while the server is reachable — a GUI flag never could be
-- polling is the only observation path; `StatusPanel.jsx` renders instead of
+- polling is the only observation path; the status page
+  (`screens/status/StatusPanel.jsx` since GUI audit S2) renders instead of
   the tab UI when locked
 
 **Still open from this item:** `restrictToOwners` is applied only to the API

@@ -186,6 +186,13 @@ jobs:
         working-directory: gui/frontend
         run: npm run i18n-audit
 
+      # GUI audit S2: every screen component rendered from a fixture and
+      # compared with its text snapshot; no screen calls the service; no
+      # JavaScript file over 250 lines.
+      - name: Screen render tests
+        working-directory: gui/frontend
+        run: npm test
+
       - name: Frontend build (full parse of the JSX tree)
         working-directory: gui/frontend
         run: npm run build
