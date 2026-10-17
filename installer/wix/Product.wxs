@@ -157,7 +157,7 @@
     <DirectoryRef Id="TARGETDIR">
       <Component Id="ProvisioningRegistry" Guid="*" Win64="yes">
         <Condition>PROVISIONING_PROFILE</Condition>
-        <RegistryKey Root="HKLM" Key="Software\NimbusBackup\Provisioning">
+        <RegistryKey Root="HKLM" Key="Software\NimbusBackup\Provisioning" ForceCreateOnInstall="yes">
           <Permission User="SYSTEM" GenericAll="yes" />
           <Permission User="Administrators" GenericAll="yes" />
           <RegistryValue Name="Profile" Type="string" Value="[PROVISIONING_PROFILE]" KeyPath="yes" />
