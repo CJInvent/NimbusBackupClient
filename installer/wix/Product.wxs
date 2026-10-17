@@ -106,13 +106,15 @@
                   Target="[INSTALLFOLDER]NimbusBackup.exe"
                   WorkingDirectory="INSTALLFOLDER"/>
         <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall"/>
-        <!-- Per-machine (HKLM), so an install run as SYSTEM by the
-             deployment script is the same as one run by an administrator. -->
-        <RegistryValue Root="HKLM"
-                       Key="Software\NimbusBackup"
-                       Name="InstalledVersion"
-                       Type="string"
-                       Value="$(var.FullVersion)"
+        <!-- A Start-menu shortcut's component must be keyed to an HKCU value
+             (ICE38, ICE43: light refuses the build otherwise). This marker is
+             only that key path; InstalledVersion is its own per-machine
+             component below. -->
+        <RegistryValue Root="HKCU"
+                       Key="Software\RDEMSystems\NimbusBackup"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
                        KeyPath="yes"/>
       </Component>
 
@@ -134,6 +136,19 @@
          and Administrators only (LockPermissions replaces the inherited ACL),
          because it holds an enrollment token. The service consumes and
          deletes it on start (gui/provisioning.go). -->
+    <!-- Per-machine (HKLM), so an install run as SYSTEM by the deployment
+         script is the same as one run by an administrator. -->
+    <DirectoryRef Id="TARGETDIR">
+      <Component Id="InstalledVersionRegistry" Guid="*" Win64="yes">
+        <RegistryValue Root="HKLM"
+                       Key="Software\NimbusBackup"
+                       Name="InstalledVersion"
+                       Type="string"
+                       Value="$(var.FullVersion)"
+                       KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+
     <DirectoryRef Id="TARGETDIR">
       <Component Id="ProvisioningRegistry" Guid="*" Win64="yes">
         <Condition>PROVISIONING_PROFILE</Condition>
@@ -168,6 +183,7 @@
       <ComponentRef Id="ServiceExecutable" />
       <ComponentRef Id="ApplicationShortcut" />
       <ComponentRef Id="AutoStartRegistry" />
+      <ComponentRef Id="InstalledVersionRegistry" />
       <ComponentRef Id="ProvisioningRegistry" />
       <?ifdef ProvisioningProfile ?>
       <ComponentRef Id="ProvisioningProfile" />
