@@ -118,7 +118,20 @@
                        KeyPath="yes"/>
       </Component>
 
-      <!-- Auto-start of the tray GUI for every user who signs in (conditional) -->
+    </DirectoryRef>
+
+    <!-- The enrollment injected by the control server's installer page
+         (PROVISIONING_PROFILE, base64 of the profile JSON; NimbusControl
+         docs/V4-CLIENT-RELEASES.md 4.1). Its own subkey, whose ACL is SYSTEM
+         and Administrators only (LockPermissions replaces the inherited ACL),
+         because it holds an enrollment token. The service consumes and
+         deletes it on start (gui/provisioning.go). -->
+    <!-- Per-machine (HKLM), so an install run as SYSTEM by the deployment
+         script is the same as one run by an administrator. -->
+    <DirectoryRef Id="TARGETDIR">
+      <!-- Auto-start of the tray GUI for every user who signs in (conditional).
+           Per-machine (HKLM Run), so it lives in TARGETDIR: a component in
+           the Start-menu folder must be keyed to HKCU (ICE38, ICE43). -->
       <Component Id="AutoStartRegistry" Guid="*" Win64="yes">
         <Condition>AUTOSTART = "1"</Condition>
         <RegistryValue Root="HKLM"
@@ -130,14 +143,6 @@
       </Component>
     </DirectoryRef>
 
-    <!-- The enrollment injected by the control server's installer page
-         (PROVISIONING_PROFILE, base64 of the profile JSON; NimbusControl
-         docs/V4-CLIENT-RELEASES.md 4.1). Its own subkey, whose ACL is SYSTEM
-         and Administrators only (LockPermissions replaces the inherited ACL),
-         because it holds an enrollment token. The service consumes and
-         deletes it on start (gui/provisioning.go). -->
-    <!-- Per-machine (HKLM), so an install run as SYSTEM by the deployment
-         script is the same as one run by an administrator. -->
     <DirectoryRef Id="TARGETDIR">
       <Component Id="InstalledVersionRegistry" Guid="*" Win64="yes">
         <RegistryValue Root="HKLM"

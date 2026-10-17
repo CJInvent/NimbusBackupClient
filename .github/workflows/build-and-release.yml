@@ -1162,8 +1162,20 @@ jobs:
         run: |
           # Pass the resolved version to the WiX preprocessor so MSI
           # metadata matches the tag / ldflags version.
-          candle.exe "-dProductVersion=${{ steps.version.outputs.VERSION_MSI }}" "-dFullVersion=${{ steps.version.outputs.VERSION }}" Product.wxs -ext WixUIExtension -ext WixUtilExtension
-          light.exe Product.wixobj -ext WixUIExtension -ext WixUtilExtension -out NimbusBackup.msi
+          # candle and light print their errors (CNDL..., LGHT..., ICE...) to
+          # stdout; on failure each is raised as an annotation, so the reason
+          # reaches the PR's checks without anyone opening the raw log.
+          function Invoke-Wix([string]$tool, [string[]]$wixArgs) {
+            $out = & $tool @wixArgs 2>&1 | ForEach-Object { "$_" }
+            $out | Write-Host
+            if ($LASTEXITCODE -ne 0) {
+              $out | Where-Object { $_ -match 'error|ICE\d+' } | Select-Object -First 20 |
+                ForEach-Object { Write-Host "::error::${tool}: $_" }
+              throw "${tool} failed with exit code $LASTEXITCODE"
+            }
+          }
+          Invoke-Wix candle.exe @("-dProductVersion=${{ steps.version.outputs.VERSION_MSI }}", "-dFullVersion=${{ steps.version.outputs.VERSION }}", 'Product.wxs', '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension')
+          Invoke-Wix light.exe @('Product.wixobj', '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension', '-out', 'NimbusBackup.msi')
           Copy-Item NimbusBackup.msi ../../dist/
         shell: pwsh
 
