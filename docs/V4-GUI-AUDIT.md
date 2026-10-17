@@ -1,9 +1,11 @@
 # v4: audit of the client GUI against the operating model
 
-**Status (2026-10-09).** Specification only. No code has been changed. Written
-against `v4_dev` at `226595c`; every line number below is `gui/frontend/src/App.jsx`
-at that commit unless another file is named. CJ's answers of 2026-10-09 are recorded in
-section 7 and applied below; nothing is built until CJ says to start step S1.
+**Status (2026-10-16).** S1 is built (`feat/gui-audit-s1`; section 5 says what
+it removed). S2 to S13 are specification. Written against `v4_dev` at `226595c`;
+every line number below is `gui/frontend/src/App.jsx` at that commit unless
+another file is named, so after S1 the App.jsx line numbers past the removed
+blocks are stale by up to a few hundred lines. CJ's answers of 2026-10-09 are
+recorded in section 7 and applied below.
 
 Companion documents: client `docs/V4-PIPELINE.md`, `docs/V4-RESTORE.md`;
 NimbusControl `docs/V4-CLIENT-CONFIG.md`, `V4-AUDITABILITY.md`,
@@ -616,6 +618,20 @@ dependency.
 | S12 | **About, tray (with the running percentage), storage panel, security warnings**: neutral first approval, localized storage error, security warning as a reported code | Tray text table test, including the "Backing up: n%" string in en, fr, es; storage states render | Server field for the warning report; ENR R2 wording |
 | S13 | **Leftover documents** (Appendix C) | Link check over the remaining docs | none |
 
+
+**S1 as built (2026-10-16).** As the row says, plus what the removals left
+dead: the `SaveConfig` and `TestConnection` bindings in `App.jsx` (only the
+deleted handlers used them; the Go methods stay until S6 decides the
+standalone form), the card that held the unreachable table (its heading
+duplicated the form's below it), the `disable_split` and `split_size_gb`
+config fields and their `BackupOptions` twins (nothing had read them since
+the engine stopped auto-splitting), and the split-plan test
+(`backup_split_reparse_test.go`). The background size scan's runaway guard
+kept its value and is now `sizeScanBudget` beside `classifyEntry` and
+`GenerateBackupID` in `backup_inline.go`. The cancel-edit fix stays on the
+backup tab. Translation keys: 24 removed in each language (the split strings,
+the dead handlers' status lines, the unreachable table's labels, the VSS
+boxes); the before/after list of `t()` keys shows removals only.
 ---
 
 ## 6. What this needs from outside the GUI

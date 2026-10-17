@@ -48,8 +48,6 @@ type BackupOptions struct {
 	UseVSS          bool
 	Compression     string   // Compression level: "fastest", "default", "better", "best"
 	ExcludeList     []string // User-configured exclusion patterns applied by the PXAR writer (H-04)
-	DisableSplit    bool     // When true, never auto-split regardless of size
-	SplitSizeBytes  uint64   // Auto-split threshold and per-bin target; 0 = default (SplitThreshold)
 	UploadLimitMbps float64  // Upload bandwidth cap in megabits/s (0 = unlimited)
 	// BackupKey is the raw 32-byte org backup key, or nil to back up in the
 	// clear. NIL MEANS "THIS ORG DOES NOT ENCRYPT" AND NOTHING ELSE — the
@@ -172,6 +170,50 @@ func getBackupLock(baseURL, datastore string) *sync.Mutex {
 		backupLocks[key] = &sync.Mutex{}
 	}
 	return backupLocks[key]
+}
+
+// sizeScanBudget is a runaway guard on the background size scan that drives
+// the progress percentage -- NOT a normal-case timeout. A legitimate large
+// volume can take several minutes to size (about 5 min for 1 TB), so the budget
+// is deliberately generous; it only fires to stop a pathological scan that
+// would otherwise never finish. The backup itself never waits on it: a partial
+// size only makes the percentage approximate.
+const sizeScanBudget = 30 * time.Minute
+
+// classifyEntry is the writer's R1 rule (pbscommon.ClassifyEntry), applied by
+// the size estimate so it counts what the backup will archive. A variable only
+// so tests can present Windows entries on Linux.
+var classifyEntry = pbscommon.ClassifyEntry
+
+// GenerateBackupID creates a backup-id from hostname and path
+// Format: hostname_DRIVE_PATH (e.g., SERVER01_D_DATA_Users)
+//
+// Direct mode only. In data path mode the server assigns every id
+// (opts.SourceIDs) and this is never called; it goes away with direct mode
+// (NimbusControl docs/V4-PBS-OPACITY.md section 9.1, DATAPATH D10).
+func GenerateBackupID(hostname, path string) string {
+	cleanPath := filepath.Clean(path)
+	cleanPath = strings.ReplaceAll(cleanPath, "\\", "_")
+	cleanPath = strings.ReplaceAll(cleanPath, "/", "_")
+	cleanPath = strings.ReplaceAll(cleanPath, ":", "")
+	cleanPath = strings.ReplaceAll(cleanPath, " ", "-")
+
+	// Remove any characters not allowed by PBS backup-id format
+	// PBS requires: ^[A-Za-z0-9_][A-Za-z0-9._\-]*$
+	var sanitized []byte
+	for _, c := range []byte(cleanPath) {
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-' {
+			sanitized = append(sanitized, c)
+		}
+	}
+	cleanPath = string(sanitized)
+
+	cleanPath = strings.Trim(cleanPath, "_")
+
+	if cleanPath == "" {
+		return hostname
+	}
+	return fmt.Sprintf("%s_%s", hostname, cleanPath)
 }
 
 // calculateDirSizeCtx scans a directory recursively and returns total size in bytes.
@@ -652,14 +694,9 @@ func RunBackupInline(opts BackupOptions) (returnErr error) {
 		hostname = "unnamed-backup"
 	}
 
-	// Splitting a backup into smaller parts is now an explicit, opt-in choice the
-	// user makes in the GUI (the split plan is built and orchestrated there via
-	// CreateBackupSplitPlan, which issues one StartBackup per part). RunBackupInline
-	// therefore no longer sizes the directories or auto-splits by total size: that
-	// pre-pass was what made a whole-drive backup of C:\ hang before it ever began,
-	// and it also ran on every scheduled run. A scheduled/recurring backup is always
-	// a normal (unsplit) backup — exactly the intended "split the first seed, full
-	// afterwards" behavior.
+	// No sizing pre-pass and no splitting: a backup starts streaming at once
+	// (a pre-pass was what made a whole-drive backup of C:\ hang before it ever
+	// began). The progress percentage comes from a background scan instead.
 
 	// Each selected directory is its OWN backup group (its own
 	// backup-id), so PBS retention treats successive runs of the same folder as one
@@ -1192,7 +1229,7 @@ func backupReal(ctx context.Context, client *pbscommon.PBSClient, newchunk, reus
 	totalSize := &atomic.Uint64{}
 	go func() {
 		writeBackupLog(fmt.Sprintf("Starting background size calculation for: %s", backupdir))
-		ctx, cancel := context.WithTimeout(context.Background(), analysisSizeBudget)
+		ctx, cancel := context.WithTimeout(context.Background(), sizeScanBudget)
 		defer cancel()
 		size, err := calculateDirSizeCtx(ctx, backupdir)
 		if err != nil {

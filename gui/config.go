@@ -60,11 +60,6 @@ type Config struct {
 	BackupID          string   `json:"backup-id,omitempty"`
 	UseVSS            bool     `json:"usevss"`
 	LastBackupDirs    []string `json:"last_backup_dirs,omitempty"` // Remember last used directories
-	// Auto-split settings. DisableSplit defaults to false (zero value) so existing
-	// configs keep auto-splitting. SplitSizeGB is both the split threshold and the
-	// per-bin target size; 0 means the default (DefaultSplitSizeGB).
-	DisableSplit bool `json:"disable_split,omitempty"`
-	SplitSizeGB  int  `json:"split_size_gb,omitempty"`
 	// UploadLimitMbps caps backup upload bandwidth in megabits/s (0 = unlimited).
 	// Applied at the PBS session socket, so it covers all backup types.
 	UploadLimitMbps float64 `json:"upload_limit_mbps,omitempty"`
@@ -102,16 +97,6 @@ func (c *Config) sanitized() *Config {
 		}
 	}
 	return &cp
-}
-
-// SplitSizeBytes returns the configured auto-split threshold / per-bin target in
-// bytes, falling back to DefaultSplitSizeGB when SplitSizeGB is unset (<= 0).
-func (c *Config) SplitSizeBytes() uint64 {
-	gb := c.SplitSizeGB
-	if gb <= 0 {
-		gb = DefaultSplitSizeGB
-	}
-	return uint64(gb) * 1024 * 1024 * 1024
 }
 
 // atomicWriteFile writes data to path crash-safely: it writes a temp file in the

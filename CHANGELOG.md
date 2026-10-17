@@ -67,8 +67,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The agent no longer writes the PBS snapshot comment** (V4-AUDITABILITY S1).
   The control server writes it (`nimbus-run:<run id>`), the only writer;
   `cpStampSnapshotNotes` and `pbscommon.SetSnapshotNotes` are gone.
+- **The "split the first backup" option** (GUI audit S1; CJ's decision Q6).
+  It issued one backup per part under client-built backup-ids, with French
+  text that bypassed translation. `gui/backup_analysis.go`,
+  `gui/backup_split_api.go`, their bindings, the `analysis:progress` event and
+  the `disable_split` / `split_size_gb` settings are gone (the engine had
+  stopped reading the last two). `GenerateBackupID` moved to `backup_inline.go`
+  (direct mode still uses it).
+- **Dead GUI code from the fork** (GUI audit S1): three handlers nothing
+  called, two states nothing read, a Servers table that could never render,
+  and the two VSS boxes (one could never show, the other always did). 24
+  translation keys that only they used.
 
 ### Fixed
+- **Cancelling a job edit emptied the window** (GUI audit S1): it selected a
+  tab named `scheduled`, which does not exist, so no pane was shown until a tab
+  was clicked. It now stays on the backup tab.
 - **Directory backups mishandled junctions, app execution aliases and
   online-only files (F-71).** Since Go 1.23 a junction is reported as an
   irregular file rather than a link, so the writer opened it: the profile's
