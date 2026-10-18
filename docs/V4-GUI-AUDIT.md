@@ -20,7 +20,12 @@ an elevated window; no screen prompts for UAC on entry (V4-LOCAL-API section
 6). In S10, a non-elevated Browse shows only the files the caller's account
 could read and restores only into the caller's own profile (V4-LOCAL-API
 section 5). The in-app folder picker moves into the service (V4-LOCAL-API P3).
-Finding 3 closes in V4-CONSOLE C2.
+Finding 3 closes in V4-CONSOLE C2. **Closed (C2, 2026-10-18):** the job
+bindings call `/jobs/create`, `/jobs/update` and `/jobs/delete/{id}`, and the
+test that they are refused while locked is
+`gui/console_bindings_test.go:TestJobWritesAreRefusedWhileLocked`. The history
+card reads `GetRecentRuns` (section 3.8's single source); its redesign is
+still S11.
 
 Companion documents: client `docs/V4-PIPELINE.md`, `docs/V4-RESTORE.md`;
 NimbusControl `docs/V4-CLIENT-CONFIG.md`, `V4-AUDITABILITY.md`,

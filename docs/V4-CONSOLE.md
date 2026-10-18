@@ -7,7 +7,7 @@ was taken from that commit with the CI-pinned toolchain (`go1.26.9`), building
 The local build is a faithful model of the shipped one: 13,268,992 bytes stripped
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
-**Progress:** C1 built (PR #30). Next: C2.
+**Progress:** C1 built (PR #30), C2 built (PR #31). Next: C3.
 
 **Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
 D2 (b), the service installs WebView2 and the console drops the downloader;
@@ -476,6 +476,66 @@ stores and the engines drop out of the link; what remains until C3 is whatever
 the untagged files' imports drag in through package initializers (`pbscommon`'s
 zstd decoder is one). The CI size step from section 5 lands here as a
 print-only step, so C3's budget starts from a measured number.
+
+**Built (2026-10-18, PR #31).** As specified, with one change of mechanism and
+these details settled in the building:
+
+- **The bound type is `Console` from C2, not from C3** (`gui/console.go`,
+  `console_bindings.go`). The specified mechanism, keeping `App` bound and
+  moving its service methods behind the tag, does not work: several `App`
+  methods were both a binding and the service's implementation, chosen by an
+  `isServiceProcess` branch (`SaveScheduledJob` wrote `scheduled_jobs.json` in
+  either process; also `GetConfigWithHostname`, `GetStorageIdentityStatus`,
+  `StartBackup`), and re-tagging would orphan their callees in the default
+  lint pass. Binding a separate type removes all 31 unused bindings at once
+  without touching the service's methods. C3 moves these files into the
+  module; their substance does not change.
+- The binding allowlist and the "only `bindings.js` reads `window.go`" check
+  of section 5 item 2 land here, not in C3:
+  `TestTheBoundSurfaceIsExactlyWhatTheFrontEndUses` (both directions) and the
+  render suite's `only lib/bindings.js reads the Wails bindings`. The front
+  end reads `window.go.main.Console`. 51 bindings.
+- `TestEveryBindingMakesExactlyItsOwnRequest`: a recording fake service, one
+  case per binding (restore included), and `TestEveryBindingHasARouteCase`
+  fails for a binding added without one.
+- `GET /jobs` now returns the jobs whole (`api.ScheduledJob`, aliased by the
+  service): it returned a five-field summary nothing read, which would have
+  emptied the edit form. `ListScheduledJobs` replaces
+  `GetScheduledJobsForAPI` in `BackupHandler`.
+- Job writes refused while locked: `TestJobWritesAreRefusedWhileLocked`
+  against the real `api.Server` (now `Handler()`), with the PBS and
+  control-server writes and Start beside them.
+- The client's writes go through the shared helpers, so the console shows the
+  service's own sentence (the lock, the data-path refusal) instead of its JSON
+  body, and a refused Start is no longer reported as "communication with the
+  service failed" (`errServiceComm` is gone; NB-2007 is the client's, for a
+  request that got no answer).
+- The delete routes read the id from the escaped path: a delete of `a/b`
+  deleted `a`, and `/jobs/delete/job-1/extra` deleted `job-1`.
+- `TestPBSConnection` returns **NB-1011** when the service reports
+  `cert_untrusted`; the setup screen's trust-on-first-use offer keys on it
+  instead of matching "x509". Translated in all three languages.
+- The history table maps runs to its old rows (`frontend/src/lib/history.js`,
+  30 days, newest six shown). Runs now record `backup_dirs` and `use_vss`
+  (`RunRegistry.SetRequest`) so "Run again" still has what it loads. One
+  visible change: a run in progress is a row (the registry includes live
+  runs; the old file never had one). `job_history.json`, `JobHistory`,
+  `AddJobHistory`, `GetJobHistory` and `CleanupAbandonedJobs` are deleted.
+- Deleted from the console as well as rebound: `controlplane_policy_gui.go`
+  (`IsReadOnly` reads `gui_read_only` itself), `download.go` (the `space` op),
+  `api/mode.go` (the console's one reachability check replaced the modes), the
+  SIGINT handler that closed PBS sessions the console no longer has, and
+  `App`'s `ctx`, `mode`, `apiClient` and `stopScheduler` fields (the scheduler
+  owns its stop channel). `Config.sanitized` and `PBSServer.sanitized` went
+  with the bindings that used them; the API's types are the sanitization now.
+- The tray is console-only (`windows && !service`), so the service no longer
+  links systray, Wails or `image/*` (section 4.3, early). `isAdmin`, used only
+  by the pipeline, is service-tagged.
+- Measured (local build as section 10, stripped): console 13,284,864 →
+  11,817,472 bytes; service 11,520,512 → 11,069,952. No `App` method, agent,
+  key store, config decryption or PBS client remains in the console's symbol
+  table; `klauspost/compress/zstd` does, through `pbscommon`'s package init,
+  until C3.
 
 ### C3. The console module (structure)
 
