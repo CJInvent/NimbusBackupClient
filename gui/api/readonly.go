@@ -40,8 +40,7 @@ var readOnlyExactPaths = map[string]struct{}{
 // the exact set because a prefix match is a broader grant and should be
 // obviously so when reading this file.
 var readOnlyPrefixes = []string{
-	"/runs/",          // one run by id
-	"/backup/status/", // deprecated per-job progress, read-only by nature
+	"/runs/", // one run by id
 }
 
 // readOnlyAllowed reports whether a request is safe to serve under lockdown.

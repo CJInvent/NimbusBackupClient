@@ -290,7 +290,6 @@ func TestSmokeAuthGateCoversEveryRoute(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{http.MethodGet, "/status"},
 		{http.MethodPost, "/backup"},
-		{http.MethodGet, "/backup/status/whatever"},
 		{http.MethodGet, "/jobs"},
 		{http.MethodPost, "/jobs/create"},
 		{http.MethodPost, "/jobs/update"},
@@ -303,6 +302,7 @@ func TestSmokeAuthGateCoversEveryRoute(t *testing.T) {
 		{http.MethodGet, "/controlplane/status"},
 		{http.MethodPost, "/controlplane/save"},
 	}
+	routes = append(routes, newConsoleRoutes...)
 	for _, r := range routes {
 		code, body := do(t, ts, r.method, r.path, map[string]interface{}{})
 		if code != http.StatusUnauthorized {
@@ -338,7 +338,6 @@ func TestSmokeMethodGates(t *testing.T) {
 	cases := []struct{ method, path string }{
 		{http.MethodPost, "/status"},
 		{http.MethodGet, "/backup"},
-		{http.MethodPost, "/backup/status/x"},
 		{http.MethodPost, "/jobs"},
 		{http.MethodGet, "/jobs/create"},
 		{http.MethodGet, "/jobs/update"},
@@ -530,9 +529,9 @@ func TestSmokeBackupProgressRoundTrip(t *testing.T) {
 		t.Fatal("StartBackup never called")
 	}
 
-	// An unknown job id must 404 rather than reporting a phantom job.
-	if code, _ = do(t, ts, http.MethodGet, "/backup/status/no-such-job", nil, withToken(testToken)); code != http.StatusNotFound {
-		t.Errorf("unknown job status = %d, want 404", code)
+	// An unknown run id must 404 rather than reporting a phantom run.
+	if code, _ = do(t, ts, http.MethodGet, "/runs/no-such-run", nil, withToken(testToken)); code != http.StatusNotFound {
+		t.Errorf("unknown run = %d, want 404", code)
 	}
 
 	// Drive the engine callbacks and confirm the polled JSON reflects them:
@@ -544,25 +543,25 @@ func TestSmokeBackupProgressRoundTrip(t *testing.T) {
 	onProgress(started.JobID, 42.5, "halfway")
 	onStats(started.JobID, 1024, 4096, 7, 3)
 
-	prog := pollProgress(t, ts, started.JobID)
-	if !prog.Running || prog.Complete {
-		t.Errorf("job should still be running: %+v", prog)
+	prog := pollRun(t, ts, started.JobID)
+	if !prog.Running() || prog.State == RunDone {
+		t.Errorf("run should still be running: %+v", prog)
 	}
-	if prog.Progress != 42.5 || prog.Message != "halfway" {
+	if prog.Percent != 42.5 || prog.Message != "halfway" {
 		t.Errorf("progress not relayed: %+v", prog)
 	}
 	if prog.BytesDone != 1024 || prog.BytesTotal != 4096 || prog.NewChunks != 7 || prog.ReusedChunks != 3 {
 		t.Errorf("stats not relayed: %+v", prog)
 	}
-	if prog.StartTime == "" {
-		t.Error("start_time missing")
+	if prog.StartedAt.IsZero() {
+		t.Error("started_at missing")
 	}
 
 	onComplete(started.JobID, true, "Backup completed successfully")
 	close(h.release)
 
-	prog = pollProgress(t, ts, started.JobID)
-	if !prog.Complete || !prog.Success || prog.Running {
+	prog = pollRun(t, ts, started.JobID)
+	if prog.State != RunDone || !prog.Success || prog.Running() {
 		t.Errorf("completion not relayed: %+v", prog)
 	}
 	if prog.Error != "" {
@@ -597,15 +596,15 @@ func TestSmokeBackupFailureWithoutCallbacks(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		prog := pollProgress(t, ts, started.JobID)
-		if prog.Complete {
+		prog := pollRun(t, ts, started.JobID)
+		if prog.State == RunDone {
 			if prog.Success {
 				t.Errorf("failed backup reported success: %+v", prog)
 			}
 			if prog.Error == "" {
 				t.Errorf("failed backup carried no error text: %+v", prog)
 			}
-			if prog.Running {
+			if prog.Running() {
 				t.Errorf("failed backup still marked running: %+v", prog)
 			}
 			return
@@ -645,15 +644,17 @@ func TestSmokeHandlerErrorsPropagate(t *testing.T) {
 	}
 }
 
-func pollProgress(t *testing.T, ts *httptest.Server, jobID string) BackupProgress {
+// pollRun reads one run the way the console does: /runs/{id}, which replaced
+// the deleted /backup/status/{id}.
+func pollRun(t *testing.T, ts *httptest.Server, runID string) Run {
 	t.Helper()
-	code, body := do(t, ts, http.MethodGet, "/backup/status/"+jobID, nil, withToken(testToken))
+	code, body := do(t, ts, http.MethodGet, "/runs/"+runID, nil, withToken(testToken))
 	if code != http.StatusOK {
-		t.Fatalf("GET /backup/status/%s = %d (%s)", jobID, code, body)
+		t.Fatalf("GET /runs/%s = %d (%s)", runID, code, body)
 	}
-	var prog BackupProgress
-	if err := json.Unmarshal([]byte(body), &prog); err != nil {
-		t.Fatalf("decode progress: %v (%s)", err, body)
+	var run Run
+	if err := json.Unmarshal([]byte(body), &run); err != nil {
+		t.Fatalf("decode run: %v (%s)", err, body)
 	}
-	return prog
+	return run
 }

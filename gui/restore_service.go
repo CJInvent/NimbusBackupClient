@@ -181,6 +181,13 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 		}
 		return a.ListVolumeDirectory(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
 			p.DiskArchive, p.PartIndex, p.Dir)
+
+	case opSpace:
+		p, err := decodeParams[SpaceParams](op, raw)
+		if err != nil {
+			return nil, err
+		}
+		return checkDownloadSpace(p)
 	}
 	return nil, fmt.Errorf("restore query %q is declared but not implemented", op)
 }

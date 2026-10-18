@@ -26,6 +26,7 @@ const (
 	opDownload     = "download"
 	opSearch       = "search"
 	opCancelSearch = "cancel-search"
+	opSpace        = "space"
 
 	opVolumePartitions        = "volume-partitions"
 	opVolumeFiles             = "volume-files"
@@ -87,6 +88,14 @@ type DownloadParams struct {
 	DestPath     string   `json:"dest_path"`
 	AsZip        bool     `json:"as_zip"`
 	NeededBytes  int64    `json:"needed_bytes"`
+}
+
+// SpaceParams — op "space": will NeededBytes fit on the drive holding
+// DestPath. Answered by the service, which is the process that writes the
+// bytes, so the drive it measures is the drive the download lands on.
+type SpaceParams struct {
+	DestPath    string `json:"dest_path"`
+	NeededBytes int64  `json:"needed_bytes"`
 }
 
 // SearchParams — op "search".

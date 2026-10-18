@@ -12,26 +12,42 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 )
 
+// postureMaxAge is how long a posture reading is reused. The service answers
+// /status from it for as long as it runs, which is months, and the
+// Windows Update check is about recency: computed once per process, it would
+// keep saying "fine" long after updates had stopped arriving.
+const postureMaxAge = time.Hour
+
 var (
-	postureOnce     sync.Once
+	postureMu       sync.Mutex
+	postureAt       time.Time
 	postureWarnings []string
 )
 
 // GetSecurityWarnings returns human-readable security posture warnings for
-// this machine (empty when nothing is wrong). Bound to the frontend; also
-// logged once per process at first use.
+// this machine (empty when nothing is wrong). The service serves it on
+// /status (security_warnings); until V4-CONSOLE C2 the console also calls it
+// itself. Re-read at most hourly; logged when the answer changes.
 func (a *App) GetSecurityWarnings() []string {
-	postureOnce.Do(func() {
-		postureWarnings = collectSecurityWarnings()
-		for _, w := range postureWarnings {
+	postureMu.Lock()
+	defer postureMu.Unlock()
+	if !postureAt.IsZero() && time.Since(postureAt) < postureMaxAge {
+		return slices.Clone(postureWarnings)
+	}
+	fresh := collectSecurityWarnings()
+	if postureAt.IsZero() || !slices.Equal(fresh, postureWarnings) {
+		for _, w := range fresh {
 			writeWarnLog(fmt.Sprintf("[SecurityPosture] WARNING: %s", w))
 		}
-		if len(postureWarnings) == 0 {
+		if len(fresh) == 0 {
 			writeInfoLog("[SecurityPosture] No issues detected")
 		}
-	})
-	return postureWarnings
+	}
+	postureWarnings, postureAt = fresh, time.Now()
+	return slices.Clone(postureWarnings)
 }

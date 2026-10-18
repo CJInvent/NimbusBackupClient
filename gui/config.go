@@ -295,6 +295,45 @@ func (c *Config) Save() error {
 	return atomicWriteFile(configPath, data, 0600)
 }
 
+// connectionTest asks the server this configuration names for its datastore's
+// status: DNS, TLS (pinned when a fingerprint is set, CA-verified otherwise),
+// the token and the datastore permission, in one request. Validate first.
+//
+// The service runs it for POST /pbs/test (docs/V4-CONSOLE.md §4.1); until
+// V4-CONSOLE C2 the console's own TestConnection runs it too, which is why it
+// is untagged.
+func (c *Config) connectionTest() error {
+	client := &pbscommon.PBSClient{
+		BaseURL:          c.BaseURL,
+		CertFingerPrint:  c.CertFingerprint,
+		AuthID:           c.AuthID,
+		Secret:           c.Secret,
+		Datastore:        c.Datastore,
+		Namespace:        c.Namespace,
+		Insecure:         c.CertFingerprint != "",
+		CompressionLevel: pbscommon.CompressionFastest, // Default for test connections
+		Manifest: pbscommon.BackupManifest{
+			BackupID: c.BackupID,
+		},
+	}
+
+	// Debug log with sanitized credentials
+	writeInfoLog(fmt.Sprintf("Testing connection: URL=%s, AuthID=%s, Secret=%s, Datastore=%s",
+		security.SanitizeURL(c.BaseURL),
+		c.AuthID,
+		security.SanitizeSecret(c.Secret),
+		c.Datastore))
+
+	// Perform real HTTP test (checks DNS, connectivity, auth, datastore access)
+	if err := client.TestConnection(); err != nil {
+		writeErrorLog(fmt.Sprintf("Connection test failed: %v", err))
+		return err
+	}
+
+	writeInfoLog("Connection test successful (authenticated + datastore accessible)")
+	return nil
+}
+
 func (c *Config) Validate() error {
 	// Validate BaseURL
 	if c.BaseURL == "" {

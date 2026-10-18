@@ -285,7 +285,8 @@ carry every field needed. Nothing new has to be designed; it has to be
 - `GET /runs/{run_id}` — one run, live or finished.
 
 `/backup/status/{jobID}` stays for one release as a redirect to
-`/runs/{run_id}`, then goes.
+`/runs/{run_id}`, then goes. (Gone in V4-CONSOLE C1, 2026-10-17: nothing
+called it.)
 
 ### 3.5 The GUI polls, and only polls
 

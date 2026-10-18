@@ -382,40 +382,10 @@ func (a *App) ListPhysicalDisks() ([]PhysicalDiskInfo, error) {
 	return disks, nil
 }
 
-// GetConfigWithHostname returns config with hostname pre-filled
+// GetConfigWithHostname returns config with hostname pre-filled (the same
+// view the service serves on /status; config_view.go).
 func (a *App) GetConfigWithHostname() map[string]interface{} {
-	hostname := a.GetHostname()
-	cfg := a.config
-
-	// Return config as map with hostname
-	result := map[string]interface{}{
-		"baseurl":         cfg.BaseURL,
-		"certfingerprint": cfg.CertFingerprint,
-		"authid":          cfg.AuthID,
-		// M-04: never hand the PBS token to the webview/frontend. Expose only
-		// whether one is stored; SaveConfig keeps the existing secret when the
-		// frontend submits an empty value, and TestConnection falls back to it.
-		"secret":                  "",
-		"secret_set":              cfg.Secret != "",
-		"datastore":               cfg.Datastore,
-		"namespace":               cfg.Namespace,
-		"backupdir":               cfg.BackupDir,
-		"backup-id":               cfg.BackupID,
-		"usevss":                  cfg.UseVSS,
-		"upload_limit_mbps":       cfg.UploadLimitMbps,
-		"control_server_url":      cfg.ControlServerURL,
-		"control_enrolled":        cfg.ControlAgentID > 0,
-		"exchange_aware":          cfg.ExchangeAware,
-		"exchange_log_truncation": cfg.ExchangeLogTruncation,
-		"hostname":                hostname,
-	}
-
-	// Pre-fill backup-id with hostname if empty
-	if cfg.BackupID == "" {
-		result["backup-id"] = hostname
-	}
-
-	return result
+	return configView(a.config, a.GetHostname())
 }
 
 // DiagnoseConfig returns config validation status for debugging
@@ -549,36 +519,7 @@ func (a *App) TestConnection(config *Config) error {
 		return err
 	}
 
-	// Create PBS client
-	client := &pbscommon.PBSClient{
-		BaseURL:          testConfig.BaseURL,
-		CertFingerPrint:  testConfig.CertFingerprint,
-		AuthID:           testConfig.AuthID,
-		Secret:           testConfig.Secret,
-		Datastore:        testConfig.Datastore,
-		Namespace:        testConfig.Namespace,
-		Insecure:         testConfig.CertFingerprint != "",
-		CompressionLevel: pbscommon.CompressionFastest, // Default for test connections
-		Manifest: pbscommon.BackupManifest{
-			BackupID: testConfig.BackupID,
-		},
-	}
-
-	// Debug log with sanitized credentials
-	writeInfoLog(fmt.Sprintf("Testing connection: URL=%s, AuthID=%s, Secret=%s, Datastore=%s",
-		security.SanitizeURL(testConfig.BaseURL),
-		testConfig.AuthID,
-		security.SanitizeSecret(testConfig.Secret),
-		testConfig.Datastore))
-
-	// Perform real HTTP test (checks DNS, connectivity, auth, datastore access)
-	if err := client.TestConnection(); err != nil {
-		writeErrorLog(fmt.Sprintf("Connection test failed: %v", err))
-		return err
-	}
-
-	writeInfoLog("Connection test successful (authenticated + datastore accessible)")
-	return nil
+	return testConfig.connectionTest()
 }
 
 // GetLastBackupDirs returns the last used backup directories

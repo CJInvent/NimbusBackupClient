@@ -121,18 +121,6 @@ type Partition struct {
 	VolumePath  string
 }
 
-// PhysicalDiskInfo contains information about a physical disk
-type PhysicalDiskInfo struct {
-	Identity   string   `json:"identity"`
-	Target     string   `json:"target"`
-	DiskNumber int      `json:"diskNumber"`
-	SizeBytes  int64    `json:"sizeBytes"`
-	SizeText   string   `json:"sizeText"`
-	Letters    []string `json:"letters"`
-	Label      string   `json:"label"`
-	Path       string   `json:"path"`
-}
-
 func enumVolumeDiskOffset() ([]VolumeLetterAssign, error) {
 	ret := make([]VolumeLetterAssign, 0)
 	volumeName := make([]uint16, windows.MAX_PATH)

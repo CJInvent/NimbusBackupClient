@@ -240,7 +240,7 @@ func TestRetentionNeverPrunesARunningBackup(t *testing.T) {
 	finished := r.Begin(TriggerManual, "", "", "SRV-01", "directory")
 	r.Complete(finished, true, "done")
 
-	clk.advance(30 * 24 * time.Hour) // far past defaultRetain
+	clk.advance(defaultRetain + 24*time.Hour) // past retention
 	r.Begin(TriggerManual, "", "", "SRV-01", "directory")
 
 	if _, ok := r.Get(longRun); !ok {
@@ -483,14 +483,16 @@ func TestStatusVersionIsUnknownRatherThanWrong(t *testing.T) {
 
 func TestRunsRecentRejectsAWindowItCannotHonour(t *testing.T) {
 	_, ts := newRunsTestServer(t)
-	for _, q := range []string{"?days=0", "?days=-1", "?days=90", "?days=abc"} {
+	for _, q := range []string{"?days=0", "?days=-1", "?days=31", "?days=90", "?days=abc"} {
 		if code := getJSON(t, ts, "/runs/recent"+q, nil); code != http.StatusBadRequest {
 			t.Errorf("/runs/recent%s = %d, want 400 — retention is %v, so a larger window would imply history the service does not keep",
 				q, code, defaultRetain)
 		}
 	}
-	if code := getJSON(t, ts, "/runs/recent?days=7", nil); code != http.StatusOK {
-		t.Errorf("/runs/recent?days=7 = %d, want 200", code)
+	for _, q := range []string{"?days=7", "?days=30"} {
+		if code := getJSON(t, ts, "/runs/recent"+q, nil); code != http.StatusOK {
+			t.Errorf("/runs/recent%s = %d, want 200", q, code)
+		}
 	}
 }
 

@@ -26,6 +26,9 @@ type StatusResponse struct {
 	ActiveJobs    int            `json:"active_jobs"`
 	LastBackup    string         `json:"last_backup,omitempty"`
 	Configuration map[string]any `json:"configuration"`
+	// SecurityWarnings is the machine's security posture, one sentence per
+	// problem; empty when nothing is wrong. Never null.
+	SecurityWarnings []string `json:"security_warnings"`
 }
 
 // JobInfo represents information about a scheduled job
@@ -49,21 +52,4 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Code    int    `json:"code"`
 	Details string `json:"details,omitempty"`
-}
-
-// BackupProgress represents the current state of a running backup
-type BackupProgress struct {
-	JobID     string  `json:"job_id"`
-	Running   bool    `json:"running"`
-	Progress  float64 `json:"progress"` // 0-100
-	Message   string  `json:"message"`
-	Success   bool    `json:"success"`
-	Complete  bool    `json:"complete"`
-	Error     string  `json:"error,omitempty"`
-	StartTime string  `json:"start_time,omitempty"`
-	// Structured live stats (machine backups; zero when not reported)
-	BytesDone    uint64 `json:"bytes_done,omitempty"`
-	BytesTotal   uint64 `json:"bytes_total,omitempty"`
-	NewChunks    uint64 `json:"new_chunks,omitempty"`
-	ReusedChunks uint64 `json:"reused_chunks,omitempty"`
 }
