@@ -8,6 +8,20 @@ another file is named, so after S1 the App.jsx line numbers past the removed
 blocks are stale by up to a few hundred lines. CJ's answers of 2026-10-09 are
 recorded in section 7 and applied below.
 
+**Changed by two later specifications (2026-10-17).** `docs/V4-CONSOLE.md`
+makes the console a separate module whose every binding is one call to the
+service, and `docs/V4-LOCAL-API.md` replaces the loopback port with a named
+pipe that knows the caller. Effects on the rows below: S8's Go half (local-job
+writes only through the local API, and the test that the GUI links no job
+writer) is V4-CONSOLE C2 and its module allowlist; S8 keeps the screens. S6
+(Setup), S8 (Jobs) and S10 (Restore) each gain an **Elevate permissions**
+button, shown only while the window is not elevated, which opens that tab in
+an elevated window; no screen prompts for UAC on entry (V4-LOCAL-API section
+6). In S10, a non-elevated Browse shows only the files the caller's account
+could read and restores only into the caller's own profile (V4-LOCAL-API
+section 5). The in-app folder picker moves into the service (V4-LOCAL-API P3).
+Finding 3 closes in V4-CONSOLE C2.
+
 Companion documents: client `docs/V4-PIPELINE.md`, `docs/V4-RESTORE.md`;
 NimbusControl `docs/V4-CLIENT-CONFIG.md`, `V4-AUDITABILITY.md`,
 `V4-PBS-OPACITY.md`, `V4-ORG-SURFACE.md`, `V4-FIRST-ENROLLMENT.md`,

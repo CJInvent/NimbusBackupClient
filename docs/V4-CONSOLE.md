@@ -7,6 +7,13 @@ was taken from that commit with the CI-pinned toolchain (`go1.26.9`), building
 The local build is a faithful model of the shipped one: 13,268,992 bytes stripped
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
+**Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
+D2 (b), the service installs WebView2 and the console drops the downloader;
+D3, `cleanup_legacy.go` is deleted. F1 became its own specification,
+`docs/V4-LOCAL-API.md` (the named pipe, caller identity, the elevated Browse
+window), which replaces this document's C4. Build order across both documents:
+C1, C2, C3 here, then P1 to P5 there.
+
 Companion documents: `docs/V4-PIPELINE.md` (the backup rewire, CJ's rule of
 2026-08-05), `docs/V4-RESTORE.md` (the restore rewire), `docs/V4-GUI-AUDIT.md`
 (the screens; this document is the Go half of its S8 and the ground S5 stands
@@ -202,7 +209,7 @@ over. "NEW" marks a route the service does not have yet (section 4).
 | `GetJobHistory` | **removed**; the history table reads `GetRecentRuns` (section 4.2) | reads the file |
 | the 14 restore bindings | unchanged (already API) | API |
 | `CheckDownloadSpace` | `POST /restore/query` op `space` — **NEW op**, declared in `api/restore.go`'s table with the `file_restore` right, computed by the process that writes the bytes | local |
-| `ListDrives`, `ListFolders`, `CreateFolder`, `DefaultSaveDir` | **decision D1** (section 6) | local |
+| `ListDrives`, `ListFolders`, `CreateFolder`, `DefaultSaveDir` | stay in the console through C3; V4-LOCAL-API P3 moves them to `/fs/list` and `/fs/mkdir`, served as the caller (D1) | local |
 | `ListPBSServers`, `GetDefaultPBSID` | `GET /pbs/servers` — **NEW** (sanitized, plus the default id) | local copy |
 | `AddPBSServer`, `UpdatePBSServer` | `POST /pbs/save`, no local fallback | API, else writes config |
 | `DeletePBSServer`, `SetDefaultPBSServer`, `PinPBSServerFingerprint` | `/pbs/delete/{id}`, `/pbs/default`, `/pbs/fingerprint`, no local fallback | API, else writes config |
@@ -289,13 +296,13 @@ rather than passes on an empty input:
    console lacks is a broken screen. Plus a front-end test that `window.go`
    appears only in `bindings.js`.
 3. **One call per binding.** A source test over `console/*.go` (excluding
-   `main.go`, `tray*.go` and the picker, D1): no `os.WriteFile`, `os.Create`,
+   `main.go`, `tray*.go` and, until V4-LOCAL-API P3, the picker): no `os.WriteFile`, `os.Create`,
    `os.Rename`, `os.Remove`, `registry.`, `exec.Command`, `net.Dial` outside the
    API client. Crude by design; it exists to make the next "just read the file
    here, it's quicker" a red build.
 4. **Size budget.** The Build GUI job prints the console's stripped size and
    fails above a budget recorded in the workflow: **11.2 MB** after phase C3,
-   lowered by phase C4 per decision D2. A budget set close to the measured size
+   lowered to 9.6 MB by V4-LOCAL-API P1 (D2). A budget set close to the measured size
    turns the next unexplained 400 KB into a red build before release rather than
    a question after it.
 
@@ -345,13 +352,14 @@ which is what the downloader is for. (a) Keep the downloader: console about
 runs as SYSTEM; on start it checks for the Evergreen runtime and installs it
 machine-wide if missing) and build the console with `wv2runtime.error`: console
 about 9.3 MB. **Recommendation: (b).** It is the same rule this document
-applies everywhere: the console does no installing.
+applies everywhere: the console does no installing. **Decided (CJ,
+2026-10-17): (b).** Built in V4-LOCAL-API P1.
 
 **D3. `cleanup_legacy.go`.** On every GUI start it deletes a scheduled task and
 an HKCU Run value left by pre-MSI versions. It has to run as the user (HKCU),
 so it cannot move to the service. **Recommendation: delete it**, with
 `cleanup_legacy_stub.go`. A leftover entry starts the console at login, which
-is now harmless.
+is now harmless. **Decided (CJ, 2026-10-17): delete.** In C3.
 
 ---
 
@@ -437,7 +445,7 @@ print-only step, so C3's budget starts from a measured number.
 single-instance lock), `bindings.go` (the `Console` type), `tray.go`,
 `storage_tray_icon.go`, `icon.go`, `restore_bindings.go` (already thin; it keeps
 translating polled restore state into the Wails events the screens listen
-for), the picker per D1, the few error codes it returns itself, and a small logger
+for), the picker (until V4-LOCAL-API P3), the few error codes it returns itself, and a small logger
 (section 9). `git mv gui/frontend console/frontend`; `wails.json` and
 `build/` move with it. `restore_types.go` and `restore_wire.go` (the shapes a
 restore speaks in) move into `gui/api`, since both sides use them.
@@ -457,7 +465,7 @@ Expected: console about 11.0 MB stripped (prototype 10,968,576; the real
 console carries more binding code than the prototype). About 2.3 MB off the
 GUI, 0.6 to 0.8 MB off the MSI (bracketed by gzip and xz; LZX lands between).
 
-### C4. Transport and runtime (after D2)
+### C4. Transport and runtime (superseded)
 
 `api.Client` stops using `http.DefaultTransport`: one request per connection,
 `net.Dial` to the loopback port, `req.Write`, `http.ReadResponse`. About 30
@@ -484,7 +492,7 @@ not built. The transport and the runtime move are V4-LOCAL-API.md phase P1.
 | `restore_bindings.go` | on `Console`; `security.ValidatePath` calls dropped (the service validates) |
 | `controlplane_policy_gui.go` | `IsReadOnly` and the cached policy read |
 | `tray.go`, `storage_tray_icon.go`, `icon.go` | the service stops linking systray, Wails and `image/*` |
-| `pathpicker.go` | per D1 |
+| `pathpicker.go` | until V4-LOCAL-API P3, which moves it to the service (D1) |
 | `version.go` | the console's own stamp |
 
 **Split:**
@@ -496,7 +504,7 @@ not built. The transport and the runtime move are V4-LOCAL-API.md phase P1.
 | `restore_types.go`, `restore_wire.go` | — | move to `gui/api` (shared shapes) |
 | `storage_identity.go` | `GetStorageIdentityStatus`, `ApproveStorageIdentity` (API calls) | `StorageIdentityStatusMap`, `ApproveStorageIdentityFromMap` |
 | `fileutil_core.go` | — | `evaluateSpace` serves the `space` op and the download block |
-| `diskspace_windows.go` | `logicalDriveRoots`, `volumeLabel`, and its own copy of `driveSpace` (about 30 lines) for the picker, per D1 | `driveSpace`, used by `evaluateSpace` |
+| `diskspace_windows.go` | `logicalDriveRoots`, `volumeLabel`, and its own copy of `driveSpace` (about 30 lines) for the picker, until V4-LOCAL-API P3 deletes them from the console | `driveSpace`, used by `evaluateSpace` |
 
 **Deleted:** `announce_run_gui.go` (the no-op twin of `announce_run_service.go`),
 `logging_variant_gui.go`, `download.go` (its check becomes the `space` op; its
