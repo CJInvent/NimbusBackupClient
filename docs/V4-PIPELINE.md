@@ -341,6 +341,11 @@ just additions:
 6. The standalone CLI engines from the customer release (§7 item 2), and
    `directorybackup`'s private `ChunkState`/didx implementation with them
    once the CLI is a service client
+7. Everything else the GUI build still compiles and binds: configuration and
+   secrets, the control-plane agent, scheduled-job writes, PBS management,
+   provisioning, storage identity. Execution left the GUI; those did not.
+   `docs/V4-CONSOLE.md` (2026-10-17) measures it and specifies the split into
+   a separate `console/` module
 
 Whatever is left after that is the pipeline.
 

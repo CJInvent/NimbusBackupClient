@@ -1,28 +1,87 @@
 # v4 Status — NimbusBackupClient
 
-### STILL OPEN: `gui/` has no `go.sum` (found 2026-08-05, unfixed 2026-08-25)
+## HANDOFF (2026-10-17): the console split and the local API
 
-`gui/go.mod` does not require `github.com/getlantern/systray` or
-`github.com/kardianos/service`, both of which `gui/` imports directly, and
-`gui/` has no `go.sum` at all. The build only works because every CI job runs
-`go mod tidy` first and resolves the graph from the network at build time.
-That means the dependency set of a shipped, code-signed MSI is not pinned by
-anything in the repository, and `go.sum` does not gate what goes into it.
+**Read first:** `docs/V4-CONSOLE.md`, then `docs/V4-LOCAL-API.md`. Both are
+specifications with every decision recorded; nothing in them is built yet.
+They went up together in PR #29 (spec only).
 
-**Fix it from a machine with Go 1.26 and a network** — it is thirty seconds,
-and it has stayed open only because the sandbox this was developed in cannot
-reach `proxy.golang.org`:
+**Why they exist.** CJ: the GUI should contain nothing except what talks to
+the service. Measured at `835da16`: the GUI build still compiles 70 files
+(13,302 lines) shared with the service, including both engines, the key vault
+and the DEK unwrap; Wails binds all 83 exported `App` methods, 31 of which the
+front end never calls (`StartControlPlane`, `ApplyProvisioningProfile`, ...);
+seven write bindings still write `config.json` themselves when the service is
+down. CI's two "no engine" checks are denylists and never saw it.
 
-```sh
-cd gui && GOWORK=off go mod tidy && git add go.mod go.sum && git commit
-```
+**Decided by CJ (2026-10-17), already written into the specs:**
 
-Review the `go mod tidy` output rather than taking it. Then change the CI
-build steps from `go mod tidy` to `-mod=readonly`, so a dependency change
-fails at review time instead of resolving silently at build time. **Do this
-before the first signed release, not after.**
+- The console becomes its own `console/` module; every binding is one call to
+  the service; the `service` build tag goes away.
+- A named pipe with Windows caller identity replaces the loopback port and the
+  shared token file. The service never trusts what a caller says about itself.
+- A non-elevated Browse shows only the files the caller's account could read
+  (stored descriptors, `AccessCheck`) and restores only into the caller's own
+  profile, written while impersonating them.
+- Elevation is an elevated Browse window, opened only by an **Elevate
+  permissions** button near the top of the tab; the button is shown whenever
+  the window is not elevated (Administrators run unelevated by default, so
+  group membership alone must not hide it). No UAC prompt on entering the tab.
+  Leaving the tab closes the elevated window. Setup and Jobs use the same
+  pattern.
+- The folder picker moves into the service, listing as the caller.
+- The service installs WebView2 when missing; the console is built with
+  `wv2runtime.error`. `cleanup_legacy.go` is deleted.
 
-**Last updated:** 2026-08-25. Branch: `v4_dev`.
+**Build order** (one PR each into `v4_dev`, spec, then tests, then code):
+
+| # | What | Depends on |
+|---|---|---|
+| C1 | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
+| C2 | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
+| C3 | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, binding allowlist, no-local-IO test and size budget replace the engine checks | C2 |
+| P1 | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
+| P2 | Route table: settings and job writes require an elevated admin | P1 |
+| P3 | Access-filtered browse, scoped restore, picker in the service | P2 |
+| P4 | Elevate button and elevated windows (Browse, Setup, Jobs) | P3 |
+| P5 | DEK file gets the narrow ACL (machine-scope DPAPI's stated reason is gone) | C2 |
+
+Expected size: console about 11.0 MB after C3 and about 9.3 MB after P1
+(13.27 MB today), from prototypes built for the measurement.
+
+**Shipped builds still carry finding F1** (any logged-on user, RDP included,
+can drive the SYSTEM service, including restoring a backed-up file to any path
+on a standalone install). Read from the code, not reproduced. P1 to P3 close
+it; until then, org `file_restore` policy is the only gate on managed machines.
+
+**Already done this session:** PR #28 (LZX cabinet, WOFF2-only fonts) merged
+and shipped as `v1.01.00-dev.244`: MSI 8,437,760 bytes against 10,461,184 for
+dev.231. CI fails if the cabinet is not LZX or a non-WOFF2 font reaches `dist`.
+
+**Sandbox facts that saved hours (2026-10-17):**
+
+- `proxy.golang.org` answers, but some module zips redirect to
+  `storage.googleapis.com`, which is blocked. `GONOPROXY='github.com/*,www.velocidex.com/*'`
+  fetches those over git; with `GOSUMDB=off` (the checksum DB is blocked) the
+  repo's `go.sum` still verifies. No mirror loop needed any more.
+- Go 1.26.9 (the CI pin) builds from source in a few minutes: clone
+  `golang/go` at the tag, `GOROOT_BOOTSTRAP=/usr/local/go ./make.bash`.
+- `GOOS=windows CGO_ENABLED=0 go build -trimpath -tags desktop,wv2runtime.download,production`
+  in `gui/` reproduces the shipped GUI within 1.5% of its size. An unstripped
+  build plus `go tool nm -size` attributes size by package;
+  `-ldflags=-dumpdep` gives dependency edges, but it does not record edges kept
+  alive by reflection, so confirm reachability in the symbol table.
+- Release asset blobs and job logs are not reachable; the releases API lists
+  sizes, and `gh api -H 'Accept: application/octet-stream' .../releases/assets/<id>`
+  downloads a release asset. Actions artifacts are not downloadable.
+
+The `gui/go.sum` item that headed this file until 2026-10-17 is closed: the
+file exists, and CI fails on an untidy `go.mod` (`go mod tidy -diff`) instead
+of tidying before builds.
+
+---
+
+**Last updated:** 2026-10-17 (handoff above). Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in
 **NimbusControl**, because most of it describes a server/client contract that
@@ -37,13 +96,17 @@ only makes sense read as one thing:
 | `NimbusControl/docs/V4-AUDIT.md` | Phase B audit findings, including the two client subsystems deleted |
 | `NimbusControl/docs/AGENT-API.md` | The wire contract. It is authoritative: server-side compliance parses it and fails the build if the implementation disagrees |
 
-One design record lives **here** rather than in NimbusControl, because it
-describes this repository's internal architecture and nothing crosses the
+These design records live **here** rather than in NimbusControl, because they
+describe this repository's internal architecture and nothing crosses the
 wire:
 
 | Document | What it is |
 |---|---|
 | `docs/V4-PIPELINE.md` | One backup pipeline, in the service. Root-causes the "GUI cannot see a scheduled backup" report, and lists what gets deleted |
+| `docs/V4-RESTORE.md` | Restore moved into the service; how a restore finds its key |
+| `docs/V4-GUI-AUDIT.md` | Every screen against the operating model; build order S1 to S13 |
+| `docs/V4-CONSOLE.md` | The console as a client of the service and nothing else (C1 to C3) |
+| `docs/V4-LOCAL-API.md` | Named pipe, caller identity, elevation, scoped browse and restore (P1 to P5) |
 
 ---
 
