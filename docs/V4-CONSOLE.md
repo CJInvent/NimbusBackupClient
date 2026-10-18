@@ -7,6 +7,8 @@ was taken from that commit with the CI-pinned toolchain (`go1.26.9`), building
 The local build is a faithful model of the shipped one: 13,268,992 bytes stripped
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
+**Progress:** C1 built (PR #30). Next: C2.
+
 **Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
 D2 (b), the service installs WebView2 and the console drops the downloader;
 D3, `cleanup_legacy.go` is deleted. F1 became its own specification,
@@ -409,6 +411,42 @@ extended so every new route is refused while locked; the registry round trip
 (write, restart, read; a `running` record at start becomes interrupted); the
 `space` op declared in the restore table, so `restore_ops_test.go`'s three
 lists still agree.
+
+**Built (2026-10-17, PR #30).** As specified, with these details settled in
+the building:
+
+- `GET /pbs/servers` answers `{servers, default_id, datapath_proxy}`. The
+  wire type `api.PBSServerInfo` has no secret field, so the sanitization is a
+  property of the type; `secret_set` says whether one is stored. Sorted by id.
+- `POST /pbs/test` answers 200 with `{ok, error, cert_untrusted}` when the test
+  ran, pass or fail; 404 for an unknown id, 409 in proxy mode. `cert_untrusted`
+  (no fingerprint pinned and the certificate failed verification) replaces the
+  console's word-matching on the error text in C2. `POST /pbs/discover` is
+  refused in proxy mode too (409; there is nothing to pin), 400 for a URL
+  `security.ValidateURL` refuses, 502 when the server cannot be reached.
+- `GET /exchange` runs the Exchange Management Shell query only with
+  `?log_mode=1`: it takes seconds, and the console already asked for it
+  lazily.
+- `/status` `security_warnings` is re-read at most hourly. Computed once per
+  process, as the console did, a service running for months would keep
+  reporting a Windows Update check from its first day.
+- `configuration` is the console's whole view (`config_view.go`), not the
+  five fields the service sent before; `last_backup_dirs` joins it.
+- The history file is `run_history.json` beside `config.json`, written when a
+  run begins as well as when it ends: a run the service dies during is then
+  in the file, and is closed as interrupted at the next start. An unreadable
+  file is moved to `run_history.json.unreadable`. Retention is 30 days (3,000
+  runs), and `/runs/recent` accepts up to 30.
+- **Moved to C2:** deleting `job_history.json`, `AddJobHistory`,
+  `GetJobHistory` and `CleanupAbandonedJobs`. The console's history table
+  still reads that file until C2 switches it to `GetRecentRuns`.
+- `/backup/status/{id}` and `api.BackupProgress` are deleted, and the route
+  left the locked allowlist with them.
+- `PhysicalDiskInfo`, `ExchangeStatus` and `ExchangeLogMode` are aliases of
+  the `gui/api` wire types; `PhysicalDiskInfo` had been declared twice.
+- CI's Linux unit job now runs the service build's tests (`-tags service`)
+  as well as the GUI build's; until now they ran only on Windows, picked by
+  name.
 
 ### C2. Every binding becomes one API call (behavior change)
 

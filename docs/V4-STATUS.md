@@ -3,8 +3,17 @@
 ## HANDOFF (2026-10-17): the console split and the local API
 
 **Read first:** `docs/V4-CONSOLE.md`, then `docs/V4-LOCAL-API.md`. Both are
-specifications with every decision recorded; nothing in them is built yet.
-They went up together in PR #29 (spec only).
+specifications with every decision recorded. They went up together in PR #29
+(spec only).
+
+**Where the build stands (2026-10-17, evening):** C1 is built, in PR #30
+(stacked on #29's commits; merge #29 first). V4-CONSOLE §8 C1 records what
+was settled while building it, including the one item moved to C2 (deleting
+`job_history.json`, because the console's history table reads it until C2).
+**Next: C2.** Every binding becomes one call to a C1 route; the client
+methods it needs (`ListPBSServers`, `TestPBSServer`, `DiscoverPBSFingerprint`,
+`GetDisks`, `GetExchange`, `GetStatus().SecurityWarnings`) are in `gui/api`
+and tested over HTTP.
 
 **Why they exist.** CJ: the GUI should contain nothing except what talks to
 the service. Measured at `835da16`: the GUI build still compiles 70 files
@@ -37,7 +46,7 @@ down. CI's two "no engine" checks are denylists and never saw it.
 
 | # | What | Depends on |
 |---|---|---|
-| C1 | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
+| C1 (built, #30) | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
 | C2 | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
 | C3 | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, binding allowlist, no-local-IO test and size budget replace the engine checks | C2 |
 | P1 | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
