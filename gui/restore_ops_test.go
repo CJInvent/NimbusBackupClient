@@ -28,7 +28,7 @@ import (
 // consoleOps is every op the console can name, taken from the constants
 // themselves rather than retyped — a copy would be one more thing to drift.
 var consoleOps = []string{
-	opSnapshots, opContents, opMeta, opRestore, opDownload, opSearch, opCancelSearch,
+	opSnapshots, opContents, opMeta, opRestore, opDownload, opSearch, opCancelSearch, opSpace,
 	opVolumePartitions, opVolumeFiles, opVolumeDirectory, opVolumeDownload, opVolumeFileRestore, opCancelVolumeFileRestore,
 }
 
@@ -98,6 +98,8 @@ func constNameFor(op string) string {
 		return "opSearch"
 	case opCancelSearch:
 		return "opCancelSearch"
+	case opSpace:
+		return "opSpace"
 	case opVolumePartitions:
 		return "opVolumePartitions"
 	case opVolumeFiles:

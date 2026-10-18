@@ -490,7 +490,13 @@ jobs:
         shell: bash
         env:
           GOWORK: off
-        run: go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee ../unit-gui.log
+        run: |
+          go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee ../unit-gui.log
+          # The service build's tests too. Most of the client is service-tagged
+          # (docs/V4-PIPELINE.md, docs/V4-CONSOLE.md), and until V4-CONSOLE C1
+          # its tests ran only in the Windows smoke job, behind a -run filter
+          # that picked a handful of them by name.
+          go test -v -race -tags service ./... 2>&1 | tee -a ../unit-gui.log
 
       # The job log is not readable from where the build sessions work (the
       # API they have returns a check's conclusion, not its log), so a failure
@@ -638,7 +644,7 @@ jobs:
           GOWORK: off
         run: |
           go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|VolumeMountPaths|PBSReachability|Storage)' ./...
-          go test -tags service -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage)' ./...
+          go test -tags service -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage|ServiceAPI)' ./...
 
       # S10: create a real VSS snapshot through the production code path and
       # confirm the 0.2.150 diagnostics actually emit.

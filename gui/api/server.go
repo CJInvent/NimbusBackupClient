@@ -59,6 +59,13 @@ type BackupHandler interface {
 	SaveControlPlaneFromMap(m map[string]interface{}) error
 }
 
+// postureReporter is the optional source of /status's security_warnings: the
+// machine's security posture, computed by the service (docs/V4-CONSOLE.md
+// §4.1) rather than probed from the user's session.
+type postureReporter interface {
+	GetSecurityWarnings() []string
+}
+
 // NewServer creates a new API server. token is the shared local-auth secret that
 // every request must present in the X-Nimbus-Token header (H-01).
 func NewServer(addr string, handler BackupHandler, token string) *Server {
@@ -91,7 +98,6 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/storage/identity", s.handleStorageIdentity)
 	s.mux.HandleFunc("/backup", s.handleBackup)
-	s.mux.HandleFunc("/backup/status/", s.handleBackupStatus)
 	s.mux.HandleFunc("/connections", s.handleConnections)
 	s.mux.HandleFunc("/runs/active", s.handleRunsActive)
 	s.mux.HandleFunc("/runs/recent", s.handleRunsRecent)
@@ -105,6 +111,15 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/pbs/save", s.handleSavePBSServer)
 	s.mux.HandleFunc("/pbs/delete/", s.handleDeletePBSServer)
 	s.mux.HandleFunc("/pbs/default", s.handleSetDefaultPBS)
+	// Read and probe PBS through the service (pbs.go), so the console needs
+	// neither config.json nor the token (docs/V4-CONSOLE.md §4.1).
+	s.mux.HandleFunc("/pbs/servers", s.handleListPBSServers)
+	s.mux.HandleFunc("/pbs/test", s.handleTestPBS)
+	s.mux.HandleFunc("/pbs/discover", s.handleDiscoverPBS)
+	// Facts about this machine the console used to establish itself
+	// (machine.go).
+	s.mux.HandleFunc("/disks", s.handleDisks)
+	s.mux.HandleFunc("/exchange", s.handleExchange)
 	s.mux.HandleFunc("/config/save", s.handleSaveConfig)
 	s.mux.HandleFunc("/controlplane/status", s.handleControlPlaneStatus)
 	s.mux.HandleFunc("/controlplane/save", s.handleControlPlaneSave)
@@ -142,10 +157,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := StatusResponse{
-		Running:       true,
-		Version:       version,
-		ActiveJobs:    s.runs.ActiveCount(),
-		Configuration: config,
+		Running:          true,
+		Version:          version,
+		ActiveJobs:       s.runs.ActiveCount(),
+		Configuration:    config,
+		SecurityWarnings: []string{},
+	}
+	if p, ok := s.app.(postureReporter); ok {
+		if w := p.GetSecurityWarnings(); w != nil {
+			status.SecurityWarnings = w
+		}
 	}
 
 	s.writeJSON(w, status, http.StatusOK)
@@ -249,39 +270,6 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, resp, http.StatusOK)
-}
-
-// handleBackupStatus is the DEPRECATED per-job progress route. Superseded by
-// /runs/active and /runs/{run_id}; kept for one release so a GUI built before
-// the run registry keeps working.
-//
-// An unknown id still 404s. Answering with "the run actually in flight" was
-// tried and reverted: this route's contract is "how is THIS job doing", and
-// the smoke suite already pins that an unknown id must not report a phantom
-// job. Making a deprecated route guess is how a GUI ends up displaying a
-// scheduled run as if it were the one the user started. The fix for a caller
-// that does not know the id is /runs/active, which is the point of it.
-func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Extract job ID from URL path: /backup/status/{jobID}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/backup/status/"), "/")
-	if len(pathParts) == 0 || pathParts[0] == "" {
-		s.writeError(w, "Job ID required", http.StatusBadRequest)
-		return
-	}
-
-	run, ok := s.runs.Get(pathParts[0])
-	if !ok {
-		s.writeError(w, "Job not found", http.StatusNotFound)
-		return
-	}
-
-	progress := toBackupProgress(run)
-	s.writeJSON(w, &progress, http.StatusOK)
 }
 
 // handleBackupCancel stops the running backup. Backups are serialized (one at a

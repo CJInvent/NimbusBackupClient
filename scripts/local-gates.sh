@@ -96,6 +96,9 @@ if [ "${1:-all}" != "lint" ]; then
     step "tests: controlplane and gui"
     ( cd controlplane && go test -race -count=1 ./... ) || bad "controlplane tests"
     ( cd gui          && go test -race -count=1 ./... ) || bad "gui tests"
+    # The service build's own tests. Most of the code is service-tagged, and
+    # until V4-CONSOLE C1 CI ran these only on Windows, behind a -run filter.
+    ( cd gui          && go test -race -count=1 -tags service ./... ) || bad "gui tests (service build)"
 
     # Keep this list in sync with go.work + pkg/*, as the CI job says.
     step "tests: every other workspace module"

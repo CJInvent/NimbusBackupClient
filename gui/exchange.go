@@ -21,27 +21,15 @@ package main
 // registry hive (2010=14, 2013=15, 2016=15, 2019=15) and the action layer uses
 // the Exchange Management Shell, which is version-independent.
 
-// ExchangeStatus is the detection result surfaced to the GUI/control server.
-type ExchangeStatus struct {
-	Installed bool   `json:"installed"`
-	Version   string `json:"version"` // e.g. "2019", "2016", or "" when absent
-	Aware     bool   `json:"aware"`   // config.ExchangeAware
-	// HighlightSetting is true when Exchange is present but app-aware mode is
-	// off - the GUI uses it to draw attention to the toggle.
-	HighlightSetting bool `json:"highlight_setting"`
-	// LogTruncation mirrors config.ExchangeLogTruncation; HighlightTruncation is
-	// true when Exchange is present but post-backup log truncation is off.
-	LogTruncation       bool `json:"log_truncation"`
-	HighlightTruncation bool `json:"highlight_truncation"`
-}
+import "github.com/tizbac/proxmoxbackupclient_go/gui/api"
 
-// ExchangeLogMode is the (lazily queried) transaction-log posture, surfaced so
-// the GUI can recommend truncation only when logs actually accumulate.
-type ExchangeLogMode struct {
-	Queried        bool   `json:"queried"`
-	LogsAccumulate bool   `json:"logs_accumulate"`
-	Detail         string `json:"detail"`
-}
+// ExchangeStatus and ExchangeLogMode are the wire shapes in gui/api
+// (machine.go), aliased so the service's answer and the console's reading of
+// it are one type.
+type (
+	ExchangeStatus  = api.ExchangeStatus
+	ExchangeLogMode = api.ExchangeLogMode
+)
 
 // GetExchangeStatus is bound to the frontend and consumable by the control
 // server. Detection itself is platform-specific (see exchange_windows.go).

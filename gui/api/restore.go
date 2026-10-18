@@ -85,6 +85,7 @@ var restoreOps = []RestoreOp{
 	{"download", OpJob, RightFileRestore, "extract a selection and package it at a chosen path"},
 	{"search", OpJob, RightFileRestore, "search file names and paths across snapshots"},
 	{"cancel-search", OpControl, RightFileRestore, "stop an in-flight search"},
+	{"space", OpQuery, RightFileRestore, "check the free space for a download, on the drive the service will write to"},
 
 	// --- volume backup: FILES out of a stored disk image ---
 	{"volume-partitions", OpQuery, RightFileRestore, "enumerate the partitions of a stored disk image"},

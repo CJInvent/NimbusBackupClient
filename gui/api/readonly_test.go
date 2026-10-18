@@ -170,7 +170,7 @@ func TestReadOnlyAllowedIsPurelyAboutMethodAndPath(t *testing.T) {
 		{http.MethodGet, "/runs/active", true},
 		{http.MethodGet, "/runs/recent", true},
 		{http.MethodGet, "/runs/run-1-2", true},
-		{http.MethodGet, "/backup/status/job-1", true},
+		{http.MethodGet, "/backup/status/job-1", false}, // deleted route, not a reader
 		{http.MethodGet, "/controlplane/status", true},
 		{http.MethodGet, "/connections", true},
 		{http.MethodPost, "/connections", false},

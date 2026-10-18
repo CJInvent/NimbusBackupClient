@@ -90,26 +90,3 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, run, http.StatusOK)
 }
-
-// toBackupProgress converts a Run to the pre-v4 wire shape.
-//
-// Kept only for /backup/status/{jobID}, which a GUI built before the registry
-// still calls. New consumers read Run, which carries the trigger, the state and
-// the current directory that BackupProgress has no room for.
-func toBackupProgress(run Run) BackupProgress {
-	p := BackupProgress{
-		JobID:        run.RunID,
-		Running:      run.Running(),
-		Progress:     run.Percent,
-		Message:      run.Message,
-		Success:      run.Success,
-		Complete:     run.State == RunDone,
-		Error:        run.Error,
-		StartTime:    run.StartedAt.Format(time.RFC3339),
-		BytesDone:    run.BytesDone,
-		BytesTotal:   run.BytesTotal,
-		NewChunks:    run.NewChunks,
-		ReusedChunks: run.ReusedChunks,
-	}
-	return p
-}

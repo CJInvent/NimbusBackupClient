@@ -16,21 +16,12 @@ import (
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
-// GetConfigWithHostname returns the configuration with hostname
+// GetConfigWithHostname is /status's "configuration": the whole console view
+// (config_view.go), so the console can read its settings from the service
+// rather than from its own copy of config.json (docs/V4-CONSOLE.md §3).
 func (a *App) GetConfigWithHostname() map[string]interface{} {
 	hostname, _ := os.Hostname()
-	result := map[string]interface{}{
-		"hostname": hostname,
-	}
-
-	if a.config != nil {
-		result["baseurl"] = a.config.BaseURL
-		result["datastore"] = a.config.Datastore
-		result["certfingerprint"] = a.config.CertFingerprint
-		result["backup-id"] = a.config.BackupID
-	}
-
-	return result
+	return configView(a.config, hostname)
 }
 
 // StartBackup starts a backup somebody asked for AT THE MACHINE: the GUI's
