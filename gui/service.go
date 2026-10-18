@@ -100,6 +100,10 @@ func (s *NimbusService) run() {
 	}
 	s.apiServer = api.NewServer("127.0.0.1:18765", s.app, apiToken)
 	s.apiServer.SetVersion(appVersion)
+	// The run history survives a restart (docs/V4-CONSOLE.md §4.2). Before
+	// the registry is shared below, so no run begins while the file is read;
+	// a run the last process died during is closed here as interrupted.
+	loadRunHistory(s.apiServer.Runs())
 	// One store for every trigger. Until this line the scheduler and the
 	// API server each knew only about their own runs, which is why a
 	// scheduled backup was invisible to the GUI.

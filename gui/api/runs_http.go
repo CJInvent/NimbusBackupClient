@@ -16,6 +16,8 @@ import (
 //
 //	GET /runs/active         everything in flight, newest first
 //	GET /runs/recent?days=7  the status panel's window, live runs included
+//	                         (1 to 30 days; the history survives a restart,
+//	                         runs_store.go)
 //	GET /runs/{run_id}       one run
 //
 // All read-only. Starting a backup stays on /backup until the pipeline rewire
@@ -24,10 +26,10 @@ import (
 // runsWindowDefaultDays is what the read-only status panel shows.
 const runsWindowDefaultDays = 7
 
-// runsWindowMaxDays caps the window. Retention is nine days (defaultRetain), so
-// asking for more than that returns the same data while implying the service
-// has history it does not. Refusing is clearer than silently under-answering.
-const runsWindowMaxDays = 9
+// runsWindowMaxDays caps the window at retention (defaultRetain, thirty days):
+// asking for more would return the same data while implying the service has
+// history it does not. Refusing is clearer than silently under-answering.
+const runsWindowMaxDays = 30
 
 // RunsResponse wraps a list so the body is an object rather than a bare array.
 // A top-level array cannot gain a field later without breaking every consumer.

@@ -46,6 +46,11 @@ type RunRegistry struct {
 	retain  time.Duration
 	maxRuns int
 	idSeq   atomic.Uint64
+
+	// store, when installed by Persist, makes history survive a service
+	// restart (runs_store.go). Nil means memory only, which is what a test
+	// registry and the GUI build's unused one are.
+	store *runStore
 }
 
 // RunState is where a run is in its life. A run is observable from the moment
@@ -117,12 +122,14 @@ func (r Run) DurationSec(now time.Time) float64 {
 }
 
 const (
-	// defaultRetain covers the seven-day panel with margin, so a run at the
-	// far edge of the window does not vanish mid-render.
-	defaultRetain = 9 * 24 * time.Hour
-	// defaultMaxRuns bounds memory for a machine backing up every 15 minutes:
-	// 96/day * 7 days = 672, and this is roughly triple that.
-	defaultMaxRuns = 2000
+	// defaultRetain is how long a finished run is kept, in memory and in the
+	// history file. Thirty days: the history the console's table shows once
+	// job_history.json is gone (docs/V4-CONSOLE.md §4.2), and more than the
+	// seven-day panel needs.
+	defaultRetain = 30 * 24 * time.Hour
+	// defaultMaxRuns bounds memory and the file for a machine backing up every
+	// 15 minutes: 96/day * 30 days = 2,880.
+	defaultMaxRuns = 3000
 )
 
 // NewRunRegistry returns an empty registry with production retention.
@@ -137,7 +144,17 @@ func NewRunRegistry() *RunRegistry {
 
 // Begin registers a new run and returns its id. Called at the single point in
 // the service where a backup starts, whatever started it.
+//
+// The history file is written once the run exists, so a run that dies with the
+// service is still in it at the next start, where it is closed as interrupted
+// (runs_store.go).
 func (r *RunRegistry) Begin(trigger RunTrigger, jobID, jobName, backupID, backupType string) string {
+	id := r.begin(trigger, jobID, jobName, backupID, backupType)
+	r.persist()
+	return id
+}
+
+func (r *RunRegistry) begin(trigger RunTrigger, jobID, jobName, backupID, backupType string) string {
 	if trigger == "" {
 		trigger = TriggerService
 	}
@@ -167,9 +184,18 @@ func (r *RunRegistry) Begin(trigger RunTrigger, jobID, jobName, backupID, backup
 // The seconds stamp alone is not enough: Windows' coarse clock makes two runs
 // beginning in the same second entirely ordinary, and the old job-ID scheme hit
 // exactly that, which is why it carried a counter too.
+//
+// The counter restarts with the process, and runs from before the restart are
+// loaded from the history file, so a run begun in the same second as one
+// loaded would mint a taken id. Skipping taken ids keeps the guarantee.
 func (r *RunRegistry) mintID(t time.Time) string {
-	n := r.idSeq.Add(1)
-	return "run-" + strconv.FormatInt(t.Unix(), 10) + "-" + strconv.FormatUint(n, 10)
+	for {
+		n := r.idSeq.Add(1)
+		id := "run-" + strconv.FormatInt(t.Unix(), 10) + "-" + strconv.FormatUint(n, 10)
+		if _, taken := r.runs[id]; !taken {
+			return id
+		}
+	}
 }
 
 // Progress records a percent/message update. Ignored for an unknown id, and
@@ -253,12 +279,21 @@ func (r *RunRegistry) SetState(runID string, state RunState) {
 // Complete records the terminal outcome. Idempotent: a second call is ignored,
 // so a completion delivered by both the engine's OnComplete and the caller's
 // error return does not overwrite success with a stale value.
+//
+// A terminal transition is the other moment the history file is written.
 func (r *RunRegistry) Complete(runID string, success bool, message string) {
+	if r.complete(runID, success, message) {
+		r.persist()
+	}
+}
+
+// complete records the outcome and reports whether it changed anything.
+func (r *RunRegistry) complete(runID string, success bool, message string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	run, ok := r.runs[runID]
 	if !ok || run.State == RunDone {
-		return
+		return false
 	}
 	run.State = RunDone
 	run.EndedAt = r.now()
@@ -272,6 +307,7 @@ func (r *RunRegistry) Complete(runID string, success bool, message string) {
 	if success {
 		run.Percent = 100
 	}
+	return true
 }
 
 // Get returns a copy of one run.
