@@ -321,6 +321,10 @@ folders anywhere. After F1 gives the service a caller identity, (b) is the
 better design, because the service is the process that reads and writes those
 paths. Either way the size effect is negligible.
 
+**Settled 2026-10-17 (CJ):** (b), in the service, listing as the caller.
+`docs/V4-LOCAL-API.md` gives the service the caller identity this waited for
+(its section 5.3).
+
 **D2. The WebView2 runtime download.** The console is built with
 `wv2runtime.download`: if WebView2 is missing, Wails downloads Microsoft's
 installer. That downloader links `net/http`'s full client with TLS and HTTP/2.
@@ -370,6 +374,9 @@ for INTERACTIVE and Administrators, and per-request caller identity from
 require Administrators for restore-to-path and confine non-admin destinations
 to the caller's own profile. It also gives the console the minimal transport
 C4 wants, with no port on the loopback interface.
+
+**Specified 2026-10-17:** `docs/V4-LOCAL-API.md` (CJ chose the named pipe,
+caller identity, and an elevated Browse window behind an Elevate button).
 
 **F2. Machine-scope DPAPI.** Once no user process needs the DEK (after C2), the
 reason recorded in `secrets_windows.go` for machine scope is gone. The DEK file
@@ -461,8 +468,8 @@ the service and the console is built with `wv2runtime.error`.
 Expected with D2 (b): console about 9.3 MB, 1.05 to 1.5 MB off the MSI in
 total with C3. Budget lowered to 9.6 MB.
 
-If F1's named pipe is chosen first, C4 targets the pipe instead and the
-loopback port goes away; the size effect is the same.
+**Superseded 2026-10-17:** CJ chose the named pipe, so C4's loopback client is
+not built. The transport and the runtime move are V4-LOCAL-API.md phase P1.
 
 ---
 
