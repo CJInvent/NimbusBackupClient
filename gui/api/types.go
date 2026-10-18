@@ -31,20 +31,30 @@ type StatusResponse struct {
 	SecurityWarnings []string `json:"security_warnings"`
 }
 
-// JobInfo represents information about a scheduled job
-type JobInfo struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	BackupType string `json:"backup_type"`
-	Schedule   string `json:"schedule"`
-	LastRun    string `json:"last_run,omitempty"`
-	Status     string `json:"status"` // "idle", "running", "error"
-	NextRun    string `json:"next_run,omitempty"`
+// ScheduledJob is one of this machine's local scheduled jobs, as
+// scheduled_jobs.json stores it and as GET /jobs returns it: whole, because the
+// console's job list and edit form read every field. (GET /jobs used to return
+// a five-field summary nothing read.) The service's own type aliases this one.
+type ScheduledJob struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	ScheduleTime string   `json:"scheduleTime"` // HH:MM format
+	RunAtStartup bool     `json:"runAtStartup"`
+	BackupDirs   []string `json:"backupDirs"`
+	DiskTargets  []string `json:"diskTargets"` // persistent targets for machine (full-volume) backups
+	BackupID     string   `json:"backupId"`
+	UseVSS       bool     `json:"useVSS"`
+	BackupType   string   `json:"backupType"`
+	ExcludeList  []string `json:"excludeList"`
+	Compression  string   `json:"compression"`       // "fastest", "default", "better", "best"
+	LastRun      string   `json:"lastRun,omitempty"` // ISO timestamp
+	NextRun      string   `json:"nextRun,omitempty"` // ISO timestamp
+	Enabled      bool     `json:"enabled"`
 }
 
-// JobsResponse lists all configured jobs
+// JobsResponse is GET /jobs.
 type JobsResponse struct {
-	Jobs []JobInfo `json:"jobs"`
+	Jobs []ScheduledJob `json:"jobs"`
 }
 
 // ErrorResponse represents an API error

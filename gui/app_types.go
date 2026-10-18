@@ -1,52 +1,19 @@
 package main
 
 import (
-	"context"
 	"controlplane"
 	"sync"
-
-	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
-// App struct contains the application state
+// App is the service's state. It is no longer bound to the webview: the
+// console binds Console (console.go), so none of App's methods is callable
+// from a user's session. isServiceProcess goes in V4-CONSOLE C3, with the
+// service build tag.
 type App struct {
 	storageMu        sync.Mutex
 	storageOpMu      sync.Mutex
 	storageState     *controlplane.StorageState
 	storageFailure   string
-	ctx              context.Context
 	config           *Config
-	stopScheduler    chan struct{}
-	apiClient        *api.Client
-	mode             api.ExecutionMode
 	isServiceProcess bool // True if running as Windows Service (never re-detect mode)
-
-	// lastVolumeTruncated is the console's memory of whether the SERVICE's
-	// last partition scan hit its entry cap, so LastVolumeListTruncated can
-	// answer without a second round trip. The scan itself, its cache key and
-	// its cancellation live in the service (imagebrowse_core.go) — they are
-	// engine state, and the console holding a copy of them was an artifact of
-	// the two once being one process.
-	lastVolumeTruncated bool
-}
-
-// NewApp creates a new App application struct
-func NewApp() *App {
-	return &App{
-		config:        LoadConfig(),
-		stopScheduler: make(chan struct{}),
-		apiClient:     api.NewClient(getAPITokenPath()),
-	}
-}
-
-// NewAppForService creates an App instance for Windows Service (no Wails runtime)
-func NewAppForService(ctx context.Context) *App {
-	return &App{
-		ctx:              ctx,
-		config:           LoadConfig(),
-		stopScheduler:    make(chan struct{}),
-		apiClient:        api.NewClient(getAPITokenPath()),
-		mode:             api.ModeInProcess, // this process IS the service
-		isServiceProcess: true,              // Prevent mode re-detection
-	}
 }

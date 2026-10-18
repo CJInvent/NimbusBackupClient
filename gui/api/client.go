@@ -1,11 +1,10 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -22,10 +21,16 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a new API client
+// NewClient creates a new API client for the service on this machine.
 func NewClient(tokenPath string) *Client {
+	return NewClientAt(DefaultServiceURL, tokenPath)
+}
+
+// NewClientAt is NewClient for a service at another address: a test's fake
+// service. The token is still read from tokenPath on every request.
+func NewClientAt(baseURL, tokenPath string) *Client {
 	return &Client{
-		baseURL: DefaultServiceURL,
+		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout:   RequestTimeout,
 			Transport: &tokenTransport{tokenPath: tokenPath, base: http.DefaultTransport},
@@ -69,288 +74,89 @@ func (c *Client) GetStatus() (*StatusResponse, error) {
 	return &status, nil
 }
 
-// StartBackup sends a backup request to the service
+// StartBackup asks the service to run a backup. A refusal (locked, the
+// control server said no, a bad request) is a StatusError carrying the
+// service's own sentence.
 func (c *Client) StartBackup(req *BackupRequest) (*BackupResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode request: %w", err)
+	var out BackupResponse
+	if err := c.postJSON("/backup", req, &out); err != nil {
+		return nil, err
 	}
-
-	resp, err := c.httpClient.Post(
-		c.baseURL+"/backup",
-		"application/json",
-		bytes.NewBuffer(body),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send backup request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("backup failed: %s", errResp.Error)
-		}
-		return nil, fmt.Errorf("backup failed with status %d", resp.StatusCode)
-	}
-
-	var backupResp BackupResponse
-	if err := json.Unmarshal(respBody, &backupResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &backupResp, nil
+	return &out, nil
 }
 
 // CancelBackup asks the service to stop the running backup. The service cancels
 // the active backup's context; the engine unwinds before committing the index
 // and releases the VSS snapshot, so nothing is left behind.
 func (c *Client) CancelBackup() error {
-	resp, err := c.httpClient.Post(c.baseURL+"/backup/cancel", "application/json", nil)
-	if err != nil {
-		return fmt.Errorf("failed to send cancel request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to cancel backup: %s", string(respBody))
-	}
-	return nil
+	return c.postJSON("/backup/cancel", struct{}{}, nil)
 }
 
-// GetJobs retrieves the list of configured jobs
-func (c *Client) GetJobs() (*JobsResponse, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/jobs")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get jobs: %w", err)
+// GetScheduledJobs returns this machine's local scheduled jobs, whole.
+func (c *Client) GetScheduledJobs() ([]ScheduledJob, error) {
+	var out JobsResponse
+	if err := c.getJSON("/jobs", &out); err != nil {
+		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("service returned error: %d", resp.StatusCode)
+	if out.Jobs == nil {
+		out.Jobs = []ScheduledJob{}
 	}
-
-	var jobs JobsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&jobs); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &jobs, nil
+	return out.Jobs, nil
 }
 
-// CreateJob creates a new scheduled job
-func (c *Client) CreateJob(job map[string]interface{}) error {
-	body, err := json.Marshal(job)
-	if err != nil {
-		return fmt.Errorf("failed to encode job: %w", err)
-	}
-
-	resp, err := c.httpClient.Post(
-		c.baseURL+"/jobs/create",
-		"application/json",
-		bytes.NewBuffer(body),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create job: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to create job: %s", string(respBody))
-	}
-
-	return nil
+// CreateJob creates a new scheduled job (an api.ScheduledJob, or the same
+// fields as a map).
+func (c *Client) CreateJob(job any) error {
+	return c.postJSON("/jobs/create", job, nil)
 }
 
-// PinFingerprint asks the service to persist a pinned certificate fingerprint for
-// a PBS server. The service is the single privileged writer of config.json, so the
-// unprivileged GUI delegates this write instead of failing to overwrite the file.
+// PinFingerprint asks the service to persist a pinned certificate fingerprint
+// for a PBS server. The service validates it and is the only writer of
+// config.json.
 func (c *Client) PinFingerprint(id, fingerprint string) error {
-	body, err := json.Marshal(map[string]string{"id": id, "fingerprint": fingerprint})
-	if err != nil {
-		return fmt.Errorf("failed to encode request: %w", err)
-	}
-
-	resp, err := c.httpClient.Post(
-		c.baseURL+"/pbs/fingerprint",
-		"application/json",
-		bytes.NewBuffer(body),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to send fingerprint request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to pin fingerprint: %s", string(respBody))
-	}
-
-	return nil
+	return c.postJSON("/pbs/fingerprint", map[string]string{"id": id, "fingerprint": fingerprint}, nil)
 }
 
-// SavePBSServer upserts a PBS server via the service (single privileged writer of
-// config.json). The GUI delegates here instead of writing the file directly.
-func (c *Client) SavePBSServer(server map[string]interface{}) error {
-	body, err := json.Marshal(server)
-	if err != nil {
-		return fmt.Errorf("failed to encode pbs server: %w", err)
-	}
-	resp, err := c.httpClient.Post(c.baseURL+"/pbs/save", "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to save pbs server: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to save pbs server: %s", string(respBody))
-	}
-	return nil
+// SavePBSServer upserts a PBS server in the service. An empty secret keeps the
+// stored one.
+func (c *Client) SavePBSServer(server any) error {
+	return c.postJSON("/pbs/save", server, nil)
 }
 
-// DeletePBSServer removes a PBS server by id via the service.
+// DeletePBSServer removes a PBS server by id.
 func (c *Client) DeletePBSServer(id string) error {
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/pbs/delete/"+id, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete pbs server: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to delete pbs server: %s", string(respBody))
-	}
-	return nil
+	return c.deleteJSON("/pbs/delete/" + url.PathEscape(id))
 }
 
-// SetDefaultPBS sets the default PBS server via the service.
+// SetDefaultPBS sets the default PBS server.
 func (c *Client) SetDefaultPBS(id string) error {
-	body, err := json.Marshal(map[string]string{"id": id})
-	if err != nil {
-		return fmt.Errorf("failed to encode request: %w", err)
-	}
-	resp, err := c.httpClient.Post(c.baseURL+"/pbs/default", "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to set default pbs server: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to set default pbs server: %s", string(respBody))
-	}
-	return nil
+	return c.postJSON("/pbs/default", map[string]string{"id": id}, nil)
 }
 
-// SaveConfig persists the full configuration via the service.
-func (c *Client) SaveConfig(config map[string]interface{}) error {
-	body, err := json.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("failed to encode config: %w", err)
-	}
-	resp, err := c.httpClient.Post(c.baseURL+"/config/save", "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to save config: %s", string(respBody))
-	}
-	return nil
+// UpdateJob updates an existing scheduled job.
+func (c *Client) UpdateJob(job any) error {
+	return c.postJSON("/jobs/update", job, nil)
 }
 
-// UpdateJob updates an existing scheduled job
-func (c *Client) UpdateJob(job map[string]interface{}) error {
-	body, err := json.Marshal(job)
-	if err != nil {
-		return fmt.Errorf("failed to encode job: %w", err)
-	}
-
-	resp, err := c.httpClient.Post(
-		c.baseURL+"/jobs/update",
-		"application/json",
-		bytes.NewBuffer(body),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update job: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to update job: %s", string(respBody))
-	}
-
-	return nil
-}
-
-// DeleteJob deletes a scheduled job by ID
+// DeleteJob deletes a scheduled job by id.
 func (c *Client) DeleteJob(jobID string) error {
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/jobs/delete/"+jobID, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete job: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to delete job: %s", string(respBody))
-	}
-
-	return nil
+	return c.deleteJSON("/jobs/delete/" + url.PathEscape(jobID))
 }
 
 // GetControlPlaneStatus fetches the control-server connectivity snapshot
-// from the service (GUI status card data source in service mode).
+// (with the storage identity and the effective policy) from the service.
 func (c *Client) GetControlPlaneStatus() (map[string]interface{}, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/controlplane/status")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get control plane status: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get control plane status: %s", string(respBody))
-	}
 	var out map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("failed to decode control plane status: %w", err)
+	if err := c.getJSON("/controlplane/status", &out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-// SaveControlPlane sends control-server settings to the service (single
-// config writer); the service persists and restarts its check-in loop.
+// SaveControlPlane sends control-server settings to the service, which
+// persists them and restarts its check-in loop.
 func (c *Client) SaveControlPlane(m map[string]interface{}) error {
-	body, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("failed to encode control plane config: %w", err)
-	}
-	resp, err := c.httpClient.Post(c.baseURL+"/controlplane/save", "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to save control plane config: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to save control plane config: %s", string(respBody))
-	}
-	return nil
+	return c.postJSON("/controlplane/save", m, nil)
 }
 
 // GetActiveRuns returns every backup currently in flight on this machine,

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import translations from './translations'
+import { SetTrayLanguage } from '../lib/bindings'
 
 const I18nContext = createContext()
 
@@ -14,9 +15,7 @@ export function I18nProvider({ children }) {
     // Keep the Windows system-tray menu in the same language as the GUI.
     // Guarded: bindings are absent in a plain-browser dev session.
     try {
-      if (window.go && window.go.main && window.go.main.App && window.go.main.App.SetTrayLanguage) {
-        window.go.main.App.SetTrayLanguage(language)
-      }
+      if (SetTrayLanguage) SetTrayLanguage(language)
     } catch (e) { /* tray unavailable — non-Windows or no binding */ }
   }, [language])
 

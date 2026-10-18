@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -42,7 +43,7 @@ type Server struct {
 type BackupHandler interface {
 	StartBackup(backupType string, backupDirs, diskTargets, excludeList []string, backupID string, useVSS bool, compression string) error
 	GetConfigWithHostname() map[string]interface{}
-	GetScheduledJobsForAPI() []map[string]interface{}
+	ListScheduledJobs() ([]ScheduledJob, error)
 	SaveScheduledJobFromMap(job map[string]interface{}) error
 	UpdateScheduledJobFromMap(job map[string]interface{}) error
 	DeleteScheduledJobFromMap(jobID string) error
@@ -132,13 +133,21 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/restore/control", s.handleRestoreControl)
 }
 
+// Handler is the whole server as served: the routes behind the read-only
+// lockdown, behind authentication. Start serves it; a test can serve it on
+// its own listener and drive the real stack.
+//
+// readOnlyMiddleware sits INSIDE auth: an unauthenticated caller gets 401 and
+// learns nothing, rather than 403 and learns this machine is managed and
+// locked.
+func (s *Server) Handler() http.Handler {
+	return s.authMiddleware(s.readOnlyMiddleware(s.mux))
+}
+
 // Start starts the HTTP server
 func (s *Server) Start() error {
 	log.Printf("Starting API server on %s", s.addr)
-	// readOnlyMiddleware sits INSIDE auth: an unauthenticated caller gets
-	// 401 and learns nothing, rather than 403 and learns this machine is
-	// managed and locked.
-	return http.ListenAndServe(s.addr, s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	return http.ListenAndServe(s.addr, s.Handler())
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -188,13 +197,6 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if req.BackupID == "" {
 		s.writeError(w, "backup_id is required", http.StatusBadRequest)
 		return
-	}
-
-	// Reload config before backup (config may have been updated by GUI)
-	// This ensures service uses latest config without needing restart
-	if reloader, ok := s.app.(interface{ ReloadConfig() }); ok {
-		reloader.ReloadConfig()
-		log.Printf("[API] Config reloaded before backup")
 	}
 
 	// Start backup asynchronously (don't block HTTP request).
@@ -306,29 +308,15 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	jobsData := s.app.GetScheduledJobsForAPI()
-
-	jobs := make([]JobInfo, 0, len(jobsData))
-	for _, j := range jobsData {
-		job := JobInfo{
-			ID:         fmt.Sprintf("%v", j["id"]),
-			Name:       fmt.Sprintf("%v", j["name"]),
-			BackupType: fmt.Sprintf("%v", j["backup_type"]),
-			Schedule:   fmt.Sprintf("%v", j["schedule"]),
-			Status:     "idle", // TODO: track actual status
-		}
-		if lastRun, ok := j["last_run"].(string); ok {
-			job.LastRun = lastRun
-		}
-		if nextRun, ok := j["next_run"].(string); ok {
-			job.NextRun = nextRun
-		}
-		jobs = append(jobs, job)
+	jobs, err := s.app.ListScheduledJobs()
+	if err != nil {
+		s.writeError(w, fmt.Sprintf("Failed to read the scheduled jobs: %v", err), http.StatusInternalServerError)
+		return
 	}
-
-	resp := JobsResponse{Jobs: jobs}
-	s.writeJSON(w, resp, http.StatusOK)
+	if jobs == nil {
+		jobs = []ScheduledJob{}
+	}
+	s.writeJSON(w, JobsResponse{Jobs: jobs}, http.StatusOK)
 }
 
 func (s *Server) handleJobCreate(w http.ResponseWriter, r *http.Request) {
@@ -385,13 +373,11 @@ func (s *Server) handleJobDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract job ID from URL path: /jobs/delete/{jobID}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/delete/"), "/")
-	if len(pathParts) == 0 || pathParts[0] == "" {
+	jobID, ok := pathID(r, "/jobs/delete/")
+	if !ok {
 		s.writeError(w, "Job ID required", http.StatusBadRequest)
 		return
 	}
-	jobID := pathParts[0]
 
 	if err := s.app.DeleteScheduledJobFromMap(jobID); err != nil {
 		s.writeError(w, fmt.Sprintf("Failed to delete job: %v", err), http.StatusInternalServerError)
@@ -463,12 +449,12 @@ func (s *Server) handleDeletePBSServer(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/pbs/delete/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
+	id, ok := pathID(r, "/pbs/delete/")
+	if !ok {
 		s.writeError(w, "PBS server id required", http.StatusBadRequest)
 		return
 	}
-	if err := s.app.DeletePBSServerByID(parts[0]); err != nil {
+	if err := s.app.DeletePBSServerByID(id); err != nil {
 		s.writeError(w, fmt.Sprintf("Failed to delete PBS server: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -515,6 +501,24 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, map[string]interface{}{"success": true, "message": "Configuration saved"}, http.StatusOK)
+}
+
+// pathID is the one path segment after prefix, unescaped: /jobs/delete/{id}.
+//
+// Read from the ESCAPED path. The decoded one turns an id containing "%2F" into
+// two segments, and the delete routes used to act on the first: a request to
+// delete "a/b" deleted "a". Anything after the id is refused for the same
+// reason.
+func pathID(r *http.Request, prefix string) (string, bool) {
+	rest, found := strings.CutPrefix(r.URL.EscapedPath(), prefix)
+	if !found || rest == "" || strings.Contains(rest, "/") {
+		return "", false
+	}
+	id, err := url.PathUnescape(rest)
+	if err != nil || id == "" {
+		return "", false
+	}
+	return id, true
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, data interface{}, status int) {

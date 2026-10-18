@@ -16,35 +16,10 @@ import (
 var runningJobs = make(map[string]bool)
 var runningJobsMutex sync.Mutex
 
-// ScheduledJob represents a scheduled backup job
-type ScheduledJob struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	ScheduleTime string   `json:"scheduleTime"` // HH:MM format
-	RunAtStartup bool     `json:"runAtStartup"`
-	BackupDirs   []string `json:"backupDirs"`
-	DiskTargets  []string `json:"diskTargets"` // persistent targets for machine (full-volume) backups
-	BackupID     string   `json:"backupId"`
-	UseVSS       bool     `json:"useVSS"`
-	BackupType   string   `json:"backupType"`
-	ExcludeList  []string `json:"excludeList"`
-	Compression  string   `json:"compression"`       // "fastest", "default", "better", "best"
-	LastRun      string   `json:"lastRun,omitempty"` // ISO timestamp
-	NextRun      string   `json:"nextRun,omitempty"` // ISO timestamp
-	Enabled      bool     `json:"enabled"`
-}
-
-// JobHistory represents a completed backup job
-type JobHistory struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Timestamp  string   `json:"timestamp"` // ISO format
-	Status     string   `json:"status"`    // "success", "failed", "running"
-	Message    string   `json:"message"`
-	BackupDirs []string `json:"backupDirs"`
-	BackupID   string   `json:"backupId"`
-	UseVSS     bool     `json:"useVSS"`
-}
+// ScheduledJob is a local scheduled job. The type is the local API's
+// (gui/api ScheduledJob): what scheduled_jobs.json stores is what GET /jobs
+// returns.
+type ScheduledJob = api.ScheduledJob
 
 func getScheduledJobsPath() (string, error) {
 	// Use ProgramData on Windows (shared between GUI and Service)
@@ -71,33 +46,6 @@ func getScheduledJobsPath() (string, error) {
 	}
 
 	return filepath.Join(configDir, "scheduled_jobs.json"), nil
-}
-
-func getJobHistoryPath() (string, error) {
-	// Use ProgramData on Windows (shared between GUI and Service)
-	var configDir string
-
-	if programData := os.Getenv("ProgramData"); programData != "" {
-		// Windows: C:\ProgramData\NimbusBackup
-		configDir = filepath.Join(programData, "NimbusBackup")
-	} else if systemDrive := os.Getenv("SystemDrive"); systemDrive != "" {
-		// Windows fallback: if ProgramData not set, use C:\ProgramData hardcoded
-		configDir = filepath.Join(systemDrive, "ProgramData", "NimbusBackup")
-	} else {
-		// Unix-like: use ~/.proxmox-backup-guardian
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		configDir = filepath.Join(homeDir, ".proxmox-backup-guardian")
-	}
-
-	// #nosec G703 -- ProgramData is a trusted Windows system environment variable, not user input
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", err
-	}
-
-	return filepath.Join(configDir, "job_history.json"), nil
 }
 
 // SaveScheduledJob saves a new scheduled job
@@ -165,32 +113,9 @@ func (a *App) GetScheduledJobs() ([]ScheduledJob, error) {
 	return jobs, nil
 }
 
-// GetScheduledJobsForAPI returns scheduled jobs as map[string]interface{} for API compatibility
-// This method is used by the BackupHandler interface for HTTP API
-func (a *App) GetScheduledJobsForAPI() []map[string]interface{} {
-	jobs, err := a.GetScheduledJobs()
-	if err != nil {
-		writeErrorLog(fmt.Sprintf("GetScheduledJobsForAPI error: %v", err))
-		return []map[string]interface{}{}
-	}
-
-	result := make([]map[string]interface{}, len(jobs))
-	for i, job := range jobs {
-		result[i] = map[string]interface{}{
-			"id":           job.ID,
-			"name":         job.Name,
-			"backup_type":  job.BackupType,
-			"backup_id":    job.BackupID,
-			"schedule":     job.ScheduleTime,
-			"use_vss":      job.UseVSS,
-			"backup_dirs":  job.BackupDirs,
-			"exclude_list": job.ExcludeList,
-			"last_run":     job.LastRun,
-			"next_run":     job.NextRun,
-			"enabled":      job.Enabled,
-		}
-	}
-	return result
+// ListScheduledJobs is GET /jobs: the local jobs, whole.
+func (a *App) ListScheduledJobs() ([]ScheduledJob, error) {
+	return a.GetScheduledJobs()
 }
 
 // UpdateScheduledJob updates an existing scheduled job
@@ -269,58 +194,6 @@ func (a *App) DeleteScheduledJob(jobID string) error {
 	}
 
 	return atomicWriteFile(jobsPath, data, 0600)
-}
-
-// GetJobHistory returns job history
-func (a *App) GetJobHistory() ([]JobHistory, error) {
-	historyPath, err := getJobHistoryPath()
-	if err != nil {
-		return []JobHistory{}, err
-	}
-
-	data, err := os.ReadFile(historyPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []JobHistory{}, nil
-		}
-		return nil, err
-	}
-
-	var history []JobHistory
-	if err := json.Unmarshal(data, &history); err != nil {
-		return nil, err
-	}
-
-	return history, nil
-}
-
-// AddJobHistory adds a job to history
-func (a *App) AddJobHistory(entry JobHistory) error {
-	history, err := a.GetJobHistory()
-	if err != nil {
-		writeErrorLog(fmt.Sprintf("Error loading history: %v", err))
-	}
-
-	// Add new entry at the beginning
-	history = append([]JobHistory{entry}, history...)
-
-	// Keep only last 50 entries
-	if len(history) > 50 {
-		history = history[:50]
-	}
-
-	// Save
-	historyPath, err := getJobHistoryPath()
-	if err != nil {
-		return err
-	}
-
-	data, err := json.MarshalIndent(history, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return atomicWriteFile(historyPath, data, 0600)
 }
 
 // calculateNextRun calculates the next run time based on schedule time (HH:MM)
@@ -418,9 +291,6 @@ func (a *App) executeJob(job ScheduledJob, requestID string, trigger api.RunTrig
 	}
 
 	writeInfoLog(fmt.Sprintf("Executing scheduled job: %s", job.Name))
-
-	// Use StartBackup to route through mode detection (service or direct)
-	writeInfoLog(fmt.Sprintf("[Scheduled Job] Executing via StartBackup (mode: %s)", a.mode.String()))
 
 	// Default to "fastest" if compression not set in job
 	compression := job.Compression

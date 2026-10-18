@@ -17,6 +17,10 @@ const (
 	errInvalidURL        = "[NB-1005] invalid URL"
 	errNoPBSServer       = "[NB-1006] no PBS server specified and no default server"
 	errFingerprintSave   = "[NB-1010] cannot save fingerprint (config.json not writable?)"
+	// The connection test failed because the server's certificate did not
+	// verify and no fingerprint is pinned: the case the setup screen offers to
+	// resolve by pinning one (trust on first use).
+	errCertUntrusted = "[NB-1011] the server's certificate is not trusted and no fingerprint is pinned"
 
 	errBackupFailedSeeLog = "[NB-2001] Backup failed - see backup log in C:\\ProgramData\\NimbusBackup"
 	errDiskRequired       = "[NB-2002] at least one physical disk required"
@@ -24,7 +28,6 @@ const (
 	errAlreadyRunning     = "[NB-2004] a backup to this destination is already running - not starting another"
 	errPBSParamsRequired  = "[NB-2005] PBS connection parameters required"
 	errVSSAdminRequired   = "[NB-2006] VSS (Shadow Copy) requires administrator privileges - relaunch as administrator or disable VSS"
-	errServiceComm        = "[NB-2007] communication with the service failed"
 	errDirRequired        = "[NB-2008] at least one backup directory required"
 	errBackupStopped      = "[NB-2009] Backup stopped - the partial backup was discarded and the snapshot released"
 	errNoBackupRunning    = "[NB-2010] no backup is running"

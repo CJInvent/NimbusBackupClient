@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -36,15 +35,10 @@ func (s *NimbusService) Start(svc service.Service) error {
 func (s *NimbusService) run() {
 	writeInfoLog("NimbusBackup service running")
 
-	// Initialize app with background context (service has no Wails runtime)
-	// IMPORTANT: Service App must be in Standalone mode to execute backups directly
+	// This process IS the service: it executes backups and restores itself.
 	s.app = &App{
-		ctx:              context.Background(),
 		config:           LoadConfig(),
-		stopScheduler:    make(chan struct{}),
-		apiClient:        api.NewClient(getAPITokenPath()),
-		mode:             api.ModeInProcess, // this process IS the service
-		isServiceProcess: true,              // Prevent mode re-detection (would cause infinite loop)
+		isServiceProcess: true,
 	}
 
 	// Load configuration (service will read config from file when needed)
@@ -57,8 +51,9 @@ func (s *NimbusService) run() {
 
 	// Config will be loaded from file by each scheduled job when needed
 
-	// Clean up any abandoned jobs from previous crash
-	s.app.CleanupAbandonedJobs()
+	// A run the last process died during is closed as interrupted when the
+	// run history is loaded below (loadRunHistory), which replaced
+	// CleanupAbandonedJobs and job_history.json (docs/V4-CONSOLE.md §4.2).
 
 	// Clear any orphaned VSS shadow copies and reset the VSS service state
 	// from a previously crashed Nimbus process. Without this, the next backup

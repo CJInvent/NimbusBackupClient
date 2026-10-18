@@ -464,7 +464,8 @@ steps 1-2 are additive and independently shippable.
 
    Still on `GetJobHistory()`: the history TABLE. Swapping it to
    `/runs/recent` is part of the read-only panel in step 5, since that is
-   where its shape is decided. Nothing about the reported bug depends on it —
+   where its shape is decided. (Done in V4-CONSOLE C2: the table reads
+   `GetRecentRuns`, and `job_history.json` is gone.) Nothing about the reported bug depends on it —
    a running backup is now visible whether or not the table changes. Start button
    still works as it does; it just no longer has a private view.
 3. ~~**Move option assembly into one service-side function.**~~ **Done.**

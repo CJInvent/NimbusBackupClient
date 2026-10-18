@@ -954,6 +954,21 @@ jobs:
           GOWORK: off
         run: wails build -clean -platform windows/amd64 -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
 
+      # The console's size, printed (docs/V4-CONSOLE.md section 5 item 4).
+      # PRINT-ONLY until V4-CONSOLE C3, which sets the budget from the number
+      # this records: a budget close to the measured size turns the next
+      # unexplained 400 KB into a red build. `wails build` strips, so this is
+      # the shipped size.
+      - name: Console size (print only)
+        working-directory: gui
+        shell: pwsh
+        run: |
+          $exe = 'build/bin/NimbusBackup.exe'
+          if (-not (Test-Path $exe)) { throw "$exe was not built; there is no size to report" }
+          $bytes = (Get-Item $exe).Length
+          Write-Host ("Console (stripped): {0:N0} bytes" -f $bytes)
+          "### Console size`n`n``NimbusBackup.exe``: {0:N0} bytes (stripped)" -f $bytes >> $env:GITHUB_STEP_SUMMARY
+
       # The GUI must contain NO ENGINE AT ALL -- backup or restore.
       #
       # This is the FILE-SET assertion, and it is the primary one. It asks the

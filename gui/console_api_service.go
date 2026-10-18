@@ -164,3 +164,41 @@ func checkDownloadSpace(p SpaceParams) (SpaceCheck, error) {
 	}
 	return evaluateSpace(p.DestPath, needed)
 }
+
+// connectionTest asks the server this configuration names for its datastore's
+// status: DNS, TLS (pinned when a fingerprint is set, CA-verified otherwise),
+// the token and the datastore permission, in one request. Validate first.
+//
+// POST /pbs/test (docs/V4-CONSOLE.md §4.1). The console's own TestConnection,
+// which built a PBS client in the user's session, went in C2.
+func (c *Config) connectionTest() error {
+	client := &pbscommon.PBSClient{
+		BaseURL:          c.BaseURL,
+		CertFingerPrint:  c.CertFingerprint,
+		AuthID:           c.AuthID,
+		Secret:           c.Secret,
+		Datastore:        c.Datastore,
+		Namespace:        c.Namespace,
+		Insecure:         c.CertFingerprint != "",
+		CompressionLevel: pbscommon.CompressionFastest, // Default for test connections
+		Manifest: pbscommon.BackupManifest{
+			BackupID: c.BackupID,
+		},
+	}
+
+	// Debug log with sanitized credentials
+	writeInfoLog(fmt.Sprintf("Testing connection: URL=%s, AuthID=%s, Secret=%s, Datastore=%s",
+		security.SanitizeURL(c.BaseURL),
+		c.AuthID,
+		security.SanitizeSecret(c.Secret),
+		c.Datastore))
+
+	// Perform real HTTP test (checks DNS, connectivity, auth, datastore access)
+	if err := client.TestConnection(); err != nil {
+		writeErrorLog(fmt.Sprintf("Connection test failed: %v", err))
+		return err
+	}
+
+	writeInfoLog("Connection test successful (authenticated + datastore accessible)")
+	return nil
+}

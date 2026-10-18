@@ -106,6 +106,20 @@ test('a screen renders what it is given and never calls the service', () => {
   assert.deepEqual(offenders, [], 'fetching belongs in a hook (docs/V4-GUI-AUDIT.md 4.11)')
 })
 
+test('only lib/bindings.js reads the Wails bindings', () => {
+  // docs/V4-CONSOLE.md section 5: bindings.js is the one complete list of what
+  // the console asks the service, and gui/console_bindings_test.go pins it
+  // against the Go side. A hook reading window.go itself would be a binding
+  // that list does not show.
+  const files = walk(join(root, 'src')).filter(f => /\.(js|jsx)$/.test(f))
+  assert.ok(files.length > 20, 'the source walk found almost nothing; the check would pass vacuously')
+  const offenders = files
+    .filter(f => !f.endsWith(join('lib', 'bindings.js')))
+    .filter(f => /window\.go\b/.test(readFileSync(f, 'utf8')))
+    .map(f => relative(root, f))
+  assert.deepEqual(offenders, [])
+})
+
 test('no source file is over 250 lines', () => {
   const allowed = new Set(['src/i18n/translations.js']) // split per screen in S4
   const big = walk(join(root, 'src'))

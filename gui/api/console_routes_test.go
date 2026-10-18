@@ -485,3 +485,90 @@ func TestDeprecatedBackupStatusRouteIsGone(t *testing.T) {
 		t.Error("the deleted route is still on the read-only allowlist")
 	}
 }
+
+// ---- the client the console uses for writes ------------------------------
+
+func TestClientWritesCarryTheServicesOwnRefusal(t *testing.T) {
+	// The console shows what the service said. Before C2 these methods
+	// returned the raw JSON body ("failed to save pbs server: {"error":...}").
+	_, _, c, s := bootConsoleServer(t)
+	s.SetLockedFunc(func() bool { return true })
+	for name, call := range map[string]func() error{
+		"CreateJob":        func() error { return c.CreateJob(map[string]any{"name": "x"}) },
+		"UpdateJob":        func() error { return c.UpdateJob(map[string]any{"id": "x"}) },
+		"DeleteJob":        func() error { return c.DeleteJob("job-1") },
+		"SavePBSServer":    func() error { return c.SavePBSServer(map[string]any{"id": "pbs1"}) },
+		"DeletePBSServer":  func() error { return c.DeletePBSServer("pbs1") },
+		"SetDefaultPBS":    func() error { return c.SetDefaultPBS("pbs1") },
+		"PinFingerprint":   func() error { return c.PinFingerprint("pbs1", "AA") },
+		"SaveControlPlane": func() error { return c.SaveControlPlane(map[string]any{"control_server_url": "https://c.example"}) },
+		"CancelBackup":     func() error { return c.CancelBackup() },
+	} {
+		err := call()
+		var se *StatusError
+		if !errors.As(err, &se) || se.Code != http.StatusForbidden {
+			t.Errorf("%s while locked = %v, want a 403 StatusError", name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "read-only") || strings.Contains(err.Error(), "{") {
+			t.Errorf("%s: %q; want the service's sentence, not its JSON", name, err)
+		}
+	}
+}
+
+func TestClientReadsAPlainTextRefusal(t *testing.T) {
+	// /controlplane/save answers a rejected setting with http.Error's text.
+	_, h, c, _ := bootConsoleServer(t)
+	h.arm("SaveControlPlaneFromMap")
+	err := c.SaveControlPlane(map[string]any{"control_server_url": "nonsense"})
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusBadRequest || !strings.Contains(err.Error(), "stub failure") {
+		t.Errorf("plain-text refusal = %v, want 400 with the handler's text", err)
+	}
+}
+
+func TestClientDeletesEscapeTheID(t *testing.T) {
+	// An id is a path segment. One with a slash must not address another
+	// route, or reach the handler as two segments.
+	_, h, c, _ := bootConsoleServer(t)
+	if err := c.DeleteJob("a/b"); err != nil {
+		t.Fatalf("DeleteJob: %v", err)
+	}
+	if !h.called("DeleteScheduledJobFromMap:a/b") || h.called("DeleteScheduledJobFromMap:a") {
+		t.Errorf("the handler did not receive the whole id; calls: %v", h.calls)
+	}
+	if err := c.DeletePBSServer("x/y"); err != nil || !h.called("DeletePBSServerByID:x/y") {
+		t.Errorf("DeletePBSServer(x/y) = %v; calls: %v", err, h.calls)
+	}
+}
+
+func TestDeleteRoutesRefuseAnythingAfterTheID(t *testing.T) {
+	// /jobs/delete/job-1/extra used to delete job-1.
+	ts, h, _, _ := bootConsoleServer(t)
+	for _, path := range []string{"/jobs/delete/job-1/extra", "/pbs/delete/pbs-1/extra", "/jobs/delete/job-1%2Fextra/x"} {
+		if code, _ := do(t, ts, http.MethodDelete, path, nil, withToken(testToken)); code != http.StatusBadRequest {
+			t.Errorf("DELETE %s = %d, want 400", path, code)
+		}
+	}
+	if h.called("DeleteScheduledJobFromMap:job-1") || h.called("DeletePBSServerByID:pbs-1") {
+		t.Error("a malformed delete reached the handler")
+	}
+}
+
+func TestClientScheduledJobsAreWhole(t *testing.T) {
+	_, _, c, _ := bootConsoleServer(t)
+	jobs, err := c.GetScheduledJobs()
+	if err != nil || len(jobs) != 1 || jobs[0].ScheduleTime != "02:00" || jobs[0].BackupDirs[0] != `C:\Users` {
+		t.Errorf("GetScheduledJobs = %+v, %v", jobs, err)
+	}
+}
+
+func TestJobsReadFailureIsAnErrorNotAnEmptyList(t *testing.T) {
+	// An unreadable scheduled_jobs.json must not look like "no jobs": the
+	// console would offer to create them again.
+	ts, h, _, _ := bootConsoleServer(t)
+	h.arm("ListScheduledJobs")
+	if code, _ := do(t, ts, http.MethodGet, "/jobs", nil, withToken(testToken)); code != http.StatusInternalServerError {
+		t.Errorf("GET /jobs with an unreadable file = %d, want 500", code)
+	}
+}

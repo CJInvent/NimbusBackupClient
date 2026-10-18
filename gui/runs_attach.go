@@ -22,10 +22,10 @@ import "github.com/tizbac/proxmoxbackupclient_go/gui/api"
 // one. Only a run nobody announced (a portal command, or a code path added
 // later that forgets) gets a fresh entry, and it is labelled TriggerService
 // rather than silently called manual.
-func attachRunRegistry(opts *BackupOptions) (func(error), string) {
+func attachRunRegistry(opts *BackupOptions) func(error) {
 	reg := currentRunRegistry()
 	if reg == nil {
-		return func(error) {}, "Manual backup" // service not yet wired
+		return func(error) {} // service not yet wired
 	}
 
 	// Two-tier lookup, mirroring takeRunReporter's cpReporters-then-pending
@@ -45,10 +45,9 @@ func attachRunRegistry(opts *BackupOptions) (func(error), string) {
 		runID = reg.Begin(api.TriggerService, "", "", opts.BackupID, normalizeRunKind(opts.BackupType))
 	}
 
-	historyName := "Manual backup"
-	if run, ok := reg.Get(runID); ok && run.JobName != "" {
-		historyName = run.JobName
-	}
+	// What the run was asked to back up: the console's history loads a
+	// finished run back into the backup form from it.
+	reg.SetRequest(runID, opts.BackupDirs, opts.UseVSS)
 
 	prevPhase := opts.OnPhase
 	opts.OnPhase = func(phase string) {
@@ -109,5 +108,5 @@ func attachRunRegistry(opts *BackupOptions) (func(error), string) {
 			return
 		}
 		reg.Complete(runID, true, "Backup completed successfully")
-	}, historyName
+	}
 }

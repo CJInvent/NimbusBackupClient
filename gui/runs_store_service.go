@@ -15,9 +15,8 @@ import (
 // docs/V4-CONSOLE.md §4.2): run_history.json beside config.json, written with
 // the same atomic temp-file-and-rename as every other file the service owns.
 //
-// It replaces job_history.json. Until V4-CONSOLE C2 moves the console's
-// history table onto /runs/recent, the pipeline still writes the old file for
-// that table to read; C2 deletes both.
+// It replaced job_history.json, which V4-CONSOLE C2 deleted with its writer
+// and reader: the console's history table reads /runs/recent.
 
 const runHistoryFileName = "run_history.json"
 

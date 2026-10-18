@@ -1,13 +1,15 @@
+//go:build service
+// +build service
+
 package main
 
 // configView is the configuration as the console may see it: what GET /status
 // returns under "configuration" (docs/V4-CONSOLE.md §3, GetConfigWithHostname
 // and GetLastBackupDirs).
 //
-// One builder for both builds until V4-CONSOLE C2 removes the console's own
-// copy of config.json. Before it, the service answered /status with five of
-// these fields and the console read the rest from its own decrypted copy, so
-// moving the console onto /status would have emptied its settings form.
+// Before V4-CONSOLE C1 the service answered /status with five of these fields
+// and the console read the rest from its own decrypted copy of config.json;
+// since C2 the console has no copy, and this is the whole of what it sees.
 //
 // NO SECRET, ONLY WHETHER ONE IS STORED (M-04). "secret" is always empty: the
 // form submits an empty secret to mean "keep the stored one", and the service

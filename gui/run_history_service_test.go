@@ -20,10 +20,10 @@ func TestRunHistoryKeepsScheduledIdentityAndRefusal(t *testing.T) {
 	SetRunRegistry(reg)
 	t.Cleanup(func() { SetRunRegistry(previous) })
 	id := reg.Begin(api.TriggerSchedule, "job-1", "Nightly", "test-id", "machine")
-	opts := BackupOptions{BackupID: "test-id", BackupType: "vm"}
-	finish, name := attachRunRegistry(&opts)
-	if name != "Nightly" {
-		t.Fatalf("history named %q", name)
+	opts := BackupOptions{BackupID: "test-id", BackupType: "vm", BackupDirs: []string{`\\.\PhysicalDrive0`}, UseVSS: true}
+	finish := attachRunRegistry(&opts)
+	if run, _ := reg.Get(id); run.JobName != "Nightly" || len(run.BackupDirs) != 1 || !run.UseVSS {
+		t.Fatalf("the adopted run lost its name or did not record its request: %+v", run)
 	}
 	finish(errors.New("required backup key unavailable"))
 	run, ok := reg.Get(id)

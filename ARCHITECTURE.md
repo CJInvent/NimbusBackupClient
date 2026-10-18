@@ -102,19 +102,19 @@ every REAL view — see rule 3 and smoke S2, both born from real breakage.
 
 ## Process model & config flow
 
-`config.json` lives at `C:\ProgramData\NimbusBackup\config.json`. ProgramData
-files are owned by whoever wrote them first, so an unprivileged GUI cannot
-overwrite a service-owned file. Therefore **all config writes flow through the
-service**: GUI `App` methods call `delegateConfigWrites()`; with a service
-present they POST to the local API and the service performs the write
-(`api_wrappers.go:SavePBSServerFromMap` etc.). Standalone GUIs (no service)
-write directly. The control-plane settings follow the same path
-(`/controlplane/save`).
+`config.json` lives at `C:\ProgramData\NimbusBackup\config.json` and only
+the service reads or writes it. The console binds one type, `Console`
+(`gui/console.go`), and every binding is one call to the local API
+(docs/V4-CONSOLE.md): settings, jobs and PBS servers are written by the service
+(`api_wrappers.go:SavePBSServerFromMap` etc.), read back sanitized
+(`GET /status`, `GET /pbs/servers`), and the console has no fallback when the
+service does not answer.
 
 Progress/stats: the engine invokes `OnProgress`/`OnStats`/`OnComplete`
-callbacks; in service mode these fill a per-job progress map (`gui/api/
-server.go`) which the GUI polls (`/backup/status/{id}`) and re-emits as Wails
-events. Percent is 0..1 internally, 0–100 at the API boundary.
+callbacks, which fill the run registry (`gui/api/runs.go`); the console polls
+`/runs/active` and `/runs/recent` for every run, whatever started it. The
+registry keeps 30 days of finished runs in `run_history.json`. Percent is 0..1
+internally, 0–100 at the API boundary.
 
 ## Local API — the only cross-process boundary
 
@@ -127,12 +127,17 @@ the contract the service implements.
 
 | Route | Purpose |
 |---|---|
-| `GET /status` | Service status + sanitized config snapshot |
-| `POST /backup`, `GET /backup/status/{id}` | Start a backup; poll progress/stats |
-| `GET/POST /jobs`, `/jobs/create`, `/jobs/update`, `/jobs/delete/{id}` | Scheduled job CRUD |
-| `POST /pbs/save`, `/pbs/delete/{id}`, `/pbs/default`, `/pbs/fingerprint` | PBS server CRUD, default, TOFU pin |
+| `GET /status` | Service status, the console's sanitized configuration view, security warnings |
+| `POST /backup`, `POST /backup/cancel` | Start or stop a backup |
+| `GET /runs/active`, `/runs/recent?days=N`, `/runs/{id}` | What is running and what ran (30 days, kept across restarts) |
+| `GET /connections` | What this machine can reach |
+| `GET /jobs`, `POST /jobs/create`, `/jobs/update`, `/jobs/delete/{id}` | Local scheduled jobs (whole) |
+| `GET /pbs/servers`, `POST /pbs/save`, `/pbs/delete/{id}`, `/pbs/default`, `/pbs/fingerprint`, `/pbs/test`, `/pbs/discover` | PBS servers (no token on the wire), test, TOFU discovery and pin |
+| `GET /disks`, `GET /exchange` | Machine-backup targets, Exchange detection |
 | `POST /config/save` | Persist full config |
 | `GET /controlplane/status`, `POST /controlplane/save` | NimbusControl attachment state / settings |
+| `GET/POST /storage/identity` | Storage identity status and standalone approval |
+| `POST /restore/query`, `/restore/job`, `/restore/control`, `GET /restore/job/{id}` | Browse and restore, by op name from one gated table (`gui/api/restore.go`) |
 
 All inputs cross a typed JSON boundary; `exec.Command` uses fixed command
 names; no shell/SQL surface.

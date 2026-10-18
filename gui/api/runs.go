@@ -107,6 +107,13 @@ type Run struct {
 
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+
+	// BackupDirs and UseVSS are what the run was asked to back up, recorded
+	// when the engine's options are built (SetRequest), so the console's
+	// history can load a finished run back into the backup form. For a
+	// machine backup BackupDirs holds the resolved disk targets.
+	BackupDirs []string `json:"backup_dirs,omitempty"`
+	UseVSS     bool     `json:"use_vss,omitempty"`
 }
 
 // Running reports whether this run is still in flight.
@@ -250,6 +257,17 @@ func (r *RunRegistry) SetBackupID(runID, backupID string) {
 	defer r.mu.Unlock()
 	if run, ok := r.runs[runID]; ok && run.State != RunDone {
 		run.BackupID = backupID
+	}
+}
+
+// SetRequest records what the run was asked to back up. Not persisted on its
+// own: the run is written to the history file when it ends.
+func (r *RunRegistry) SetRequest(runID string, backupDirs []string, useVSS bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run, ok := r.runs[runID]; ok && run.State != RunDone {
+		run.BackupDirs = append([]string(nil), backupDirs...)
+		run.UseVSS = useVSS
 	}
 }
 

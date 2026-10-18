@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import usePolling from './usePolling'
+import { GetActiveRuns, GetConnections, GetRecentRuns } from '../lib/bindings'
 
 // Poll cadences. The live run moves; connections and history do not, and the
 // service probes destinations on its own 60s sweep, so asking faster than that
@@ -19,12 +20,10 @@ export default function useStatusPanel() {
   const [recent, setRecent] = useState([])
   const [serviceUp, setServiceUp] = useState(true)
 
-  const w = typeof window !== 'undefined' && window.go && window.go.main ? window.go.main.App : null
-
   // Fast loop: what is running.
   usePolling(async (alive) => {
     try {
-      const resp = await w.GetActiveRuns()
+      const resp = await GetActiveRuns()
       if (!alive()) return
       setServiceUp(true)
       const runs = (resp && resp.runs) || []
@@ -32,24 +31,24 @@ export default function useStatusPanel() {
     } catch {
       if (alive()) setServiceUp(false)
     }
-  }, ACTIVE_POLL_MS, !!(w && w.GetActiveRuns))
+  }, ACTIVE_POLL_MS, !!GetActiveRuns)
 
   // Slow loop: connections and history. The service probes destinations on its
   // own 60s sweep, so polling this faster only costs round trips.
   usePolling(async (alive) => {
     try {
-      if (w.GetConnections) {
-        const c = await w.GetConnections()
+      if (GetConnections) {
+        const c = await GetConnections()
         if (alive()) setConns(c)
       }
-      if (w.GetRecentRuns) {
-        const r = await w.GetRecentRuns(RECENT_DAYS)
+      if (GetRecentRuns) {
+        const r = await GetRecentRuns(RECENT_DAYS)
         if (alive()) setRecent((r && r.runs) || [])
       }
     } catch {
       /* the service tile already says the service is not answering */
     }
-  }, SLOW_POLL_MS, !!w)
+  }, SLOW_POLL_MS, !!(GetConnections || GetRecentRuns))
 
   return { conns, active, recent, serviceUp }
 }

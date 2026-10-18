@@ -14,13 +14,13 @@ func TestStorageJoinedApprovalRefused(t *testing.T) {
 	}
 }
 
-func TestStorageGUIWithoutServiceCannotApproveOrWriteState(t *testing.T) {
+// An App that is not the service process never acquires the state writer.
+// (The console has no App at all since V4-CONSOLE C2; its approval is a local
+// API call, refused without a service: console_bindings_test.go.)
+func TestStorageNonServiceAppCannotWriteState(t *testing.T) {
 	a := &App{config: &Config{}}
-	if a.ApproveStorageIdentity(map[string]interface{}{}) == nil {
-		t.Fatal("GUI approved without service")
-	}
 	if _, err := a.storageController(); err == nil {
-		t.Fatal("GUI acquired state writer")
+		t.Fatal("a non-service App acquired the state writer")
 	}
 }
 

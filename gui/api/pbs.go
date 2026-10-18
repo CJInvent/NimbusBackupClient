@@ -40,6 +40,21 @@ type PBSServerInfo struct {
 	SecretSet       bool   `json:"secret_set"`
 }
 
+// PBSServerSave is what the console sends to POST /pbs/save: a server as the
+// setup form edits it. The secret is the only one that ever crosses the local
+// API, typed by the user; empty means "keep the stored one".
+type PBSServerSave struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	BaseURL         string `json:"baseurl"`
+	CertFingerprint string `json:"certfingerprint"`
+	AuthID          string `json:"authid"`
+	Secret          string `json:"secret"`
+	Datastore       string `json:"datastore"`
+	Namespace       string `json:"namespace"`
+	Description     string `json:"description,omitempty"`
+}
+
 // PBSServersResponse is GET /pbs/servers.
 type PBSServersResponse struct {
 	Servers   []PBSServerInfo `json:"servers"`

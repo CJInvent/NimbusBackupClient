@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { GetControlServerStatus } from '../lib/bindings'
+import { GetControlServerStatus, GetStorageIdentityStatus, ApproveStorageIdentity, IsReadOnly } from '../lib/bindings'
 import usePolling from './usePolling'
 
 // What this machine is, as the service reports it: the control server's
@@ -15,7 +15,7 @@ export default function useMachineContext(onStatus) {
   usePolling(async (alive) => {
     try {
       const st = await GetControlServerStatus()
-      if (window.go?.main?.App?.GetStorageIdentityStatus) st.storage_identity = await window.go.main.App.GetStorageIdentityStatus()
+      if (GetStorageIdentityStatus) st.storage_identity = await GetStorageIdentityStatus()
       if (!alive()) return
       setCpStatus(st)
       onStatus(st)
@@ -35,12 +35,11 @@ export default function useMachineContext(onStatus) {
   //
   // null means "not asked yet".
   const [readOnly, setReadOnly] = useState(null)
-  const app = window.go && window.go.main && window.go.main.App
-  const canAsk = !!(app && app.IsReadOnly)
+  const canAsk = !!IsReadOnly
   useEffect(() => { if (!canAsk) setReadOnly(false) }, [])
   usePolling(async (alive) => {
     try {
-      const v = await app.IsReadOnly()
+      const v = await IsReadOnly()
       if (alive()) setReadOnly(!!v)
     } catch {
       // Unreachable service is not a locked one. Leaving the full UI up
@@ -49,5 +48,13 @@ export default function useMachineContext(onStatus) {
     }
   }, 30000, canAsk)
 
-  return { cpStatus, setCpStatus, readOnly }
+  // Approve the observed disks (standalone), then show the service's new
+  // answer. The panel renders; this is where it reaches the service.
+  const approveStorage = async (input) => {
+    await ApproveStorageIdentity(input)
+    const st = await GetStorageIdentityStatus()
+    setCpStatus(s => ({ ...s, storage_identity: st }))
+  }
+
+  return { cpStatus, setCpStatus, readOnly, approveStorage }
 }

@@ -40,7 +40,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('servers')
   const { status, showStatus } = useStatusMessage(t)
   const cpf = useControlServerForm()
-  const { cpStatus, setCpStatus, readOnly } = useMachineContext(cpf.prefill)
+  const { cpStatus, setCpStatus, readOnly, approveStorage } = useMachineContext(cpf.prefill)
   const f = useBackupForm()
   const app = useAppData(f.setBackupDirs)
   const security = useSecurity()
@@ -77,7 +77,7 @@ function App() {
 
       <OrgSuspendedBanner cpStatus={cpStatus} />
       <ReleaseBanners status={cpStatus} />
-      <StorageIdentityPanel status={cpStatus?.storage_identity} onChanged={st => setCpStatus(s => ({ ...s, storage_identity: st }))} />
+      <StorageIdentityPanel status={cpStatus?.storage_identity} onApprove={approveStorage} />
 
       {pick.picker && (
         <PathPicker
