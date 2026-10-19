@@ -1,3 +1,6 @@
+//go:build !service
+// +build !service
+
 package main
 
 // pathpicker.go — the backend for the in-app folder / Save-As picker.
@@ -12,9 +15,10 @@ package main
 // it CANNOT take the process down, and it behaves the same in every process
 // (GUI, elevated, or otherwise).
 //
-// Deliberately untagged (no !service): the service never calls these, but
-// keeping them out of the tag matrix removes a whole class of build-tag
-// mistakes, and they are inert if unused.
+// Console-only (!service) since V4-CONSOLE C2: the picker lists as the user
+// who runs the console, which is the point until V4-LOCAL-API P3 moves it into
+// the service, listing as the caller. It was untagged while the bound type was
+// the service's own App.
 
 import (
 	"errors"
@@ -55,7 +59,7 @@ type FolderListing struct {
 // ListDrives enumerates drives for the picker. Never errors: a drive that
 // cannot be interrogated is returned with Ready=false rather than omitted, so
 // the user can see it exists and why it is unusable.
-func (a *App) ListDrives() []DriveInfo {
+func (c *Console) ListDrives() []DriveInfo {
 	roots := logicalDriveRoots()
 	out := make([]DriveInfo, 0, len(roots))
 	for _, r := range roots {
@@ -73,9 +77,9 @@ func (a *App) ListDrives() []DriveInfo {
 // folder (or a folder + filename for Save As), so listing files would be
 // noise. Unreadable entries are skipped rather than failing the whole listing
 // — one permission-denied folder must not make the picker unusable.
-func (a *App) ListFolders(path string) (FolderListing, error) {
+func (c *Console) ListFolders(path string) (FolderListing, error) {
 	if strings.TrimSpace(path) == "" {
-		path = a.DefaultSaveDir()
+		path = c.DefaultSaveDir()
 	}
 	path = filepath.Clean(path)
 
@@ -124,7 +128,7 @@ func (a *App) ListFolders(path string) (FolderListing, error) {
 // CreateFolder makes a new folder inside parent and returns its full path.
 // The picker needs this because a native "New folder" button is exactly the
 // convenience users lose when we drop the native dialog.
-func (a *App) CreateFolder(parent, name string) (string, error) {
+func (c *Console) CreateFolder(parent, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", errors.New("folder name required")
@@ -149,7 +153,7 @@ func (a *App) CreateFolder(parent, name string) (string, error) {
 }
 
 // DefaultSaveDir is where the picker opens if the user has no path yet.
-func (a *App) DefaultSaveDir() string {
+func (c *Console) DefaultSaveDir() string {
 	if home, err := os.UserHomeDir(); err == nil {
 		dl := filepath.Join(home, "Downloads")
 		if st, err := os.Stat(dl); err == nil && st.IsDir() {

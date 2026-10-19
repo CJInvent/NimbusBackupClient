@@ -1,10 +1,9 @@
-//go:build windows
-// +build windows
+//go:build windows && !service
+// +build windows,!service
 
 package main
 
 import (
-	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -83,7 +82,7 @@ func trayText(lang string) map[string]string {
 
 // SetTrayLanguage is Wails-bound: the frontend calls it at startup and on
 // every language change so the tray follows the GUI language live.
-func (a *App) SetTrayLanguage(lang string) {
+func (c *Console) SetTrayLanguage(lang string) {
 	if lang != "fr" && lang != "en" && lang != "es" {
 		return
 	}
@@ -106,12 +105,12 @@ func (a *App) SetTrayLanguage(lang string) {
 		menuQuit.SetTooltip(tt["quitTip"])
 	}
 	if storageTrayFault.Load() {
-		a.updateStorageTray(map[string]interface{}{"error": "latched"})
+		c.updateStorageTray(map[string]interface{}{"error": "latched"})
 	}
 }
 
-// SetupSystemTray initializes the system tray icon and menu
-func (a *App) SetupSystemTray() {
+// setupSystemTray initializes the system tray icon and menu
+func (c *Console) setupSystemTray() {
 	if trayInitialized {
 		return
 	}
@@ -120,13 +119,13 @@ func (a *App) SetupSystemTray() {
 
 	// Setup tray in goroutine to avoid blocking
 	go func() {
-		systray.Run(onReady(a), onExit)
+		systray.Run(onReady(c), onExit)
 	}()
 
 	trayInitialized = true
 }
 
-func onReady(a *App) func() {
+func onReady(c *Console) func() {
 	return func() {
 		// Set tray icon from embedded PNG data (icon.go)
 		systray.SetIcon(TrayIconData)
@@ -151,14 +150,14 @@ func onReady(a *App) func() {
 				case <-menuShow.ClickedCh:
 					writeInfoLog("Tray: Show window clicked")
 					// Show the main window
-					runtime.WindowShow(a.ctx)
-					runtime.WindowUnminimise(a.ctx)
+					runtime.WindowShow(c.ctx)
+					runtime.WindowUnminimise(c.ctx)
 				case <-menuQuit.ClickedCh:
 					writeInfoLog("Tray: Quit clicked")
 					// Ask systray to remove the icon (Shell_NotifyIcon NIM_DELETE)
 					// and request Wails shutdown in parallel.
 					systray.Quit()
-					runtime.Quit(a.ctx)
+					runtime.Quit(c.ctx)
 					// Exit once the icon is confirmed gone, or after a bound in
 					// case the message loop is ever stuck — imperceptible to the
 					// user either way, and it's what actually closes the race
@@ -199,25 +198,10 @@ func onExit() {
 	markTrayExited()
 }
 
-// MinimizeToTray hides the window and minimizes to tray
-func (a *App) MinimizeToTray() {
+// minimizeToTray hides the window and minimizes to tray
+func (c *Console) minimizeToTray() {
 	writeInfoLog("Minimizing to tray")
-	runtime.WindowHide(a.ctx)
-}
-
-// ShowFromTray shows the window from tray
-func (a *App) ShowFromTray() {
-	writeInfoLog("Showing from tray")
-	runtime.WindowShow(a.ctx)
-	runtime.WindowUnminimise(a.ctx)
-}
-
-// UpdateTrayTooltip updates the tray icon tooltip (e.g., with next backup time)
-func (a *App) UpdateTrayTooltip(message string) {
-	if !trayInitialized || storageTrayFault.Load() {
-		return
-	}
-	systray.SetTooltip(fmt.Sprintf("Nimbus Backup - %s", message))
+	runtime.WindowHide(c.ctx)
 }
 
 // attemptTrayCleanupBeforeCrash gives a panic a brief, bounded chance to
@@ -238,7 +222,7 @@ func attemptTrayCleanupBeforeCrash() {
 	waitForTrayExit(300 * time.Millisecond)
 }
 
-func (a *App) updateStorageTray(status map[string]interface{}) {
+func (c *Console) updateStorageTray(status map[string]interface{}) {
 	if !trayInitialized {
 		return
 	}

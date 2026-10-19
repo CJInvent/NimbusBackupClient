@@ -50,31 +50,20 @@ import (
 // process on the same machine.
 const restoreJobPollInterval = 500 * time.Millisecond
 
-// requireService is the precondition for every call in this file.
-//
-// It re-probes, exactly as StartBackup does and for the same reason: the
-// service may have started after the console did, and "press it again in a
-// minute" beats "restart the application".
-func (a *App) requireService() error {
-	if a.apiClient == nil {
-		return errors.New(errServiceUnavailable)
-	}
-	if a.mode != api.ModeService && a.apiClient.IsServiceAvailable() {
-		writeInfoLog("[Mode] Service now reachable")
-		a.mode = api.ModeService
-	}
-	if a.mode != api.ModeService {
-		return errors.New(errServiceUnavailable)
-	}
-	return nil
+// requireService is the precondition for every call in this file: the
+// service has answered (Console.service, which re-probes until it does, so a
+// service that started after the console is found without a restart).
+func (c *Console) requireService() error {
+	_, err := c.service()
+	return err
 }
 
 // restoreQuery runs a bounded operation and decodes it into out.
-func (a *App) restoreQuery(op string, params, out any) error {
-	if err := a.requireService(); err != nil {
+func (c *Console) restoreQuery(op string, params, out any) error {
+	if err := c.requireService(); err != nil {
 		return err
 	}
-	raw, err := a.apiClient.RestoreQuery(op, params)
+	raw, err := c.api.RestoreQuery(op, params)
 	if err != nil {
 		return err
 	}
@@ -94,11 +83,11 @@ func (a *App) restoreQuery(op string, params, out any) error {
 // dropped loopback request during a two-hour restore must not report a restore
 // that is still running as failed. Three consecutive failures is the service
 // actually being gone.
-func (a *App) awaitRestoreJob(op string, params any, onState func(*api.RestoreJobState)) (json.RawMessage, error) {
-	if err := a.requireService(); err != nil {
+func (c *Console) awaitRestoreJob(op string, params any, onState func(*api.RestoreJobState)) (json.RawMessage, error) {
+	if err := c.requireService(); err != nil {
 		return nil, err
 	}
-	id, err := a.apiClient.RestoreJobStart(op, params)
+	id, err := c.api.RestoreJobStart(op, params)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +96,7 @@ func (a *App) awaitRestoreJob(op string, params any, onState func(*api.RestoreJo
 	failures := 0
 	for {
 		time.Sleep(restoreJobPollInterval)
-		st, err := a.apiClient.RestoreJobState(id)
+		st, err := c.api.RestoreJobState(id)
 		if err != nil {
 			failures++
 			if failures >= maxPollFailures {
@@ -133,11 +122,11 @@ func (a *App) awaitRestoreJob(op string, params any, onState func(*api.RestoreJo
 // listen for. Field names are the union of what the two emitters used before
 // (gui/ibemit_gui.go and the old RestoreSnapshot binding), so neither view
 // needed changing.
-func (a *App) emitRestoreProgress(st *api.RestoreJobState) {
-	if a.ctx == nil {
+func (c *Console) emitRestoreProgress(st *api.RestoreJobState) {
+	if c.ctx == nil {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "restore:progress", map[string]interface{}{
+	runtime.EventsEmit(c.ctx, "restore:progress", map[string]interface{}{
 		"percent":     st.Percent,
 		"message":     st.Message,
 		"done_bytes":  st.DoneBytes,
@@ -147,8 +136,8 @@ func (a *App) emitRestoreProgress(st *api.RestoreJobState) {
 	})
 }
 
-func (a *App) emitRestoreComplete(err error) {
-	if a.ctx == nil {
+func (c *Console) emitRestoreComplete(err error) {
+	if c.ctx == nil {
 		return
 	}
 	msg := "Restore completed"
@@ -156,7 +145,7 @@ func (a *App) emitRestoreComplete(err error) {
 		msg = err.Error()
 		writeErrorLog(fmt.Sprintf("Restore failed: %v", err))
 	}
-	runtime.EventsEmit(a.ctx, "restore:complete", map[string]interface{}{
+	runtime.EventsEmit(c.ctx, "restore:complete", map[string]interface{}{
 		"success": err == nil,
 		"message": msg,
 	})
@@ -169,11 +158,11 @@ func (a *App) emitRestoreComplete(err error) {
 //
 // pbsID selects the PBS server. Empty means "use the default server" — kept
 // for backward compatibility with the legacy single-PBS UI.
-func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, error) {
+func (c *Console) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, error) {
 	writeInfoLog(fmt.Sprintf("ListSnapshots(pbs=%s, backupID=%s)", pbsID, backupID))
 
 	var snaps []SnapshotInfo
-	if err := a.restoreQuery(opSnapshots, ListSnapshotsParams{PBSID: pbsID, BackupID: backupID}, &snaps); err != nil {
+	if err := c.restoreQuery(opSnapshots, ListSnapshotsParams{PBSID: pbsID, BackupID: backupID}, &snaps); err != nil {
 		writeErrorLog(fmt.Sprintf("ListSnapshots failed: %v", err))
 		return nil, fmt.Errorf("%s :: %v", errSnapshotList, err)
 	}
@@ -203,12 +192,12 @@ func (a *App) ListSnapshots(pbsID, backupID string) ([]map[string]interface{}, e
 // snapshotUnix is the snapshot's backup-time as Unix seconds (the `unix` field
 // returned by ListSnapshots). Set forceRefresh to bypass the service's listing
 // cache — useful for a manual "Reload" action.
-func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, forceRefresh bool) ([]SnapshotEntry, error) {
+func (c *Console) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, forceRefresh bool) ([]SnapshotEntry, error) {
 	writeInfoLog(fmt.Sprintf("ListSnapshotContents(pbs=%s, backupID=%s, unix=%d, force=%v)",
 		pbsID, backupID, snapshotUnix, forceRefresh))
 
 	var entries []SnapshotEntry
-	err := a.restoreQuery(opContents, ListContentsParams{
+	err := c.restoreQuery(opContents, ListContentsParams{
 		SnapshotRef:  SnapshotRef{PBSID: pbsID, BackupID: backupID, SnapshotUnix: snapshotUnix},
 		ForceRefresh: forceRefresh,
 	}, &entries)
@@ -218,12 +207,12 @@ func (a *App) ListSnapshotContents(pbsID, backupID string, snapshotUnix int64, f
 // GetSnapshotMeta returns the `.nimbus_backup_meta.json` sidecar from a
 // snapshot. Returns nil (not an error) when the snapshot predates the sidecar
 // — the frontend should fall back to a generic banner in that case.
-func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*BackupMeta, error) {
+func (c *Console) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*BackupMeta, error) {
 	writeInfoLog(fmt.Sprintf("GetSnapshotMeta(pbs=%s, backupID=%s, unix=%d)",
 		pbsID, backupID, snapshotUnix))
 
 	var meta *BackupMeta
-	err := a.restoreQuery(opMeta, SnapshotMetaParams{
+	err := c.restoreQuery(opMeta, SnapshotMetaParams{
 		SnapshotRef: SnapshotRef{PBSID: pbsID, BackupID: backupID, SnapshotUnix: snapshotUnix},
 	}, &meta)
 	return meta, err
@@ -247,7 +236,7 @@ func (a *App) GetSnapshotMeta(pbsID, backupID string, snapshotUnix int64) (*Back
 //
 // Returns as soon as the service has accepted the job. Progress arrives on
 // "restore:progress" and the outcome on "restore:complete", exactly as before.
-func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string,
+func (c *Console) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string,
 	includePaths []string, allowCrossHost, restoreACLs, restoreADS, restoreTimestamps, overwrite bool) error {
 	writeInfoLog(fmt.Sprintf("RestoreSnapshot(pbs=%s, backupID=%s, snap=%s, mode=%s, dest=%s, includes=%d, crossHost=%v, acl=%v, ads=%v, ts=%v, overwrite=%v)",
 		pbsID, backupID, snapshotID, mode, destPath, len(includePaths), allowCrossHost, restoreACLs, restoreADS, restoreTimestamps, overwrite))
@@ -270,7 +259,7 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 			return fmt.Errorf("chemin de destination invalide: %w", err)
 		}
 	}
-	if err := a.requireService(); err != nil {
+	if err := c.requireService(); err != nil {
 		return err
 	}
 
@@ -286,8 +275,8 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 		Overwrite:         overwrite,
 	}
 	go func() {
-		_, err := a.awaitRestoreJob(opRestore, params, a.emitRestoreProgress)
-		a.emitRestoreComplete(err)
+		_, err := c.awaitRestoreJob(opRestore, params, c.emitRestoreProgress)
+		c.emitRestoreComplete(err)
 	}()
 	return nil
 }
@@ -306,11 +295,11 @@ func (a *App) RestoreSnapshot(pbsID, backupID, snapshotID, destPath, mode string
 // result. The wait is a poll of a service-side job rather than an in-process
 // call, so a console restarted mid-search loses its view of the search and not
 // the search itself.
-func (a *App) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUnix int64, assembleMissing bool) (*SearchResult, error) {
+func (c *Console) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUnix int64, assembleMissing bool) (*SearchResult, error) {
 	writeInfoLog(fmt.Sprintf("SearchFiles(pbs=%s, prefix=%s, query=%q, mode=%s, from=%d, to=%d, assemble=%v)",
 		pbsID, hostPrefix, query, mode, fromUnix, toUnix, assembleMissing))
 
-	raw, err := a.awaitRestoreJob(opSearch, SearchParams{
+	raw, err := c.awaitRestoreJob(opSearch, SearchParams{
 		PBSID:           pbsID,
 		HostPrefix:      hostPrefix,
 		Query:           query,
@@ -319,10 +308,10 @@ func (a *App) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUni
 		ToUnix:          toUnix,
 		AssembleMissing: assembleMissing,
 	}, func(st *api.RestoreJobState) {
-		if a.ctx == nil {
+		if c.ctx == nil {
 			return
 		}
-		runtime.EventsEmit(a.ctx, "search:progress", map[string]interface{}{
+		runtime.EventsEmit(c.ctx, "search:progress", map[string]interface{}{
 			"percent": st.Percent,
 			"message": st.Message,
 		})
@@ -340,12 +329,12 @@ func (a *App) SearchFiles(pbsID, hostPrefix, query, mode string, fromUnix, toUni
 // CancelSearch asks an in-flight SearchFiles to stop at the next snapshot
 // boundary. The call returning does not mean the search has stopped yet — the
 // search returns its partial result with Cancelled=true.
-func (a *App) CancelSearch() {
+func (c *Console) CancelSearch() {
 	writeInfoLog("CancelSearch requested")
-	if err := a.requireService(); err != nil {
+	if err := c.requireService(); err != nil {
 		return
 	}
-	if err := a.apiClient.RestoreControl(opCancelSearch, nil); err != nil {
+	if err := c.api.RestoreControl(opCancelSearch, nil); err != nil {
 		writeErrorLog(fmt.Sprintf("CancelSearch failed: %v", err))
 	}
 }
@@ -358,19 +347,19 @@ func (a *App) CancelSearch() {
 // neededBytes is the frontend's computed selection size (uncompressed upper
 // bound). Space is enforced in the SERVICE regardless of what this console
 // showed — see download_service.go.
-func (a *App) DownloadSelection(pbsID, backupID, snapshotID string,
+func (c *Console) DownloadSelection(pbsID, backupID, snapshotID string,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
 	writeInfoLog(fmt.Sprintf("DownloadSelection(pbs=%s, backup=%s, snap=%s, includes=%d, dest=%s, zip=%v, needed=%d)",
 		pbsID, backupID, snapshotID, len(includePaths), destPath, asZip, neededBytes))
 
-	_, err := a.awaitRestoreJob(opDownload, DownloadParams{
+	_, err := c.awaitRestoreJob(opDownload, DownloadParams{
 		SnapshotRef:  SnapshotRef{PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID},
 		IncludePaths: includePaths,
 		DestPath:     destPath,
 		AsZip:        asZip,
 		NeededBytes:  neededBytes,
-	}, a.emitRestoreProgress)
+	}, c.emitRestoreProgress)
 	return err
 }
 
@@ -379,9 +368,9 @@ func (a *App) DownloadSelection(pbsID, backupID, snapshotID string,
 // ListVolumePartitions enumerates every partition on a disk image — regardless
 // of whether it can be browsed — with its filesystem, allocated size, and used
 // size. The user chooses; we never choose for them.
-func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]VolumePartition, error) {
+func (c *Console) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]VolumePartition, error) {
 	var parts []VolumePartition
-	err := a.restoreQuery(opVolumePartitions, VolumeRef{
+	err := c.restoreQuery(opVolumePartitions, VolumeRef{
 		PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 		BackupType: backupType, DiskArchive: diskArchive,
 	}, &parts)
@@ -392,11 +381,11 @@ func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, disk
 // directory listing. The full tree stays in the SERVICE's session cache —
 // shipping a million entries of JSON into the webview is what forced the old
 // truncation; per-directory listing (ListVolumeDirectory) has no such limit.
-func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchive string,
+func (c *Console) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
 
 	var out VolumeFilesResult
-	err := a.restoreQuery(opVolumeFiles, VolumeFilesParams{
+	err := c.restoreQuery(opVolumeFiles, VolumeFilesParams{
 		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
@@ -406,18 +395,18 @@ func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchi
 	if err != nil {
 		return nil, err
 	}
-	a.lastVolumeTruncated = out.Truncated
+	c.lastVolumeTruncated.Store(out.Truncated)
 	return out.Entries, nil
 }
 
 // ListVolumeDirectory returns the immediate children of dir from the scan the
 // service is holding — the whole point of keeping the tree there: the webview
 // only ever holds one directory's worth of rows, so nothing needs truncating.
-func (a *App) ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
+func (c *Console) ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
 	partIndex int, dir string) ([]SnapshotEntry, error) {
 
 	var entries []SnapshotEntry
-	err := a.restoreQuery(opVolumeDirectory, VolumeDirectoryParams{
+	err := c.restoreQuery(opVolumeDirectory, VolumeDirectoryParams{
 		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
@@ -429,18 +418,18 @@ func (a *App) ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, diskA
 
 // LastVolumeListTruncated reports whether the last ListVolumeFiles hit the
 // service's entry cap.
-func (a *App) LastVolumeListTruncated() bool { return a.lastVolumeTruncated }
+func (c *Console) LastVolumeListTruncated() bool { return c.lastVolumeTruncated.Load() }
 
 // DownloadFilesFromVolume packages the selection as a ZIP at destPath, streamed
 // in one pass by the service: PBS chunks -> filesystem parser -> zip entry ->
 // disk, nothing staged anywhere.
-func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+func (c *Console) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destPath string, asZip bool, neededBytes int64) error {
 
 	writeInfoLog(fmt.Sprintf("DownloadFilesFromVolume(disk=%s part=%d includes=%d dest=%s needed=%d)",
 		diskArchive, partIndex, len(includePaths), destPath, neededBytes))
 
-	_, err := a.awaitRestoreJob(opVolumeDownload, VolumeDownloadParams{
+	_, err := c.awaitRestoreJob(opVolumeDownload, VolumeDownloadParams{
 		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
@@ -449,7 +438,7 @@ func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, d
 		DestPath:     destPath,
 		AsZip:        asZip,
 		NeededBytes:  neededBytes,
-	}, a.emitRestoreProgress)
+	}, c.emitRestoreProgress)
 	return err
 }
 
@@ -457,14 +446,14 @@ func (a *App) DownloadFilesFromVolume(pbsID, backupID, snapshotID, backupType, d
 // destination folder (not a zip). The restoreMtimes / restoreACLs / restoreADS
 // options only have meaning when the SOURCE stores them (NTFS); the service
 // treats them as best-effort per file.
-func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
+func (c *Console) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, diskArchive string, partIndex int,
 	includePaths []string, destDir string, keepStructure, overwrite bool,
 	restoreMtimes, restoreACLs, restoreADS bool, neededBytes int64) error {
 
 	writeInfoLog(fmt.Sprintf("RestoreFilesFromVolume(disk=%s part=%d includes=%d dest=%s keep=%v overwrite=%v mtime=%v acl=%v ads=%v)",
 		diskArchive, partIndex, len(includePaths), destDir, keepStructure, overwrite, restoreMtimes, restoreACLs, restoreADS))
 
-	_, err := a.awaitRestoreJob(opVolumeFileRestore, VolumeFileRestoreParams{
+	_, err := c.awaitRestoreJob(opVolumeFileRestore, VolumeFileRestoreParams{
 		VolumeRef: VolumeRef{
 			PBSID: pbsID, BackupID: backupID, SnapshotID: snapshotID,
 			BackupType: backupType, DiskArchive: diskArchive, PartIndex: partIndex,
@@ -477,7 +466,7 @@ func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, di
 		RestoreACLs:   restoreACLs,
 		RestoreADS:    restoreADS,
 		NeededBytes:   neededBytes,
-	}, a.emitRestoreProgress)
+	}, c.emitRestoreProgress)
 	return err
 }
 
@@ -485,11 +474,24 @@ func (a *App) RestoreFilesFromVolume(pbsID, backupID, snapshotID, backupType, di
 // restore. The
 // service's loop checks between files, so cancellation takes effect at the
 // next file boundary (a large file in flight finishes its current write).
-func (a *App) CancelVolumeFileRestore() {
-	if err := a.requireService(); err != nil {
+func (c *Console) CancelVolumeFileRestore() {
+	if err := c.requireService(); err != nil {
 		return
 	}
-	if err := a.apiClient.RestoreControl(opCancelVolumeFileRestore, nil); err != nil {
+	if err := c.api.RestoreControl(opCancelVolumeFileRestore, nil); err != nil {
 		writeErrorLog(fmt.Sprintf("CancelVolumeFileRestore failed: %v", err))
 	}
+}
+
+// CheckDownloadSpace is the warning dialog's pre-flight before a download:
+// will neededBytes fit on destPath's drive. Answered by the service (restore op
+// "space"), the process that writes the bytes; the check that blocks a
+// download that will not fit is the service's too, made again when it runs.
+func (c *Console) CheckDownloadSpace(destPath string, neededBytes int64) (SpaceCheck, error) {
+	if destPath == "" {
+		return SpaceCheck{}, errors.New(errDestPathRequired)
+	}
+	var out SpaceCheck
+	err := c.restoreQuery(opSpace, SpaceParams{DestPath: destPath, NeededBytes: neededBytes}, &out)
+	return out, err
 }

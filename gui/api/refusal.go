@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // StatusError is a handler's refusal with the HTTP status it should travel
@@ -51,6 +52,20 @@ func (c *Client) getJSON(path string, out any) error {
 	return decodeServiceResponse(resp, out)
 }
 
+// deleteJSON sends a DELETE (the delete routes also accept POST, but DELETE
+// says what the request is).
+func (c *Client) deleteJSON(path string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("[NB-2007] communication with the service failed :: %w", err)
+	}
+	return decodeServiceResponse(resp, nil)
+}
+
 func (c *Client) postJSON(path string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
@@ -76,6 +91,11 @@ func decodeServiceResponse(resp *http.Response, out any) error {
 		var e ErrorResponse
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
 			return Refuse(resp.StatusCode, errors.New(e.Error))
+		}
+		// A few handlers answer with http.Error's plain text. Its first line
+		// is the message; anything long is not one.
+		if text := strings.TrimSpace(strings.SplitN(string(raw), "\n", 2)[0]); text != "" && len(text) <= 300 {
+			return Refuse(resp.StatusCode, errors.New(text))
 		}
 		return Refuse(resp.StatusCode, fmt.Errorf("the service answered HTTP %d", resp.StatusCode))
 	}

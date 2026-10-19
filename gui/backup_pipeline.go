@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"security"
 )
@@ -221,7 +220,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 		}
 		rejected := BackupOptions{BackupID: req.BackupID, BackupType: kind}
 		cpFinish, _ := attachControlPlaneHooks(&rejected)
-		runFinish, _ := attachRunRegistry(&rejected)
+		runFinish := attachRunRegistry(&rejected)
 		cpFinish(err)
 		runFinish(err)
 		return err
@@ -234,7 +233,6 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	// --- Assemble --------------------------------------------------------
 
 	var lastRelayedMsg string
-	var completionMessage string
 	opts := BackupOptions{
 		ValidateSource:  r.sourceValidator,
 		BaseURL:         pbsCfg.BaseURL,
@@ -273,7 +271,6 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 		},
 
 		OnComplete: func(success bool, message string) {
-			completionMessage = message
 			writeInfoLog(fmt.Sprintf("[Backup Complete] success=%v - %s", success, message))
 			if success {
 				a.maybeRunExchangePostBackup()
@@ -297,7 +294,7 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	// is never reported as finished at all — to the portal or to the local
 	// status panel.
 	cpFinish, runUUID := attachControlPlaneHooks(&opts)
-	runFinish, historyName := attachRunRegistry(&opts)
+	runFinish := attachRunRegistry(&opts)
 	// AFTER the hooks: they find this run's reporter and registry entry by
 	// the job's own id. What PBS sees is the server's (data path mode).
 	if r.pbsMachineID != "" {
@@ -306,22 +303,6 @@ func (a *App) runBackupPipeline(req backupRequest) (resultErr error) {
 	if r.pbsSourceIDs != nil {
 		opts.SourceIDs = r.pbsSourceIDs
 	}
-	historyID := runUUID
-	if historyID == "" {
-		historyID = fmt.Sprintf("local-%d", time.Now().UnixNano())
-	}
-	defer func() {
-		status := "success"
-		if resultErr != nil {
-			status = "failed"
-			completionMessage = resultErr.Error()
-		}
-		if err := a.AddJobHistory(JobHistory{ID: historyID, Name: historyName,
-			Timestamp: time.Now().Format(time.RFC3339), Status: status, Message: completionMessage,
-			BackupDirs: targetDirs, BackupID: backupID, UseVSS: req.UseVSS}); err != nil {
-			writeWarnLog(fmt.Sprintf("[Pipeline] run %s: failed to record backup history: %v", historyID, err))
-		}
-	}()
 
 	// --- Gate ------------------------------------------------------------
 	//

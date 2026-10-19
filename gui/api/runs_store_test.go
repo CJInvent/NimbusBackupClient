@@ -318,3 +318,30 @@ func TestPersistUnderConcurrentRunsLeavesTheNewestState(t *testing.T) {
 		}
 	}
 }
+
+func TestARunsRequestIsKeptForTheHistory(t *testing.T) {
+	// The console's history loads a finished run back into the backup form,
+	// which needs what the run was asked to back up, after a restart too.
+	r, clk := newTestRegistry()
+	f := &memFile{}
+	if _, err := r.Persist(nil, f.save); err != nil {
+		t.Fatal(err)
+	}
+	id := r.Begin(TriggerManual, "", "Manual backup", "WS-01", "directory")
+	dirs := []string{`C:\Users`, `D:\Data`}
+	r.SetRequest(id, dirs, true)
+	dirs[0] = "changed by the caller"
+	r.Complete(id, false, "PBS HTTP 403")
+
+	r2, _ := restart(t, f, clk)
+	run, _ := r2.Get(id)
+	if len(run.BackupDirs) != 2 || run.BackupDirs[0] != `C:\Users` || !run.UseVSS {
+		t.Errorf("after restart the run's request reads %+v / vss %v", run.BackupDirs, run.UseVSS)
+	}
+
+	// Ignored once done, like every other setter.
+	r2.SetRequest(id, []string{"X:"}, false)
+	if run, _ := r2.Get(id); run.BackupDirs[0] != `C:\Users` {
+		t.Error("SetRequest changed a finished run")
+	}
+}

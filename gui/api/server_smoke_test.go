@@ -27,8 +27,8 @@ import (
 
 const testToken = "0123456789abcdef0123456789abcdef"
 
-// stubHandler implements BackupHandler plus the two optional interfaces the
-// server type-asserts (ReloadConfig, SetProgressCallbacks). It records calls so
+// stubHandler implements BackupHandler plus the optional interface the
+// server type-asserts for progress (SetProgressCallbacks). It records calls so
 // the test can assert the server actually delegated, and can be armed to fail
 // so error propagation is exercised.
 type stubHandler struct {
@@ -37,13 +37,12 @@ type stubHandler struct {
 	failOn map[string]bool
 
 	// backup coordination
-	started       chan string
-	release       chan struct{}
-	onProgress    func(string, float64, string)
-	onStats       func(string, uint64, uint64, uint64, uint64)
-	onComplete    func(string, bool, string)
-	cbReady       chan struct{}
-	reloadedFirst bool
+	started    chan string
+	release    chan struct{}
+	onProgress func(string, float64, string)
+	onStats    func(string, uint64, uint64, uint64, uint64)
+	onComplete func(string, bool, string)
+	cbReady    chan struct{}
 }
 
 func newStub() *stubHandler {
@@ -87,16 +86,6 @@ func (h *stubHandler) arm(name string) {
 	h.mu.Unlock()
 }
 
-// ReloadConfig is the optional interface handleBackup type-asserts.
-func (h *stubHandler) ReloadConfig() {
-	h.mu.Lock()
-	if len(h.calls) == 0 {
-		h.reloadedFirst = true
-	}
-	h.mu.Unlock()
-	h.record("ReloadConfig")
-}
-
 func (h *stubHandler) SetProgressCallbacks(
 	jobID string,
 	onProgress func(string, float64, string),
@@ -128,11 +117,16 @@ func (h *stubHandler) GetConfigWithHostname() map[string]interface{} {
 	return map[string]interface{}{"hostname": "smoke-host", "usevss": true}
 }
 
-func (h *stubHandler) GetScheduledJobsForAPI() []map[string]interface{} {
-	h.record("GetScheduledJobsForAPI")
-	return []map[string]interface{}{
-		{"id": "job-1", "name": "Nightly", "backup_type": "directory", "schedule": "0 2 * * *", "last_run": "2026-07-01T02:00:00Z"},
+func (h *stubHandler) ListScheduledJobs() ([]ScheduledJob, error) {
+	h.record("ListScheduledJobs")
+	if err := h.fail("ListScheduledJobs"); err != nil {
+		return nil, err
 	}
+	return []ScheduledJob{{
+		ID: "job-1", Name: "Nightly", BackupType: "directory", ScheduleTime: "02:00",
+		BackupDirs: []string{`C:\Users`}, ExcludeList: []string{"*.tmp"}, BackupID: "WS-01",
+		UseVSS: true, Compression: "fastest", LastRun: "2026-07-01T02:00:00Z", Enabled: true,
+	}}, nil
 }
 
 func (h *stubHandler) SaveScheduledJobFromMap(job map[string]interface{}) error {
@@ -377,7 +371,8 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 		t.Errorf("status.configuration.hostname = %v, want smoke-host", status.Configuration["hostname"])
 	}
 
-	// /jobs projects the handler's maps into JobInfo.
+	// /jobs returns the jobs whole: the console's list and edit form read
+	// every field, so a summary would empty the form.
 	code, body = do(t, ts, http.MethodGet, "/jobs", nil, withToken(testToken))
 	if code != http.StatusOK {
 		t.Fatalf("GET /jobs = %d", code)
@@ -389,8 +384,15 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 	if len(jobs.Jobs) != 1 || jobs.Jobs[0].ID != "job-1" || jobs.Jobs[0].Name != "Nightly" {
 		t.Fatalf("unexpected jobs payload: %+v", jobs.Jobs)
 	}
-	if jobs.Jobs[0].LastRun != "2026-07-01T02:00:00Z" {
-		t.Errorf("last_run not carried through: %+v", jobs.Jobs[0])
+	j := jobs.Jobs[0]
+	if j.LastRun != "2026-07-01T02:00:00Z" || j.ScheduleTime != "02:00" || !j.UseVSS || j.BackupID != "WS-01" ||
+		len(j.BackupDirs) != 1 || len(j.ExcludeList) != 1 || j.Compression != "fastest" || !j.Enabled {
+		t.Errorf("a field did not come through: %+v", j)
+	}
+	for _, key := range []string{`"scheduleTime"`, `"runAtStartup"`, `"backupDirs"`, `"diskTargets"`, `"excludeList"`, `"useVSS"`} {
+		if !strings.Contains(body, key) {
+			t.Errorf("GET /jobs lacks %s, a key the console reads: %s", key, body)
+		}
 	}
 
 	// create / update / delete all delegate to the handler.

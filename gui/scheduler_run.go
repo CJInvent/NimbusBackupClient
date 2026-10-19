@@ -78,6 +78,10 @@ func (a *App) RecalculateNextRuns() {
 	}
 }
 
+// schedulerStop ends the scheduler's loop. The scheduler is the service's
+// alone, so its stop channel lives with it rather than on App.
+var schedulerStop = make(chan struct{})
+
 // StartScheduler starts the background job scheduler
 func (a *App) StartScheduler() {
 	writeInfoLog("Starting background job scheduler")
@@ -90,7 +94,7 @@ func (a *App) StartScheduler() {
 			select {
 			case <-ticker.C:
 				a.checkAndRunScheduledJobs()
-			case <-a.stopScheduler:
+			case <-schedulerStop:
 				writeInfoLog("Scheduler stopped")
 				return
 			}
@@ -101,50 +105,7 @@ func (a *App) StartScheduler() {
 // StopScheduler stops the background job scheduler
 func (a *App) StopScheduler() {
 	writeInfoLog("Stopping background job scheduler")
-	close(a.stopScheduler)
-}
-
-// CleanupAbandonedJobs marks any "running" jobs as abandoned on app startup
-func (a *App) CleanupAbandonedJobs() {
-	writeInfoLog("CleanupAbandonedJobs called - cleaning up stale running jobs")
-
-	history, err := a.GetJobHistory()
-	if err != nil {
-		writeErrorLog(fmt.Sprintf("Error loading job history: %v", err))
-		return
-	}
-
-	modified := false
-	for i, entry := range history {
-		if entry.Status == "running" {
-			writeErrorLog(fmt.Sprintf("Marking abandoned job as failed: %s", entry.Name))
-			history[i].Status = "failed"
-			history[i].Message = "Aborted (application interrupted)"
-			history[i].Timestamp = time.Now().Format(time.RFC3339)
-			modified = true
-		}
-	}
-
-	if modified {
-		// Save updated history
-		historyPath, err := getJobHistoryPath()
-		if err != nil {
-			writeErrorLog(fmt.Sprintf("Error getting history path: %v", err))
-			return
-		}
-
-		data, err := json.MarshalIndent(history, "", "  ")
-		if err != nil {
-			writeErrorLog(fmt.Sprintf("Error marshaling history: %v", err))
-			return
-		}
-
-		if err := atomicWriteFile(historyPath, data, 0600); err != nil {
-			writeErrorLog(fmt.Sprintf("Error saving updated history: %v", err))
-		} else {
-			writeInfoLog("Successfully cleaned up abandoned jobs")
-		}
-	}
+	close(schedulerStop)
 }
 
 // HandleStartupRun executes scheduled jobs that have runAtStartup enabled

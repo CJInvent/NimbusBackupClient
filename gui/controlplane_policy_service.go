@@ -13,9 +13,10 @@ import (
 
 // ControlPolicy is THE gate, evaluated where the agent actually lives.
 //
-// Service-only. The GUI has its own implementation that ASKS this process
-// (controlplane_policy_gui.go), because a front end that evaluated the gate
-// locally would find no agent and conclude that nothing is restricted.
+// Service-only. The console evaluates no policy at all (V4-CONSOLE C2 deleted
+// its copy, controlplane_policy_gui.go): it asks the service, and the service
+// refuses what the policy forbids. A front end that evaluated the gate locally
+// would find no agent and conclude that nothing is restricted.
 //
 // Original note: ControlPolicy is THE gate the GUI and local API consult. Fail-closed
 // semantics are inherited from Agent.CurrentPolicy (zero value = all off);

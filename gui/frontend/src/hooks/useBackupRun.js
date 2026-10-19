@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
-import { GetActiveRuns, GetRecentRuns, GetJobHistory } from '../lib/bindings'
+import { GetActiveRuns, GetRecentRuns } from '../lib/bindings'
+import { HISTORY_DAYS, runsToHistory } from '../lib/history'
 import usePolling from './usePolling'
 
 const idleStats = () => ({
@@ -63,16 +64,16 @@ export default function useBackupRun(showStatus, setJobHistory) {
               setProgress(done.success ? 100 : 0)
               setBackupStats({ startTime: null, lastUpdate: null, lastPercent: 0, speed: 0, eta: null, bytesDone: 0, bytesTotal: 0, newChunks: 0, reusedChunks: 0, failedChunks: 0, currentDir: '' })
               showStatus(done.success ? '✅ ' + (done.message || 'Backup complete') : '❌ ' + (done.error || done.message || 'Backup failed'), done.success ? 'success' : 'error')
-              // Job history is NOT appended here. The service writes it
-              // when the run completes, and the history poll picks it up --
-              // appending locally as well double-counted every backup the
-              // GUI happened to be open for.
+              // Job history is NOT appended here. The service's run
+              // registry is the history (lib/history.js), and the history
+              // poll reads it -- appending locally as well double-counted
+              // every backup the GUI happened to be open for.
               // Refresh the history immediately rather than waiting for
               // its own slower poll, so a finished backup appears in the
               // list at the moment the card clears.
               try {
-                const h = await GetJobHistory()
-                if (h && alive()) setJobHistory(h)
+                const h = await GetRecentRuns(HISTORY_DAYS)
+                if (alive()) setJobHistory(runsToHistory(h))
               } catch (err) { /* history poll will catch up */ }
             }
           } catch (err) { /* the panel already shows the connection state */ }

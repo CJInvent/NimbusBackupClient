@@ -174,10 +174,8 @@ type restoreAllowedState struct {
 // to be refused, not the next service restart.
 //
 // NIL MEANS REFUSE. This is the opposite default from lockdown, and
-// deliberately so — it is the same fail-closed choice
-// gui/controlplane_policy_gui.go makes and for the same reason: refusing a
-// restore is an inconvenience, permitting one that should not have happened is
-// the data leaving the building. The service always installs one at startup,
+// deliberately so: refusing a restore is an inconvenience, permitting one that
+// should not have happened is the data leaving the building. The service always installs one at startup,
 // so nil means "wired wrong", and wired-wrong must not mean "allowed".
 func (s *Server) SetRestoreAllowedFunc(f func(right string) bool) {
 	s.restoreMu.Lock()

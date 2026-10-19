@@ -84,21 +84,6 @@ type Config struct {
 	EmailTo               string `json:"email_to,omitempty"`
 }
 
-// sanitized returns a copy of the config with all secrets stripped (legacy PBS
-// token and every PBSServer token), for any path that hands the
-// config to the frontend (M-04). Internal callers must use the real *Config.
-func (c *Config) sanitized() *Config {
-	cp := *c
-	cp.Secret = ""
-	if c.PBSServers != nil {
-		cp.PBSServers = make(map[string]*PBSServer, len(c.PBSServers))
-		for k, v := range c.PBSServers {
-			cp.PBSServers[k] = v.sanitized()
-		}
-	}
-	return &cp
-}
-
 // atomicWriteFile writes data to path crash-safely: it writes a temp file in the
 // same directory, fsyncs+closes it, then atomically renames it over path. A crash
 // mid-write leaves the original intact instead of a truncated/half-written JSON
@@ -293,45 +278,6 @@ func (c *Config) Save() error {
 	}
 
 	return atomicWriteFile(configPath, data, 0600)
-}
-
-// connectionTest asks the server this configuration names for its datastore's
-// status: DNS, TLS (pinned when a fingerprint is set, CA-verified otherwise),
-// the token and the datastore permission, in one request. Validate first.
-//
-// The service runs it for POST /pbs/test (docs/V4-CONSOLE.md §4.1); until
-// V4-CONSOLE C2 the console's own TestConnection runs it too, which is why it
-// is untagged.
-func (c *Config) connectionTest() error {
-	client := &pbscommon.PBSClient{
-		BaseURL:          c.BaseURL,
-		CertFingerPrint:  c.CertFingerprint,
-		AuthID:           c.AuthID,
-		Secret:           c.Secret,
-		Datastore:        c.Datastore,
-		Namespace:        c.Namespace,
-		Insecure:         c.CertFingerprint != "",
-		CompressionLevel: pbscommon.CompressionFastest, // Default for test connections
-		Manifest: pbscommon.BackupManifest{
-			BackupID: c.BackupID,
-		},
-	}
-
-	// Debug log with sanitized credentials
-	writeInfoLog(fmt.Sprintf("Testing connection: URL=%s, AuthID=%s, Secret=%s, Datastore=%s",
-		security.SanitizeURL(c.BaseURL),
-		c.AuthID,
-		security.SanitizeSecret(c.Secret),
-		c.Datastore))
-
-	// Perform real HTTP test (checks DNS, connectivity, auth, datastore access)
-	if err := client.TestConnection(); err != nil {
-		writeErrorLog(fmt.Sprintf("Connection test failed: %v", err))
-		return err
-	}
-
-	writeInfoLog("Connection test successful (authenticated + datastore accessible)")
-	return nil
 }
 
 func (c *Config) Validate() error {

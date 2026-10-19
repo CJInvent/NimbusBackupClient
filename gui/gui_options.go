@@ -20,8 +20,8 @@ import (
 const guiSingleInstanceID = "nimbus-backup-gui-5d9f3c2e-7b1a-4e8f-a6c4-2f0b9d1e3a57"
 
 // guiOptions is the GUI's Wails configuration, separate from main() so the
-// single-instance wiring can be tested.
-func guiOptions(app *App, minimized bool, webviewDataDir string) *options.App {
+// single-instance wiring and the bound type can be tested.
+func guiOptions(console *Console, minimized bool, webviewDataDir string) *options.App {
 	return &options.App{
 		Title:     fmt.Sprintf("%s v%s", appName, appVersion),
 		Width:     1000,
@@ -35,17 +35,19 @@ func guiOptions(app *App, minimized bool, webviewDataDir string) *options.App {
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		StartHidden:      minimized, // Start hidden if --minimized flag is set
-		OnStartup:        app.startup,
-		OnDomReady:       app.domReady,
-		OnBeforeClose:    app.beforeClose,
-		OnShutdown:       app.shutdown,
+		OnStartup:        console.startup,
+		OnDomReady:       console.domReady,
+		OnBeforeClose:    console.beforeClose,
+		OnShutdown:       console.shutdown,
+		// ONE bound type, and it is not App: every exported method of a
+		// bound type is callable from the webview (docs/V4-CONSOLE.md §1.2).
 		Bind: []interface{}{
-			app,
+			console,
 		},
 		// F-44: a second launch activates this window and exits.
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId:               guiSingleInstanceID,
-			OnSecondInstanceLaunch: app.onSecondInstanceLaunch,
+			OnSecondInstanceLaunch: console.onSecondInstanceLaunch,
 		},
 		Windows: &wailswin.Options{
 			WebviewIsTransparent: false,
@@ -61,14 +63,14 @@ func guiOptions(app *App, minimized bool, webviewDataDir string) *options.App {
 // front. The brief always-on-top toggle is what gets past Windows' focus
 // stealing rules; FindWindow/ShowWindow from the other process could not
 // restore a window Wails had hidden.
-func (a *App) onSecondInstanceLaunch(_ options.SecondInstanceData) {
+func (c *Console) onSecondInstanceLaunch(_ options.SecondInstanceData) {
 	writeInfoLog("GUI launched again: showing this window instead of starting a second one")
-	if a.ctx == nil {
+	if c.ctx == nil {
 		return
 	}
-	runtime.WindowUnminimise(a.ctx)
-	runtime.WindowShow(a.ctx)
-	runtime.WindowSetAlwaysOnTop(a.ctx, true)
-	ctx := a.ctx
+	runtime.WindowUnminimise(c.ctx)
+	runtime.WindowShow(c.ctx)
+	runtime.WindowSetAlwaysOnTop(c.ctx, true)
+	ctx := c.ctx
 	time.AfterFunc(300*time.Millisecond, func() { runtime.WindowSetAlwaysOnTop(ctx, false) })
 }

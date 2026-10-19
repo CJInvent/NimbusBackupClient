@@ -139,32 +139,12 @@ func (a *App) ApproveStorageIdentityFromMap(input map[string]interface{}) error 
 	return nil
 }
 
-// GetStorageIdentityStatus delegates to the same authenticated local API as configuration.
-// An unreachable service is an error, never permission to write locally.
+// GetStorageIdentityStatus is GET /storage/identity: the service refreshes the
+// observation and reports it. The console asks over the local API
+// (Console.GetStorageIdentityStatus).
 func (a *App) GetStorageIdentityStatus() (map[string]interface{}, error) {
-	if !a.isServiceProcess {
-		if a.apiClient == nil {
-			return nil, errors.New("[NB-2013] Storage identity service unavailable")
-		}
-		status, err := a.apiClient.GetStorageIdentity()
-		if err == nil {
-			a.updateStorageTray(status)
-		}
-		return status, err
-	}
 	a.refreshStorageIdentity()
-	status := a.StorageIdentityStatusMap()
-	a.updateStorageTray(status)
-	return status, nil
-}
-func (a *App) ApproveStorageIdentity(input map[string]interface{}) error {
-	if !a.isServiceProcess {
-		if a.apiClient == nil {
-			return errors.New("[NB-2013] Storage identity service unavailable")
-		}
-		return a.apiClient.ApproveStorageIdentity(input)
-	}
-	return a.ApproveStorageIdentityFromMap(input)
+	return a.StorageIdentityStatusMap(), nil
 }
 
 func logStorageApproval(authority string, before, after controlplane.StorageStatus) {

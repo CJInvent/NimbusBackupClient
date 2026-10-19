@@ -6,8 +6,9 @@ import { emptyServerForm } from '../../hooks/usePbsServers'
 
 // True when a connection failure is an unverified-certificate error (self-signed
 // PBS with no fingerprint pinned). These are recoverable via trust-on-first-use.
-const isCertError = (err) =>
-  /certificate signed by unknown authority|failed to verify certificate|x509/i.test(String(err))
+// The service says so with NB-1011 (the console's TestPBSConnection); this
+// used to match words in the TLS error.
+const isCertError = (err) => /\[NB-1011\]/.test(String(err))
 
 // The storage-server handlers, made per render over the current state
 // (s: usePbsServers) as they were when they lived in App.jsx.
@@ -143,7 +144,10 @@ export default function makeServerActions(s, showStatus, t) {
   }
 
   const handleEditServer = (server) => {
-    s.setServerFormData(server)
+    // A listed server carries no secret at all (the service's list cannot),
+    // so the form starts from the empty one: the secret field is '' and an
+    // unchanged form keeps the stored token.
+    s.setServerFormData({ ...emptyServerForm(), ...server })
     s.setEditingServer(server.id)
   }
 

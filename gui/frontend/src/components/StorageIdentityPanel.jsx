@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from '../i18n/i18nContext'
 
-export default function StorageIdentityPanel({ status, onChanged, readOnly = false }) {
+// onApprove reaches the service (useMachineContext.approveStorage); the panel
+// only renders (docs/V4-GUI-AUDIT.md section 4.11).
+export default function StorageIdentityPanel({ status, onApprove, readOnly = false }) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState([])
   const [error, setError] = useState('')
@@ -15,10 +17,9 @@ export default function StorageIdentityPanel({ status, onChanged, readOnly = fal
     try {
       const bindings = devices.filter(d => selected.includes(d.boot ? 'boot' : 'device:' + d.id))
         .map(d => ({ target: d.boot ? 'boot' : 'device:' + d.id, device: d }))
-      await window.go.main.App.ApproveStorageIdentity({
+      await onApprove({
         revision: (status.revision || 0) + 1, observation: status.observation, bindings
       })
-      onChanged(await window.go.main.App.GetStorageIdentityStatus())
       setSelected([])
     } catch (e) { setError(String(e)) } finally { setBusy(false) }
   }
@@ -51,7 +52,7 @@ export default function StorageIdentityPanel({ status, onChanged, readOnly = fal
     {status.joined ? (status.error || !(status.revision > 0)) && <p>{dashboard
         ? <a href={dashboard} target="_blank" rel="noopener noreferrer">{t(status.error ? 'storageDashboard' : 'storageJoinedHelp')}</a>
         : t(status.error ? 'storageDashboard' : 'storageJoinedHelp')}</p> :
-      !readOnly && <button onClick={approve} disabled={busy || selected.length === 0}>{t('storageApprove')}</button>}
+      !readOnly && onApprove && <button onClick={approve} disabled={busy || selected.length === 0}>{t('storageApprove')}</button>}
     {error && <p role="alert">{error}</p>}
   </details>
 }
