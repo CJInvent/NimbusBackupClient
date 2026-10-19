@@ -6,20 +6,23 @@
 specifications with every decision recorded. They went up together in PR #29
 (spec only).
 
-**Where the build stands (2026-10-19):** C1 (#30) and C2 (#31) are merged; C3
-is built on `feat/console-c3` and in review (its PR into `v4_dev`). The console
-is its own module, `console/` (its own `go.mod`, depending on `gui/api`, Wails,
-systray and `x/sys` and their dependencies, pinned by a test), and `gui/` is the service with no
-build tag. V4-CONSOLE §8 records what C3 settled; read it before P1. The ones
-that change what the next phase starts from:
+**Where the build stands (2026-10-19, afternoon):** C1 (#30), C2 (#31) and C3
+(#33) are merged; `v4_dev` is `262a34a`. #33's CI ran green on every job,
+including Build GUI's new size budget and govulncheck over the console (the
+one failure annotation is the advisory npm audit, the known vite dev-server
+advisories). The console is its own module, `console/` (depending on `gui/api`,
+Wails, systray and `x/sys` and their dependencies, pinned by a test), and
+`gui/` is the service with no build tag. V4-CONSOLE §8 records what C3
+settled; read it before P1. The ones that change what the next phase starts
+from:
 
 - The restore destination check is the **service's** now (NB-3013, all four
   ops that write to a caller-named path). P3's scoped restore replaces it.
 - The §5 checks are Go tests in `console/` (module allowlist, no local IO),
   run by Unit Tests and `scripts/local-gates.sh`. The size budget is
   11,900,000 bytes in Build GUI, from C3's measurement (local 11,463,680).
-  CI's first run of the budget step prints the shipped number: if it is far
-  from about 11.64 MB, tighten the budget to it.
+  The shipped number is in Build GUI's job log and step summary, which a
+  build sandbox cannot read: ask CJ for it, and tighten the budget to it.
 - The service lints with `unused` on. The windows view of the service has
   never been linted (33 findings, all in windows-only engine files): a
   separate change.
@@ -60,7 +63,7 @@ down. CI's two "no engine" checks are denylists and never saw it.
 |---|---|---|
 | C1 (merged, #30) | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
 | C2 (merged, #31) | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
-| C3 (built, in review) | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
+| C3 (merged, #33) | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
 | P1 | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
 | P2 | Route table: settings and job writes require an elevated admin | P1 |
 | P3 | Access-filtered browse, scoped restore, picker in the service | P2 |
