@@ -1,21 +1,36 @@
 # v4 Status — NimbusBackupClient
 
-## HANDOFF (2026-10-17): the console split and the local API
+## HANDOFF (2026-10-18): the console split and the local API
 
 **Read first:** `docs/V4-CONSOLE.md`, then `docs/V4-LOCAL-API.md`. Both are
 specifications with every decision recorded. They went up together in PR #29
 (spec only).
 
-**Where the build stands (2026-10-18):** C1 merged (#30). C2 built, in PR
-#31: the webview binds a `Console` type whose 51 methods are each one call to
-the service, pinned against `frontend/src/lib/bindings.js` in both
-directions; `job_history.json` is gone and the history reads the run
-registry. V4-CONSOLE §8 records what each phase settled, including C2's one
-change of mechanism (the bound type moved from C3 to C2).
-**Next: C3**, the `console/` module: mostly `git mv` of `console*.go`,
-`restore_bindings.go`, `pathpicker.go`, the tray and `frontend/`, the
-`service` tag's removal, and the module allowlist and size budget (C2's CI
-step prints the size it starts from).
+**Where the build stands (2026-10-18, evening):** C1 (#30) and C2 (#31) are
+merged; `v4_dev` is `f006e61`, the same tree #31's green CI ran on. The webview
+binds a `Console` type (`gui/console.go`, `gui/console_bindings.go`) whose 51
+methods are each one call to the service, pinned against
+`frontend/src/lib/bindings.js` in both directions. `job_history.json` is gone,
+and the history reads the run registry. V4-CONSOLE §8 records what each phase
+settled, including C2's one change of mechanism (the bound type moved from C3
+to C2, along with the binding allowlist and the `window.go` check).
+
+**Next: C3**, the `console/` module (V4-CONSOLE §8 C3 and §9). Most of it is
+`git mv` of the console's files and `frontend/`, plus removing the `service`
+tag, then the module allowlist and the size budget. Read these before starting:
+
+- The **size budget** in the spec (11.2 MB) predates C2. C2 measured the
+  console at 11,817,472 bytes stripped in a local build (§10 method; the
+  shipped build runs about 1.5% larger). Set the budget from C3's own
+  measurement. CI's "Console size (print only)" step in Build GUI prints the
+  shipped number in the job log and step summary; the job log is not readable
+  from a build sandbox, so ask CJ for it or measure locally.
+- `restore_bindings.go` still calls `security.ValidatePath` on restore
+  destinations. The service does not check `..` there (finding F1; P3's scoped
+  restore). Do not drop the console's check in C3 without moving it into the
+  service.
+- **P5 is unblocked** (it depended only on C2) and can be built in either
+  order with C3.
 
 **Why they exist.** CJ: the GUI should contain nothing except what talks to
 the service. Measured at `835da16`: the GUI build still compiles 70 files
@@ -49,8 +64,8 @@ down. CI's two "no engine" checks are denylists and never saw it.
 | # | What | Depends on |
 |---|---|---|
 | C1 (merged, #30) | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
-| C2 (built, #31) | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
-| C3 | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, binding allowlist, no-local-IO test and size budget replace the engine checks | C2 |
+| C2 (merged, #31) | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
+| C3 | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
 | P1 | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
 | P2 | Route table: settings and job writes require an elevated admin | P1 |
 | P3 | Access-filtered browse, scoped restore, picker in the service | P2 |
@@ -92,7 +107,7 @@ of tidying before builds.
 
 ---
 
-**Last updated:** 2026-10-17 (handoff above). Branch: `v4_dev`.
+**Last updated:** 2026-10-18 (handoff above). Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in
 **NimbusControl**, because most of it describes a server/client contract that

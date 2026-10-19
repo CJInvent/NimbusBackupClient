@@ -7,7 +7,7 @@ was taken from that commit with the CI-pinned toolchain (`go1.26.9`), building
 The local build is a faithful model of the shipped one: 13,268,992 bytes stripped
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
-**Progress:** C1 built (PR #30), C2 built (PR #31). Next: C3.
+**Progress:** C1 (PR #30) and C2 (PR #31) merged. Next: C3; P5 is also unblocked.
 
 **Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
 D2 (b), the service installs WebView2 and the console drops the downloader;
@@ -412,7 +412,7 @@ extended so every new route is refused while locked; the registry round trip
 `space` op declared in the restore table, so `restore_ops_test.go`'s three
 lists still agree.
 
-**Built (2026-10-17, PR #30).** As specified, with these details settled in
+**Built and merged (2026-10-17, PR #30).** As specified, with these details settled in
 the building:
 
 - `GET /pbs/servers` answers `{servers, default_id, datapath_proxy}`. The
@@ -477,7 +477,7 @@ the untagged files' imports drag in through package initializers (`pbscommon`'s
 zstd decoder is one). The CI size step from section 5 lands here as a
 print-only step, so C3's budget starts from a measured number.
 
-**Built (2026-10-18, PR #31).** As specified, with one change of mechanism and
+**Built and merged (2026-10-18, PR #31).** As specified, with one change of mechanism and
 these details settled in the building:
 
 - **The bound type is `Console` from C2, not from C3** (`gui/console.go`,
