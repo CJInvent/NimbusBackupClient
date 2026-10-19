@@ -2,8 +2,9 @@
 # The gates CI runs, run here, before you push.
 #
 # WHY THIS EXISTS. `go vet` and `go test` are not the gate set. CI also runs
-# golangci-lint TWICE over gui/ -- once for the GUI build and once for the
-# service build -- and staticcheck lives inside it, which means a green
+# golangci-lint over both programs -- the service (gui/) and the console
+# (console/, its own module since V4-CONSOLE C3) -- and staticcheck lives
+# inside it, which means a green
 # `go test ./...` says nothing about whether the push will be green. That is
 # not hypothetical: a test asserting `agentKeyID(a) != agentKeyID(a)` passed
 # vet, passed the suite, and was refused by staticcheck (SA4000) after it had
@@ -13,7 +14,7 @@
 # is the client's.
 #
 #   scripts/local-gates.sh          everything below
-#   scripts/local-gates.sh lint     just the two golangci-lint passes
+#   scripts/local-gates.sh lint     just the golangci-lint passes
 #
 # NOT COVERED, because they need something this cannot have: the Windows smoke
 # job (real VSS, DPAPI and icacls -- they compile on Linux and demonstrate
@@ -65,40 +66,41 @@ if [ "${1:-all}" != "lint" ]; then
     unformatted="$(gofmt -l . | grep -v '^vendor/' || true)"
     if [ -n "$unformatted" ]; then echo "$unformatted"; bad "gofmt"; fi
 
-    # The three compile views CI checks. Nothing else checks them all: the
-    # default build hides service-tagged code and vice versa.
-    step "go vet (linux, windows, windows+service)"
-    ( cd gui && CGO_ENABLED=1 GOOS=linux   go vet ./... ) || bad "vet linux"
-    ( cd gui && CGO_ENABLED=0 GOOS=windows go vet ./... ) || bad "vet windows"
-    ( cd gui && CGO_ENABLED=0 GOOS=windows go vet -tags service ./... ) || bad "vet windows+service"
+    # The three compile views CI checks (Compile Views, S2): the service as
+    # lint and tests see it, the service as shipped, the console as shipped.
+    step "go vet (service linux, service windows, console windows)"
+    ( cd gui     && CGO_ENABLED=0 GOOS=linux   go vet ./... ) || bad "vet service linux"
+    ( cd gui     && CGO_ENABLED=0 GOOS=windows go vet ./... ) || bad "vet service windows"
+    ( cd console && CGO_ENABLED=0 GOOS=windows go vet -tags desktop,wv2runtime.download,production ./... ) \
+        || bad "vet console windows"
 fi
 
 if [ -n "$LINT" ]; then
-    step "golangci-lint (default / GUI build)"
-    ( cd gui && "$LINT" run --path-prefix=gui --timeout=5m ) || bad "golangci-lint (default)"
+    # One pass over the service, WITH `unused`: since the service tag went
+    # (V4-CONSOLE C3) every caller is visible in one view.
+    step "golangci-lint (service)"
+    ( cd gui && "$LINT" run --path-prefix=gui --timeout=5m ) || bad "golangci-lint (service)"
 
-    # `unused` is disabled here and only here, matching CI: the service build
-    # excludes GUI-only files, so it would flag every helper the front end owns.
-    step "golangci-lint (service build)"
-    ( cd gui && "$LINT" run --path-prefix=gui --timeout=5m --build-tags=service --disable=unused ) \
-        || bad "golangci-lint (service)"
+    # The console in the view it ships in.
+    step "golangci-lint (console, windows)"
+    ( cd console && GOOS=windows CGO_ENABLED=0 "$LINT" run --path-prefix=console --timeout=5m ) \
+        || bad "golangci-lint (console)"
 fi
 
 if [ "${1:-all}" != "lint" ]; then
-    step "gosec (controlplane)"
+    step "gosec (controlplane, service, console)"
     if command -v gosec >/dev/null 2>&1; then
         ( cd controlplane && gosec -severity high -confidence high ./... ) || bad "gosec controlplane"
         ( cd gui && gosec -severity high -confidence high ./... ) || bad "gosec gui"
+        ( cd console && GOOS=windows CGO_ENABLED=0 gosec -severity high -confidence high ./... ) || bad "gosec console"
     else
         bad "gosec not installed; security gate did not run"
     fi
 
-    step "tests: controlplane and gui"
+    step "tests: controlplane, the service and the console"
     ( cd controlplane && go test -race -count=1 ./... ) || bad "controlplane tests"
-    ( cd gui          && go test -race -count=1 ./... ) || bad "gui tests"
-    # The service build's own tests. Most of the code is service-tagged, and
-    # until V4-CONSOLE C1 CI ran these only on Windows, behind a -run filter.
-    ( cd gui          && go test -race -count=1 -tags service ./... ) || bad "gui tests (service build)"
+    ( cd gui          && go test -race -count=1 ./... ) || bad "service tests"
+    ( cd console      && go test -race -count=1 ./... ) || bad "console tests"
 
     # Keep this list in sync with go.work + pkg/*, as the CI job says.
     step "tests: every other workspace module"

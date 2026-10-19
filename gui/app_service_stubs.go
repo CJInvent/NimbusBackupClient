@@ -1,9 +1,5 @@
-//go:build service
-// +build service
-
-// Stubs for service compilation
-// These methods are required by api.BackupHandler interface
-// Full implementations are in main.go (GUI mode)
+// The service's api.BackupHandler methods that start or describe work at the
+// machine: /status's configuration and the local Start button.
 
 package main
 

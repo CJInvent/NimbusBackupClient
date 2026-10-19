@@ -1,12 +1,10 @@
-//go:build service
-// +build service
-
 package main
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,7 +42,7 @@ type RestoreOptions struct {
 
 	// Mode selects the destination policy. Empty defaults to alternate_abs
 	// (legacy behaviour: dest + full archive path).
-	Mode RestoreMode
+	Mode api.RestoreMode
 
 	// AllowCrossHost permits an in-place restore even when the snapshot was
 	// taken on a different machine. Honored only in RestoreModeOriginal.
@@ -62,7 +60,7 @@ type RestoreOptions struct {
 // ListSnapshotsInline lists available snapshots from PBS.
 // SECURITY: Only lists snapshots from the specified PBS server/datastore/namespace
 // to prevent cross-server snapshot access.
-func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFingerprint, backupID string, dp *pbscommon.DataPath) ([]SnapshotInfo, error) {
+func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFingerprint, backupID string, dp *pbscommon.DataPath) ([]api.SnapshotInfo, error) {
 	// GATED, and it was not until 2026-08-19. Which snapshots exist, and
 	// when, is the first screen of the restore browser — an org that turned
 	// file restore off has said this machine's console does not get that.
@@ -99,7 +97,7 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 		return nil, fmt.Errorf("failed to list snapshots: %v", err)
 	}
 
-	result := make([]SnapshotInfo, 0)
+	result := make([]api.SnapshotInfo, 0)
 	for _, m := range manifests {
 		// Partial match supports split backups: searching "JDS-SRV-1" matches
 		// "JDS-SRV-1_D_DATA" or "JDS-SRV-1_PART-A".
@@ -112,7 +110,7 @@ func ListSnapshotsInline(baseURL, authID, secret, datastore, namespace, certFing
 			continue
 		}
 
-		info := SnapshotInfo{
+		info := api.SnapshotInfo{
 			BackupType: m.BackupType,
 			BackupID:   m.BackupID,
 			BackupTime: time.Unix(m.BackupTime, 0),
@@ -201,7 +199,7 @@ func withSnapshotReader(opts RestoreOptions, archiveName, logTag string, progres
 // (legacy snapshots predating catalog upload, or a parse failure) so the caller
 // can fall back to the PXAR walk. meta is read separately and cheaply from the
 // start of the data archive; it is best-effort and may be nil.
-func listSnapshotViaCatalog(opts RestoreOptions, cancel func() bool) (entries []SnapshotEntry, meta *BackupMeta, ok bool) {
+func listSnapshotViaCatalog(opts RestoreOptions, cancel func() bool) (entries []api.SnapshotEntry, meta *api.BackupMeta, ok bool) {
 	client := &pbscommon.PBSClient{
 		BaseURL:          opts.BaseURL,
 		CertFingerPrint:  opts.CertFingerprint,
@@ -253,10 +251,10 @@ func listSnapshotViaCatalog(opts RestoreOptions, cancel func() bool) (entries []
 		return nil, nil, false
 	}
 
-	entries = make([]SnapshotEntry, 0, len(catEntries))
+	entries = make([]api.SnapshotEntry, 0, len(catEntries))
 	metaPresent := false
 	for _, e := range catEntries {
-		entries = append(entries, SnapshotEntry{Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime})
+		entries = append(entries, api.SnapshotEntry{Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime})
 		// The catalog lists the sidecar as a root-level file (no slash in path)
 		// iff the archive actually contains it.
 		if !e.IsDir && e.Path == BackupMetaFilename {
@@ -286,8 +284,8 @@ func listSnapshotViaCatalog(opts RestoreOptions, cancel func() bool) (entries []
 // PXARReader.ReadVirtualFile stops walking as soon as the root-level sidecar is
 // found, and since it is written before any real file content the walk fetches
 // just the first chunk(s). Best-effort: any failure returns nil.
-func readSnapshotMetaCheap(opts RestoreOptions, cancel func() bool) *BackupMeta {
-	var meta *BackupMeta
+func readSnapshotMetaCheap(opts RestoreOptions, cancel func() bool) *api.BackupMeta {
+	var meta *api.BackupMeta
 	err := withSnapshotReader(opts, "backup.pxar.didx", "MetaCheap", nil, cancel, func(reader *pbscommon.PXARReader) error {
 		meta = tryReadBackupMeta(reader)
 		return nil
@@ -307,7 +305,7 @@ func readSnapshotMetaCheap(opts RestoreOptions, cancel func() bool) *BackupMeta 
 // The catalog only describes the default data archive (backup.pxar.didx), so
 // the fast path is taken only for that archive; any other archiveName goes
 // straight to the walk.
-func assembleSnapshotTree(opts RestoreOptions, archiveName, logTag string, cancel func() bool) ([]SnapshotEntry, *BackupMeta, error) {
+func assembleSnapshotTree(opts RestoreOptions, archiveName, logTag string, cancel func() bool) ([]api.SnapshotEntry, *api.BackupMeta, error) {
 	if archiveName == "" {
 		archiveName = "backup.pxar.didx"
 	}
@@ -322,16 +320,16 @@ func assembleSnapshotTree(opts RestoreOptions, archiveName, logTag string, cance
 		}
 	}
 
-	var entries []SnapshotEntry
-	var meta *BackupMeta
+	var entries []api.SnapshotEntry
+	var meta *api.BackupMeta
 	err := withSnapshotReader(opts, archiveName, logTag, nil, cancel, func(reader *pbscommon.PXARReader) error {
 		es, lerr := reader.ListEntries()
 		if lerr != nil {
 			return fmt.Errorf("failed to parse archive: %v", lerr)
 		}
-		entries = make([]SnapshotEntry, 0, len(es))
+		entries = make([]api.SnapshotEntry, 0, len(es))
 		for _, e := range es {
-			entries = append(entries, SnapshotEntry{Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime})
+			entries = append(entries, api.SnapshotEntry{Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime})
 		}
 		meta = tryReadBackupMeta(reader)
 		return nil
@@ -367,7 +365,7 @@ func buildSnapshotCacheKey(opts RestoreOptions) snapshotCacheKey {
 // and cached too, so a subsequent ReadSnapshotMetaInline call is free.
 //
 // archiveName defaults to "backup.pxar.didx" when empty.
-func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRefresh bool) ([]SnapshotEntry, error) {
+func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRefresh bool) ([]api.SnapshotEntry, error) {
 	// Same policy gate as RestoreSnapshotInline: browsing file contents of
 	// a snapshot IS the restore browser — hide it when disabled.
 	if !ControlPolicy().FileRestore {
@@ -407,7 +405,7 @@ func ListSnapshotContentsInline(opts RestoreOptions, archiveName string, forceRe
 // tryReadBackupMeta extracts the .nimbus_backup_meta.json sidecar from an
 // already-parsed archive. Returns nil on any failure (legacy snapshots,
 // corrupted JSON, missing file) — meta is informational, never fatal.
-func tryReadBackupMeta(reader *pbscommon.PXARReader) *BackupMeta {
+func tryReadBackupMeta(reader *pbscommon.PXARReader) *api.BackupMeta {
 	raw, err := reader.ReadVirtualFile(BackupMetaFilename)
 	if err != nil {
 		// os.ErrNotExist is expected for legacy snapshots created before the
@@ -415,7 +413,7 @@ func tryReadBackupMeta(reader *pbscommon.PXARReader) *BackupMeta {
 		writeBackupLog(fmt.Sprintf("Backup meta sidecar not available: %v", err))
 		return nil
 	}
-	var meta BackupMeta
+	var meta api.BackupMeta
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		writeBackupLog(fmt.Sprintf("Backup meta sidecar malformed: %v", err))
 		return nil
@@ -430,7 +428,7 @@ func tryReadBackupMeta(reader *pbscommon.PXARReader) *BackupMeta {
 // Hits the local cache first — if ListSnapshotContentsInline has run for this
 // snapshot, the meta is already there and no download is performed. Otherwise
 // the archive is downloaded + assembled (same cost as a listing).
-func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta, error) {
+func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*api.BackupMeta, error) {
 	// Same gate, same reason, and this one is not merely metadata: on a cache
 	// miss it downloads and walks the archive to find the sidecar. Ungated it
 	// was a way to make a machine fetch snapshot content with file restore
@@ -491,14 +489,14 @@ func ReadSnapshotMetaInline(opts RestoreOptions, forceRefresh bool) (*BackupMeta
 //   - alternate_abs / alternate_flat: requires opts.DestPath.
 //   - flat with no IncludePaths is equivalent to abs — flat needs a selection
 //     to derive a common root from.
-func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRewriter, error) {
+func buildPathRewriter(opts RestoreOptions, meta *api.BackupMeta) (pbscommon.PathRewriter, error) {
 	mode := opts.Mode
 	if mode == "" {
-		mode = RestoreModeAlternateAbs
+		mode = api.RestoreModeAlternateAbs
 	}
 
 	switch mode {
-	case RestoreModeOriginal:
+	case api.RestoreModeOriginal:
 		if meta == nil {
 			return nil, errors.New(errInPlaceNoMeta)
 		}
@@ -526,7 +524,7 @@ func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRew
 			return filepath.Join(root, filepath.FromSlash(archivePath))
 		}, nil
 
-	case RestoreModeAlternateAbs:
+	case api.RestoreModeAlternateAbs:
 		if opts.DestPath == "" {
 			return nil, errors.New(errDestPathRequired)
 		}
@@ -535,7 +533,7 @@ func buildPathRewriter(opts RestoreOptions, meta *BackupMeta) (pbscommon.PathRew
 			return filepath.Join(dest, filepath.FromSlash(archivePath))
 		}, nil
 
-	case RestoreModeAlternateFlat:
+	case api.RestoreModeAlternateFlat:
 		if opts.DestPath == "" {
 			return nil, errors.New(errDestPathRequired)
 		}
@@ -647,7 +645,7 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 
 	mode := opts.Mode
 	if mode == "" {
-		mode = RestoreModeAlternateAbs
+		mode = api.RestoreModeAlternateAbs
 	}
 	writeBackupLog(fmt.Sprintf("Starting restore: snapshot=%s, mode=%s, dest=%s, includes=%d, overwrite=%v, allowCrossHost=%v from %s/%s/%s",
 		opts.SnapshotTime.Format("2006-01-02T15:04:05Z"), mode, opts.DestPath, len(opts.IncludePaths), opts.Overwrite, opts.AllowCrossHost,
@@ -671,14 +669,14 @@ func RestoreSnapshotInline(opts RestoreOptions) error {
 	}
 	// DestPath is required for alternate modes only — original reads the
 	// target from the backup metadata sidecar.
-	if mode != RestoreModeOriginal && opts.DestPath == "" {
+	if mode != api.RestoreModeOriginal && opts.DestPath == "" {
 		return fmt.Errorf("destination path required")
 	}
 
 	// In-place restores need the sidecar up front to validate before we burn
 	// time on the multi-GB download. Cheap if the snapshot was listed first.
-	var meta *BackupMeta
-	if mode == RestoreModeOriginal {
+	var meta *api.BackupMeta
+	if mode == api.RestoreModeOriginal {
 		var err error
 		meta, err = ReadSnapshotMetaInline(opts, false)
 		if err != nil {

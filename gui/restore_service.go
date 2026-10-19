@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // restore_service.go — the service end of the restore seam.
@@ -27,6 +24,8 @@ import (
 	"time"
 
 	"controlplane"
+	"security"
+
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
@@ -35,7 +34,7 @@ import (
 // PBS query. Best-effort by design: a label nobody can resolve is worth more
 // than an empty column, and this must never be a reason a restore does not
 // run.
-func snapshotLabel(ref SnapshotRef) string {
+func snapshotLabel(ref api.SnapshotRef) string {
 	when := ref.SnapshotID
 	if when == "" && ref.SnapshotUnix > 0 {
 		when = time.Unix(ref.SnapshotUnix, 0).UTC().Format("2006-01-02T15:04:05Z")
@@ -56,7 +55,7 @@ func snapshotLabel(ref SnapshotRef) string {
 // Either spelling is accepted (see SnapshotRef). A ref that names neither is a
 // caller bug and says so — defaulting to "now", or to the newest snapshot,
 // would restore something nobody asked for.
-func restoreTime(ref SnapshotRef) (time.Time, error) {
+func restoreTime(ref api.SnapshotRef) (time.Time, error) {
 	if ref.SnapshotUnix > 0 {
 		return time.Unix(ref.SnapshotUnix, 0), nil
 	}
@@ -72,7 +71,7 @@ func restoreTime(ref SnapshotRef) (time.Time, error) {
 
 // restoreOptionsFor builds engine options from a wire ref, resolving the PBS
 // server out of this machine's configuration.
-func (a *App) restoreOptionsFor(ref SnapshotRef) (RestoreOptions, error) {
+func (a *App) restoreOptionsFor(ref api.SnapshotRef) (RestoreOptions, error) {
 	if ref.BackupID == "" {
 		return RestoreOptions{}, errors.New(errBackupIDRequired)
 	}
@@ -109,12 +108,29 @@ func decodeParams[T any](op string, raw json.RawMessage) (T, error) {
 	return out, nil
 }
 
+// checkRestoreDest refuses a destination a restore op would write to as
+// SYSTEM when security.ValidatePath does. It is the check the console made
+// alone until V4-CONSOLE C3 (finding F1: the API cannot yet tell callers
+// apart, so a check in one client is no check at all). V4-LOCAL-API P3
+// replaces it with destinations confined to the caller's own profile.
+//
+// An empty path passes: each op refuses that itself, as NB-3009.
+func checkRestoreDest(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := security.ValidatePath(path); err != nil {
+		return fmt.Errorf("%s :: %v", errDestPathInvalid, err)
+	}
+	return nil
+}
+
 // RestoreQuery answers the bounded operations. See gui/api/restore.go for why
 // the dispatch is by name.
 func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 	switch op {
-	case opSnapshots:
-		p, err := decodeParams[ListSnapshotsParams](op, raw)
+	case api.RestoreOpSnapshots:
+		p, err := decodeParams[api.ListSnapshotsParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -125,8 +141,8 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 		return ListSnapshotsInline(cfg.BaseURL, cfg.AuthID, cfg.Secret,
 			cfg.Datastore, cfg.Namespace, cfg.CertFingerprint, p.BackupID, cfg.DataPath)
 
-	case opContents:
-		p, err := decodeParams[ListContentsParams](op, raw)
+	case api.RestoreOpContents:
+		p, err := decodeParams[api.ListContentsParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -136,8 +152,8 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 		}
 		return ListSnapshotContentsInline(opts, "", p.ForceRefresh)
 
-	case opMeta:
-		p, err := decodeParams[SnapshotMetaParams](op, raw)
+	case api.RestoreOpMeta:
+		p, err := decodeParams[api.SnapshotMetaParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -147,15 +163,15 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 		}
 		return ReadSnapshotMetaInline(opts, false)
 
-	case opVolumePartitions:
-		p, err := decodeParams[VolumeRef](op, raw)
+	case api.RestoreOpVolumePartitions:
+		p, err := decodeParams[api.VolumeRef](op, raw)
 		if err != nil {
 			return nil, err
 		}
 		return a.ListVolumePartitions(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType, p.DiskArchive)
 
-	case opVolumeFiles:
-		p, err := decodeParams[VolumeFilesParams](op, raw)
+	case api.RestoreOpVolumeFiles:
+		p, err := decodeParams[api.VolumeFilesParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -172,18 +188,18 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 		// field is carried rather than dropped because the walk itself still
 		// has a cap (volumeWalkCap), and the day a scan hits it this is where
 		// the answer belongs.
-		return VolumeFilesResult{Entries: entries, Truncated: false}, nil
+		return api.VolumeFilesResult{Entries: entries, Truncated: false}, nil
 
-	case opVolumeDirectory:
-		p, err := decodeParams[VolumeDirectoryParams](op, raw)
+	case api.RestoreOpVolumeDirectory:
+		p, err := decodeParams[api.VolumeDirectoryParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
 		return a.ListVolumeDirectory(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
 			p.DiskArchive, p.PartIndex, p.Dir)
 
-	case opSpace:
-		p, err := decodeParams[SpaceParams](op, raw)
+	case api.RestoreOpSpace:
+		p, err := decodeParams[api.SpaceParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -208,21 +224,28 @@ func (a *App) RestoreQuery(op string, raw json.RawMessage) (any, error) {
 // engine grows real context support.
 func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, progress api.RestoreProgress) (any, error) {
 	switch op {
-	case opRestore:
-		p, err := decodeParams[RestoreParams](op, raw)
+	case api.RestoreOpRestore:
+		p, err := decodeParams[api.RestoreParams](op, raw)
 		if err != nil {
 			return nil, err
+		}
+		// The arguments are checked before the PBS server is resolved: a
+		// refusal must not depend on whether a server is configured.
+		mode := api.RestoreMode(p.Mode)
+		if mode == "" {
+			mode = api.RestoreModeAlternateAbs
+		}
+		if mode != api.RestoreModeOriginal {
+			if p.DestPath == "" {
+				return nil, errors.New(errDestPathRequired)
+			}
+			if err := checkRestoreDest(p.DestPath); err != nil {
+				return nil, err
+			}
 		}
 		opts, err := a.restoreOptionsFor(p.SnapshotRef)
 		if err != nil {
 			return nil, err
-		}
-		mode := RestoreMode(p.Mode)
-		if mode == "" {
-			mode = RestoreModeAlternateAbs
-		}
-		if mode != RestoreModeOriginal && p.DestPath == "" {
-			return nil, errors.New(errDestPathRequired)
 		}
 		opts.DestPath = p.DestPath
 		opts.Mode = mode
@@ -242,15 +265,18 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 		return nil, reportedRestore(controlplane.RestoreArchive, snapshotLabel(p.SnapshotRef),
 			len(p.IncludePaths), func() error { return RestoreSnapshotInline(opts) })
 
-	case opDownload:
-		p, err := decodeParams[DownloadParams](op, raw)
+	case api.RestoreOpDownload:
+		p, err := decodeParams[api.DownloadParams](op, raw)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkRestoreDest(p.DestPath); err != nil {
 			return nil, err
 		}
 		return nil, a.downloadSelection(p, progress)
 
-	case opSearch:
-		p, err := decodeParams[SearchParams](op, raw)
+	case api.RestoreOpSearch:
+		p, err := decodeParams[api.SearchParams](op, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -275,7 +301,7 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 			DataPath:        cfg.DataPath,
 			HostPrefix:      p.HostPrefix,
 			Query:           p.Query,
-			Mode:            SearchMatchMode(p.Mode),
+			Mode:            api.SearchMatchMode(p.Mode),
 			From:            from,
 			To:              to,
 			AssembleMissing: p.AssembleMissing,
@@ -283,9 +309,12 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 			OnProgress: func(pct float64, msg string) { progress(pct, msg, 0, 0, 0, -1) },
 		})
 
-	case opVolumeDownload:
-		p, err := decodeParams[VolumeDownloadParams](op, raw)
+	case api.RestoreOpVolumeDownload:
+		p, err := decodeParams[api.VolumeDownloadParams](op, raw)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkRestoreDest(p.DestPath); err != nil {
 			return nil, err
 		}
 		return nil, withImageProgress(progress, func() error {
@@ -293,16 +322,19 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 				p.DiskArchive, p.PartIndex, p.IncludePaths, p.DestPath, p.AsZip, p.NeededBytes)
 		})
 
-	case opVolumeFileRestore:
-		p, err := decodeParams[VolumeFileRestoreParams](op, raw)
+	case api.RestoreOpVolumeFileRestore:
+		p, err := decodeParams[api.VolumeFileRestoreParams](op, raw)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkRestoreDest(p.DestDir); err != nil {
 			return nil, err
 		}
 		// The SOURCE is a stored disk image; the operation is still a file
 		// restore, which is why the kind is `volume` and there is no kind
 		// meaning "a whole partition" for it to be confused with.
 		return nil, reportedRestore(controlplane.RestoreVolume,
-			snapshotLabel(SnapshotRef{BackupID: p.BackupID, SnapshotID: p.SnapshotID}),
+			snapshotLabel(api.SnapshotRef{BackupID: p.BackupID, SnapshotID: p.SnapshotID}),
 			len(p.IncludePaths), func() error {
 				return withImageProgress(progress, func() error {
 					return a.RestoreFilesFromVolume(p.PBSID, p.BackupID, p.SnapshotID, p.BackupType,
@@ -322,10 +354,10 @@ func (a *App) RestoreJob(_ context.Context, op string, raw json.RawMessage, prog
 // leave a half-written file where the product's contract says "cancelled".
 func (a *App) RestoreControl(op string, _ json.RawMessage) error {
 	switch op {
-	case opCancelSearch:
+	case api.RestoreOpCancelSearch:
 		CancelFileSearch()
 		return nil
-	case opCancelVolumeFileRestore:
+	case api.RestoreOpCancelVolumeFileRestore:
 		a.CancelVolumeFileRestore()
 		return nil
 	}

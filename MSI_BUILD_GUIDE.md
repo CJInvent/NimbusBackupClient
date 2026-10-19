@@ -8,9 +8,11 @@ On a Windows machine with Go 1.25+, Node 20+, and admin privileges:
 # 1. Install WiX Toolset 3.14+
 choco install wixtoolset -y
 
-# 2. Build the GUI (produces NimbusBackup.exe + NimbusBackupSVC.exe)
-cd gui
+# 2. Build the console and the service (two modules)
+cd console
 wails build -clean -platform windows/amd64
+cd ..\gui
+go build -trimpath -o build\bin\NimbusBackupSVC.exe .
 
 # 3. Build the MSI (uses the binaries from step 2)
 cd ..\installer\wix
@@ -33,7 +35,7 @@ build.bat
   choco install wixtoolset -y
   ```
 - **Admin privileges** on the machine
-- The latest `gui/frontend` npm dependencies installed
+- The latest `console/frontend` npm dependencies installed
 
 ### Step 1: Clone and Prepare
 
@@ -61,27 +63,27 @@ Verify:
 wails --version    # Should be 2.8.0 or later
 ```
 
-### Step 4: Build the GUI Binary
+### Step 4: Build the Two Binaries
+
+The console and the service are separate Go modules (docs/V4-CONSOLE.md):
 
 ```powershell
-cd gui
-wails build -clean -platform windows/amd64
+cd console
+wails build -clean -platform windows/amd64     # console\build\bin\NimbusBackup.exe
+cd ..\gui
+go build -trimpath -o build\bin\NimbusBackupSVC.exe .
 ```
 
-This produces two executables in `gui/build/bin/`:
-- **NimbusBackup.exe** — The GUI application (user-facing)
-- **NimbusBackupSVC.exe** — The Windows Service (runs scheduled backups with admin privs)
+- **NimbusBackup.exe** — the console (window and tray, user-facing)
+- **NimbusBackupSVC.exe** — the Windows service (runs backups as LocalSystem)
 
 ### Step 5: Verify Binaries Exist
 
 ```powershell
-ls gui\build\bin\
-# Expected output:
-#   NimbusBackup.exe
-#   NimbusBackupSVC.exe
+ls console\build\bin\NimbusBackup.exe, gui\build\bin\NimbusBackupSVC.exe
 ```
 
-If either is missing, the MSI build will fail. Check `gui/wails.json` to verify build output locations.
+If either is missing, the MSI build will fail.
 
 ### Step 6: Install WiX Toolset (if not already done)
 
@@ -139,7 +141,8 @@ The MSI is now at: **`installer/wix/NimbusBackup.msi`**
 
 ## Version Numbering
 
-The MSI version is read from `gui/wails.json` > `"productVersion"`:
+CI passes the version to WiX (`-dProductVersion`). A local build falls back to
+`console/wails.json` > `"productVersion"`:
 
 ```json
 {
@@ -180,11 +183,11 @@ $env:PATH += ";C:\Program Files (x86)\WiX Toolset v3.14\bin"
 
 The WiX `Product.wxs` expects binaries at:
 ```
-../../gui/build/bin/NimbusBackup.exe
+../../console/build/bin/NimbusBackup.exe
 ../../gui/build/bin/NimbusBackupSVC.exe
 ```
 
-Ensure you ran `wails build` successfully (step 4).
+Ensure both builds in step 4 succeeded.
 
 ### Error: "Compilation failed" or "Linking failed"
 

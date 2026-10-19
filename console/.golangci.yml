@@ -1,0 +1,29 @@
+# golangci-lint configuration for the Nimbus Backup console (console/).
+# The same rules as the service's (gui/.golangci.yml): one standard for both programs.
+version: "2"
+
+run:
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      checks: ["all"]
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

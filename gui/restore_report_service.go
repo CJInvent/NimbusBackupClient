@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // restore_report_service.go — telling the control server that a restore
@@ -106,8 +103,8 @@ func (r *restoreReporter) finish(restoreErr error, items int, bytes int64) {
 	// The only judgement made here is "was this a cancellation", which is a
 	// sentinel comparison against an engine error this file can see. What a
 	// cancellation MEANS -- that it is a decision and not a failure -- lives
-	// in controlplane.RestoreOutcome, where it is testable without the
-	// service build tag.
+	// in controlplane.RestoreOutcome, where it is testable without an
+	// engine.
 	status, summary := controlplane.RestoreOutcome(restoreErr, errors.Is(restoreErr, errVolumeRestoreCancelled))
 
 	c := currentControlPlaneClient()

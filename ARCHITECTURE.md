@@ -16,8 +16,9 @@ This document has three parts: the **system design** (what the thing is), the
 **development rules** (laws every change must obey), and the **roadmap**
 (phases from the current state to beta, including the CI smoke-test ledger).
 
-Current version: see `gui/wails.json` → `productVersion` (0.2.150 at time of
-writing). This structure mirrors NimbusControl's `ARCHITECTURE.md`; the two
+Current version: stamped by CI from `RELEASE_LINE` and the tags
+(`scripts/release-version.sh`); `console/wails.json` → `productVersion` is the
+local default. This structure mirrors NimbusControl's `ARCHITECTURE.md`; the two
 documents are siblings and the agent↔server wire contract lives in the
 NimbusControl repo (`docs/AGENT-API.md`), with client-side notes in
 `docs/CONTROL-PLANE.md`.
@@ -28,21 +29,25 @@ NimbusControl repo (`docs/AGENT-API.md`), with client-side notes in
 
 ## What it is
 
-Two processes, one compiled codebase:
+Two programs, two Go modules (docs/V4-CONSOLE.md):
 
-* **GUI process** — the Wails desktop app. Runs in the user's session,
-  unprivileged. Build tag: `!service`. One per user session, through Wails'
-  `SingleInstanceLock` (`gui/gui_options.go`): a second launch shows the
-  running window and exits (F-44, 2026-09-27; the hand-made mutex it
-  replaces never detected a second instance).
-* **Service process** — `NimbusBackup` Windows service, runs as
-  **LocalSystem**. Owns scheduling, privileged VSS snapshots, the
-  control-plane loop, and is the **single writer of `config.json`**.
-  Build tag: `service`.
+* **Console** (`console/`) — the Wails window and the tray. Runs in the
+  user's session, unprivileged. A client of the service's local API and
+  nothing else: its module depends on `gui/api`, Wails, systray and
+  `golang.org/x/sys`, and a test fails on any other module (§5 of the spec).
+  One per user session, through Wails' `SingleInstanceLock`
+  (`console/gui_options.go`): a second launch shows the running window and
+  exits (F-44, 2026-09-27; the hand-made mutex it replaced never detected a
+  second instance).
+* **Service** (`gui/`) — `NimbusBackup` Windows service, runs as
+  **LocalSystem**. Owns scheduling, privileged VSS snapshots, the engines,
+  the keys, the control-plane loop, and is the **single writer of
+  `config.json`**.
 
-They communicate over an authenticated loopback HTTP API. Which
-`main`/entrypoint you get is selected by the `service` build tag; the same
-packages back both.
+They communicate over an authenticated loopback HTTP API (`gui/api/`, the one
+package both import; V4-LOCAL-API replaces the transport with a named pipe).
+Until V4-CONSOLE C3 (2026-10-19) both were one package split by a `service`
+build tag; that tag no longer exists.
 
 Backup modes: files/folders ("directory" mode, PXAR + DIDX) and full disks
 ("machine" mode, a bootable raw image via VSS into FIDX). Browse and restore
@@ -55,7 +60,8 @@ attachment to NimbusControl.
 
 | Module | Role |
 |---|---|
-| `gui/` | The Wails app **and** the service (same package `main`, split by build tag). Frontend in `gui/frontend/` (React/Vite). Local API package in `gui/api/`. |
+| `gui/` | The service (package `main`). Local API package in `gui/api/`, its own module, shared with the console. |
+| `console/` | The console (package `main`, its own module): Wails window, tray, the bindings (each one local-API call). Frontend in `console/frontend/` (React/Vite). |
 | `pbscommon/` | PBS protocol client: HTTP/2 backup/reader sessions, fixed/dynamic index (FIDX/DIDX), chunking (buzhash), PXAR read/write, catalog, `FIDXReaderAt`/`DIDXReaderAt` lazy chunk readers, upload rate limiting. The wire layer. |
 | `snapshot/` | VSS snapshot creation (Windows) via `st-matskevich/go-vss`; `nop_snapshot.go` for non-Windows; diagnostics via the package-level `LogFn` hook (declared platform-neutral — see rule 3). |
 | `imagebrowse/` | Userspace file browsing INSIDE image backups: GPT/MBR parsing + NTFS/FAT/exFAT read-only filesystems behind one `Filesystem` interface over an `io.ReaderAt`. Real mkfs-made images in `testdata/`. ReFS + BitLocker detected and refused with reasons. |
@@ -64,34 +70,34 @@ attachment to NimbusControl.
 | `nbd/` | Linux-only Network Block Device tooling for mounting/restoring machine images. |
 | `clientcommon/`, `pkg/` (`retry`, `security`, `logger`) | Shared helpers. |
 
-## Build-tag compile scopes — the single most important thing to internalize
+## Compile views — the single most important thing to internalize
 
-CI has failed repeatedly on this. Files in `gui/` fall into three scopes:
+CI has failed repeatedly on this. Until V4-CONSOLE C3, `gui/` was one package
+built twice, split by a `service` build tag, and a symbol had to exist in
+every combination of that tag with `windows`/`!windows`. The console is its
+own module now and the tag is gone, so the real programs are three, and CI's
+Compile Views (S2) vets each:
 
-1. **Shared** (`package main`, no constraint) — compiled into **both** GUI and
-   service builds (`config.go`, `api_wrappers.go`, `secrets.go`,
-   `backup_inline.go`, `errcodes.go`, `pbslog_glue.go`, …).
-2. **`//go:build !service`** — GUI only (`main.go`: Wails entrypoint, bound
-   `App` methods, GUI-side delegation).
-3. **`//go:build service`** — service only (`service_main.go`,
-   `app_service_stubs.go`).
+1. **service, linux** — what the linter and `go test` see.
+2. **service, windows** — what ships as `NimbusBackupSVC.exe`.
+3. **console, windows** (with Wails' `desktop,wv2runtime.download,production`
+   tags) — what ships as `NimbusBackup.exe`.
 
-Orthogonally, `//go:build windows` vs `!windows` split platform code
+`//go:build windows` vs `!windows` still split platform code in `gui/`
 (`secrets_windows.go`/`secrets_nonwindows.go`, `tpm_windows.go`,
-`exchange_windows.go`, `machine_backup_windows.go`, …). That gives **three
-real compile views**: linux+GUI (what the linter and `go test` see),
-windows+GUI (the shipped app), and windows+service (the shipped service).
-linux+service is not a view — `service.go` is `windows`-only and `main.go` is
-`!service`, so it has neither `NimbusService` nor a `main()` and could never
-be built or shipped. A symbol referenced from a shared file must exist in
-every REAL view — see rule 3 and smoke S2, both born from real breakage.
+`machine_backup_windows.go`, …). A symbol referenced from a file with no
+constraint must exist in both service views — see rule 3 and smoke S2, both
+born from real breakage. `service.go` and `service_main.go` carry no OS
+constraint (kardianos/service is portable), so the Linux view is a whole
+program and the linter sees every caller.
 
 ### The lint trap
 
 `gui/.golangci.yml` runs on Linux, `GOOS=linux`, no tags. Consequences:
 
-* The linter sees the **`!service` + `!windows`** view only. `windows`-gated
-  files are never linted (only compiled by the Windows build job).
+* The service's linter sees the **`!windows`** view only. `windows`-gated
+  files are never linted (only compiled by Compile Views and the Windows
+  build job). The console is linted in its Windows view, the one it ships in.
 * A `windows`-only caller does **not** satisfy `unused` for a symbol declared
   in a shared file. New shared/exported helpers need a Linux-visible caller
   (this bit `writeCatLog`; fixed by also calling it from `backup_inline.go`).
@@ -104,7 +110,7 @@ every REAL view — see rule 3 and smoke S2, both born from real breakage.
 
 `config.json` lives at `C:\ProgramData\NimbusBackup\config.json` and only
 the service reads or writes it. The console binds one type, `Console`
-(`gui/console.go`), and every binding is one call to the local API
+(`console/console.go`, its own module), and every binding is one call to the local API
 (docs/V4-CONSOLE.md): settings, jobs and PBS servers are written by the service
 (`api_wrappers.go:SavePBSServerFromMap` etc.), read back sanitized
 (`GET /status`, `GET /pbs/servers`), and the console has no fallback when the

@@ -1,119 +1,54 @@
 package main
 
-// THE TWO LISTS MUST AGREE.
+// EVERY DECLARED OP MUST BE IMPLEMENTED.
 //
-// The restore seam has an op name written down in three places, and each is
-// load-bearing in a different way:
+// The op names have one definition (gui/api/restore_wire.go), the gate's
+// table is built from it, and gui/api/restore_wire_test.go pins the two
+// against each other. What is left is the third list: the service's dispatch
+// (restore_service.go). A permission the engine cannot honour is worse than no
+// permission: the gate says yes and the service then answers "declared but
+// not implemented", which reads to an operator like a bug in their datastore
+// rather than a gap in ours.
 //
-//	gui/restore_wire.go     the console's constants — what it will ASK for
-//	gui/api/restore.go      the gate's table — what the service will ALLOW
-//	gui/restore_service.go  the dispatch — what the engine can DO
-//
-// Drift between them fails at runtime on a customer's machine, and fails
-// quietly in the worst direction: a console asking for an op the table does
-// not declare gets a 400 that reads like a broken restore, and a table
-// declaring an op nothing implements is a permission granted over nothing.
-//
-// So this file pins all three against each other. It is untagged on purpose —
-// the console half and the service half are compiled apart, and the whole
-// point is that they still describe the same protocol.
+// Until V4-CONSOLE C3 this was a source pin, because the dispatch lived in a
+// `service`-tagged file the default test build could not call into. The tag
+// is gone, so this calls the dispatch. Every op is sent with no parameters,
+// which every implemented case refuses while decoding, before it reaches PBS
+// or the disk; only an op with no case reaches the "not implemented" answer.
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
-// consoleOps is every op the console can name, taken from the constants
-// themselves rather than retyped — a copy would be one more thing to drift.
-var consoleOps = []string{
-	opSnapshots, opContents, opMeta, opRestore, opDownload, opSearch, opCancelSearch, opSpace,
-	opVolumePartitions, opVolumeFiles, opVolumeDirectory, opVolumeDownload, opVolumeFileRestore, opCancelVolumeFileRestore,
-}
-
-func TestEveryOpTheConsoleCanAskForIsDeclaredInTheGate(t *testing.T) {
-	declared := map[string]bool{}
-	for _, op := range api.RestoreOps() {
-		declared[op.Name] = true
+func TestEveryDeclaredOpReachesACaseInTheServiceDispatch(t *testing.T) {
+	a := &App{}
+	ops := api.RestoreOps()
+	if len(ops) == 0 {
+		t.Fatal("the gate declares no ops; this test would pin nothing")
 	}
-	for _, name := range consoleOps {
-		if !declared[name] {
-			t.Errorf("the console can ask for %q but gui/api/restore.go does not declare it — "+
-				"the gate will refuse it as unknown, and the button that calls it is dead", name)
+	for _, op := range ops {
+		var err error
+		switch op.Kind {
+		case api.OpQuery:
+			_, err = a.RestoreQuery(op.Name, nil)
+		case api.OpJob:
+			_, err = a.RestoreJob(context.Background(), op.Name, nil, nil)
+		case api.OpControl:
+			err = a.RestoreControl(op.Name, nil)
+		default:
+			t.Errorf("op %q has a kind this test does not know (%d)", op.Name, op.Kind)
+			continue
+		}
+		if err != nil && strings.Contains(err.Error(), "declared but not implemented") {
+			t.Errorf("restore_service.go has no case for %q, so the gate permits an op the "+
+				"service refuses as unimplemented: %v", op.Name, err)
 		}
 	}
-}
-
-func TestEveryDeclaredOpIsOneTheConsoleCanAskFor(t *testing.T) {
-	asked := map[string]bool{}
-	for _, name := range consoleOps {
-		asked[name] = true
-	}
-	for _, op := range api.RestoreOps() {
-		if !asked[op.Name] {
-			t.Errorf("gui/api/restore.go declares %q but nothing in restore_wire.go names it — "+
-				"either a caller was removed and the permission outlived it, or the constant is missing", op.Name)
-		}
-	}
-}
-
-// EVERY DECLARED OP MUST BE IMPLEMENTED. A permission the engine cannot honour
-// is worse than no permission: the gate says yes and the service then answers
-// "declared but not implemented", which reads to an operator like a bug in
-// their datastore rather than a gap in ours.
-//
-// Checked against the source because the dispatch lives in a `service`-tagged
-// file this test cannot call into. That is the same honest limitation
-// gui/backupkey_wiring_test.go carries, and it is recorded here for the same
-// reason: a source pin catches deletion and rename, not behaviour.
-func TestEveryDeclaredOpAppearsInTheServiceDispatch(t *testing.T) {
-	src := sourceOf(t, "restore_service.go")
-	for _, op := range api.RestoreOps() {
-		// The dispatch switches on the CONSTANT, so look for the constant's
-		// name rather than its value — that is what the code actually says.
-		if !strings.Contains(src, constNameFor(op.Name)) {
-			t.Errorf("restore_service.go has no case for %q (%s), so the gate permits an op "+
-				"the service will refuse as unimplemented", op.Name, constNameFor(op.Name))
-		}
-	}
-}
-
-// constNameFor maps a wire name back to the constant that carries it. Written
-// out rather than derived, so a renamed constant fails this test loudly
-// instead of being silently reconstructed.
-func constNameFor(op string) string {
-	switch op {
-	case opSnapshots:
-		return "opSnapshots"
-	case opContents:
-		return "opContents"
-	case opMeta:
-		return "opMeta"
-	case opRestore:
-		return "opRestore"
-	case opDownload:
-		return "opDownload"
-	case opSearch:
-		return "opSearch"
-	case opCancelSearch:
-		return "opCancelSearch"
-	case opSpace:
-		return "opSpace"
-	case opVolumePartitions:
-		return "opVolumePartitions"
-	case opVolumeFiles:
-		return "opVolumeFiles"
-	case opVolumeDirectory:
-		return "opVolumeDirectory"
-	case opVolumeDownload:
-		return "opVolumeDownload"
-	case opVolumeFileRestore:
-		return "opVolumeFileRestore"
-	case opCancelVolumeFileRestore:
-		return "opCancelVolumeFileRestore"
-	}
-	return "<no constant for " + op + ">"
 }
 
 // Every op declares a permission. An op with an empty Right would be gated on
@@ -128,5 +63,54 @@ func TestEveryDeclaredOpNamesAPermission(t *testing.T) {
 			t.Errorf("op %q has no description; the table is meant to read as the enumeration of "+
 				"everything the console may ask the service to do", op.Name)
 		}
+	}
+}
+
+// THE SERVICE REFUSES A DESTINATION THE CONSOLE USED TO REFUSE ALONE.
+//
+// Until V4-CONSOLE C3 the console ran security.ValidatePath on a restore's
+// destination and the service did not, so any other caller of the local API
+// skipped it (finding F1). Every op that writes to a caller-named path is
+// refused here, before a PBS server is resolved, with NB-3013.
+func TestEveryWritingOpRefusesATraversingDestination(t *testing.T) {
+	// No PBS server is configured: without the check each op stops on that
+	// instead, so a missing check fails below rather than reaching PBS.
+	a := &App{config: &Config{}}
+	const bad = `C:\Users\Public\..\..\Windows\System32`
+	cases := map[string]any{
+		api.RestoreOpRestore: api.RestoreParams{
+			SnapshotRef: api.SnapshotRef{PBSID: "pbs1", BackupID: "WS-01", SnapshotID: "2026-10-19T00:00:00Z"},
+			DestPath:    bad, Mode: string(api.RestoreModeAlternateAbs), IncludePaths: []string{"a"},
+		},
+		api.RestoreOpDownload: api.DownloadParams{
+			SnapshotRef: api.SnapshotRef{PBSID: "pbs1", BackupID: "WS-01", SnapshotID: "2026-10-19T00:00:00Z"},
+			DestPath:    bad, IncludePaths: []string{"a"}, AsZip: true,
+		},
+		api.RestoreOpVolumeDownload: api.VolumeDownloadParams{
+			VolumeRef: api.VolumeRef{PBSID: "pbs1", BackupID: "WS-01"}, DestPath: bad, IncludePaths: []string{"a"},
+		},
+		api.RestoreOpVolumeFileRestore: api.VolumeFileRestoreParams{
+			VolumeRef: api.VolumeRef{PBSID: "pbs1", BackupID: "WS-01"}, DestDir: bad, IncludePaths: []string{"a"},
+		},
+	}
+	for op, params := range cases {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = a.RestoreJob(context.Background(), op, raw, func(float64, string, int64, int64, float64, int) {})
+		if err == nil || !strings.HasPrefix(err.Error(), errDestPathInvalid) {
+			t.Errorf("%s to %q = %v, want %s", op, bad, err, errDestPathInvalid)
+		}
+	}
+	// In-place restore takes its target from the snapshot's metadata, so a
+	// destination it ignores is not refused.
+	raw, _ := json.Marshal(api.RestoreParams{
+		SnapshotRef: api.SnapshotRef{PBSID: "pbs1", BackupID: "WS-01", SnapshotID: "2026-10-19T00:00:00Z"},
+		DestPath:    bad, Mode: string(api.RestoreModeOriginal),
+	})
+	if _, err := a.RestoreJob(context.Background(), api.RestoreOpRestore, raw, nil); err != nil &&
+		strings.HasPrefix(err.Error(), errDestPathInvalid) {
+		t.Errorf("an in-place restore was refused on the destination it ignores: %v", err)
 	}
 }

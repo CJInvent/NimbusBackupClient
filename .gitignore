@@ -1,6 +1,6 @@
 # Build artifacts
 dist/
-!gui/frontend/dist/
+!console/frontend/dist/
 node_modules/
 build/
 

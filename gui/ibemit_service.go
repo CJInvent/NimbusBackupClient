@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // ibEmit (service build): there is no webview; progress from delegated

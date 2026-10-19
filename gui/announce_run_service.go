@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 import (
@@ -83,11 +80,8 @@ func registerRunReporter(backupID, jobName, backupType, requestID string, trigge
 // managedJobServerID returns the SERVER's backup_jobs.id behind a managed
 // job's local id, or 0 when the id does not name a managed job.
 //
-// It lives HERE rather than beside managedToScheduledJob because the only
-// caller is the service build -- the GUI build's announceLocalRun is a
-// deliberate no-op, and an unused function fails golangci-lint's unused
-// check in that build. managedJobIDPrefix stays the single owner of the
-// literal, which is what keeps the two halves of the encoding in step. A run reports this number
+// managedJobIDPrefix stays the single owner of the literal, which is what
+// keeps the two halves of the encoding in step. A run reports this number
 // so its history attaches to the job rather than to the job's NAME -- see
 // docs/V4-RUN-AUDIT.md section 1.2.
 func managedJobServerID(id string) int64 {

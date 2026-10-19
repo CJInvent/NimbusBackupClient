@@ -14,6 +14,8 @@ use ./nbd
 
 use ./gui
 
+use ./console
+
 use ./controlplane
 
 use ./imagebrowse

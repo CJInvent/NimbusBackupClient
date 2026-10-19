@@ -11,11 +11,11 @@ go mod tidy
 ## 2. Builder l'application Wails
 
 ```bash
-cd gui
+cd console
 wails build -clean -platform windows/amd64
 ```
 
-L'exécutable sera dans `gui/build/bin/NimbusBackup.exe`
+L'exécutable sera dans `console/build/bin/NimbusBackup.exe` (le service, `NimbusBackupSVC.exe`, se construit dans `gui/` : `go build -o build/bin/NimbusBackupSVC.exe .`)
 
 ## 3. Builder le MSI
 

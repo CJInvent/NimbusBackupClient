@@ -6,7 +6,7 @@ Ce dossier contient les fichiers nécessaires pour créer l'installateur MSI de 
 
 - **WiX Toolset 3.x ou 4.x** : https://wixtoolset.org/
 - **Visual Studio Build Tools** (optionnel mais recommandé)
-- **NimbusBackup.exe compilé** dans `gui/build/bin/`
+- **NimbusBackup.exe compilé** dans `console/build/bin/` et **NimbusBackupSVC.exe** dans `gui/build/bin/`
 
 ## Installation WiX Toolset
 

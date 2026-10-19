@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // SOURCE-LEVEL PINS for the three restore reader entry points (phase G).

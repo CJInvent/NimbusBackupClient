@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 import (
@@ -8,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,11 +37,11 @@ type snapshotCacheKey struct {
 // Meta is the `.nimbus_backup_meta.json` sidecar parsed at listing time. nil
 // means "snapshot has no sidecar" (legacy backup), not "we haven't looked".
 type cachedSnapshotTree struct {
-	Schema      int              `json:"schema"`
-	GeneratedAt int64            `json:"generated_at"`
-	Key         snapshotCacheKey `json:"key"`
-	Entries     []SnapshotEntry  `json:"entries"`
-	Meta        *BackupMeta      `json:"meta,omitempty"`
+	Schema      int                 `json:"schema"`
+	GeneratedAt int64               `json:"generated_at"`
+	Key         snapshotCacheKey    `json:"key"`
+	Entries     []api.SnapshotEntry `json:"entries"`
+	Meta        *api.BackupMeta     `json:"meta,omitempty"`
 }
 
 func getRestoreCacheDir() (string, error) {
@@ -109,7 +107,7 @@ func loadSnapshotTreeCache(key snapshotCacheKey) (*cachedSnapshotTree, bool) {
 	return &c, true
 }
 
-func saveSnapshotTreeCache(key snapshotCacheKey, entries []SnapshotEntry, meta *BackupMeta) error {
+func saveSnapshotTreeCache(key snapshotCacheKey, entries []api.SnapshotEntry, meta *api.BackupMeta) error {
 	path, err := key.filename()
 	if err != nil {
 		return err

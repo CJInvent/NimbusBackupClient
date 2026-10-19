@@ -70,7 +70,7 @@ jobs:
 
           # Discovered, not listed. A module added to the repository is
           # updated by this workflow the moment it exists.
-          mapfile -t modules < <(find . -name go.mod -not -path './gui/frontend/node_modules/*' -printf '%h\n' | sort)
+          mapfile -t modules < <(find . -name go.mod -not -path './console/frontend/node_modules/*' -printf '%h\n' | sort)
           if [ ${#modules[@]} -eq 0 ]; then
             echo "::error::no Go modules found - the discovery is wrong, not the repository"
             exit 1

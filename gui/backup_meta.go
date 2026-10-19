@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"runtime"
 	"time"
 )
@@ -62,21 +63,8 @@ func SerializeFileMeta(meta *BackupFileMeta) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// BackupMeta stores metadata about the backup, injected as a virtual file
-// at the root of the PXAR archive. Allows restore tools to recover the
-// original path (with spaces, accents) from the sanitized backup-id.
-type BackupMeta struct {
-	BackupID      string `json:"backup_id"`
-	OriginalPath  string `json:"original_path"`
-	Hostname      string `json:"hostname"`
-	BackupTime    string `json:"backup_time"`
-	ClientVersion string `json:"client_version"`
-	OS            string `json:"os"`
-	VSSUsed       bool   `json:"vss_used"`
-}
-
 func GenerateBackupMeta(backupID, originalPath, hostname string, vssUsed bool) ([]byte, error) {
-	meta := BackupMeta{
+	meta := api.BackupMeta{
 		BackupID:      backupID,
 		OriginalPath:  originalPath,
 		Hostname:      hostname,

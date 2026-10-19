@@ -1,5 +1,3 @@
-//go:build service
-
 package main
 
 // The run-time half of the verification gate (V4-SPEC §11, phase F item 3).

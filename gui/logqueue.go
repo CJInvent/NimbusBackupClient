@@ -33,9 +33,9 @@ import (
 //   - rate (§5 rule 7): per component per minute. Past the ceiling, lines are
 //     counted, and one summary line says how many when the minute closes.
 //
-// ONLY THE SERVICE QUEUES. The GUI process writes its own log and does not
-// check in; two processes appending to one queue file would race. Enabled by
-// logqueue_enable_service.go, so the GUI build compiles this and never uses it.
+// ONLY THE SERVICE QUEUES. The console writes its own log (console/logging.go)
+// and does not check in; two processes appending to one queue file would race.
+// Enabled by logqueue_enable_service.go.
 
 const (
 	logQueueMaxEntries = 500

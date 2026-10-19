@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // The service's answers to the routes the console still lacked
@@ -151,12 +148,12 @@ func (a *App) ExchangeForAPI(withLogMode bool) api.ExchangeResponse {
 // before a download, answered for the drive the service will write to. The
 // check that blocks a download that will not fit is still the one inside
 // download_service.go; this one is the pre-flight.
-func checkDownloadSpace(p SpaceParams) (SpaceCheck, error) {
+func checkDownloadSpace(p api.SpaceParams) (api.SpaceCheck, error) {
 	if p.DestPath == "" {
-		return SpaceCheck{}, errors.New(errDestPathRequired)
+		return api.SpaceCheck{}, errors.New(errDestPathRequired)
 	}
 	if err := security.ValidatePath(p.DestPath); err != nil {
-		return SpaceCheck{}, fmt.Errorf("invalid destination path: %w", err)
+		return api.SpaceCheck{}, fmt.Errorf("invalid destination path: %w", err)
 	}
 	needed := uint64(0)
 	if p.NeededBytes > 0 {

@@ -1,5 +1,3 @@
-//go:build service
-
 package main
 
 import (

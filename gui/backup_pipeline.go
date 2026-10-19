@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 import (
@@ -12,14 +9,14 @@ import (
 	"security"
 )
 
-// THE backup pipeline. One copy, and it is not in the GUI binary.
+// THE backup pipeline. One copy, and it is not in the console.
 //
-// The build tag is the lockdown. CJ's decision (2026-08-05) is that the GUI
-// links no backup engine at all — absent rather than gated — so that a
-// modified front end has nothing to call, and the escape hatch for a machine
-// with no control plane is a SERVICE-side toggle instead. This file is the
-// only caller of RunBackupInline and RunMachineBackup, so excluding it leaves
-// both unreferenced in the GUI build and the linker drops them.
+// CJ's decision (2026-08-05) is that the console links no backup engine at
+// all — absent rather than gated — so that a modified front end has nothing
+// to call, and the escape hatch for a machine with no control plane is a
+// SERVICE-side toggle instead. That was a build tag until V4-CONSOLE C3; it is
+// a module boundary now (console/ cannot import this package, and its
+// dependency allowlist fails the build if it ever could).
 //
 // Step 3 of docs/V4-PIPELINE.md. Until this file there were two: the GUI
 // build's startBackupDirect (main.go) and the service build's StartBackup
@@ -106,9 +103,7 @@ func (a *App) resolveBackupRequest(req backupRequest) (*resolvedBackup, error) {
 		pbsBackupType: "host",
 	}
 	if out.backupID == "" {
-		// os.Hostname rather than a.GetHostname: the latter is a Wails
-		// binding and exists only in the GUI build, and this file has to
-		// compile into both.
+		// os.Hostname: the backup id is this machine's name.
 		out.backupID, _ = os.Hostname()
 		writeInfoLog(fmt.Sprintf("[Backup ID] Empty backup-id, using hostname: %s", out.backupID))
 	}

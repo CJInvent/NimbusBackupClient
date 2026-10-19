@@ -12,9 +12,6 @@ import (
 )
 
 func (a *App) storageController() (*controlplane.StorageState, error) {
-	if !a.isServiceProcess {
-		return nil, errors.New("storage identity is owned by the service")
-	}
 	a.storageMu.Lock()
 	defer a.storageMu.Unlock()
 	if a.storageState != nil {

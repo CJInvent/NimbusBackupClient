@@ -27,9 +27,9 @@ supervision de parc.
 ## Construction
 
 ```
-cd gui/frontend && npm ci && npm run build
-cd .. && go build .                # GUI
-go build -tags service .          # service
+cd console/frontend && npm ci && npm run build
+cd .. && wails build -platform windows/amd64     # console (console/)
+cd ../gui && GOOS=windows go build .             # service (gui/)
 ```
 
 Détails d'architecture : [ARCHITECTURE.md](ARCHITECTURE.md) ·

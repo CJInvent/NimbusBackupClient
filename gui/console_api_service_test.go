@@ -1,14 +1,11 @@
-//go:build service
-// +build service
-
 package main
 
 // The service's half of the console routes (console_api_service.go), against
 // real inputs: a config carrying a real-shaped secret, a TLS server standing
 // in for PBS, a real directory for the space check.
 //
-// Named TestServiceAPI* so the Windows smoke step's `-tags service` run picks
-// them up; CI's Linux unit job runs them too.
+// Named TestServiceAPI* so the Windows smoke step's -run filter picks them
+// up; CI's Linux unit job runs them too.
 
 import (
 	"crypto/rand"
@@ -220,25 +217,25 @@ func TestServiceAPIDiscoverRefusesWhatIsNotAPBSURL(t *testing.T) {
 func TestServiceAPISpaceOp(t *testing.T) {
 	a := &App{}
 	dir := t.TempDir()
-	raw, _ := json.Marshal(SpaceParams{DestPath: dir, NeededBytes: 1})
-	res, err := a.RestoreQuery(opSpace, raw)
+	raw, _ := json.Marshal(api.SpaceParams{DestPath: dir, NeededBytes: 1})
+	res, err := a.RestoreQuery(api.RestoreOpSpace, raw)
 	if err != nil {
 		t.Fatalf("space: %v", err)
 	}
-	sc, ok := res.(SpaceCheck)
+	sc, ok := res.(api.SpaceCheck)
 	if !ok || !sc.Fits || sc.TotalBytes == 0 || sc.NeededBytes != 1 || sc.Path != dir {
 		t.Errorf("space = %#v", res)
 	}
 
 	// Built by hand: filepath.Join would clean the ".." away.
 	sep := string(filepath.Separator)
-	for _, bad := range []SpaceParams{{DestPath: ""}, {DestPath: dir + sep + ".." + sep + "x"}} {
+	for _, bad := range []api.SpaceParams{{DestPath: ""}, {DestPath: dir + sep + ".." + sep + "x"}} {
 		raw, _ := json.Marshal(bad)
-		if _, err := a.RestoreQuery(opSpace, raw); err == nil {
+		if _, err := a.RestoreQuery(api.RestoreOpSpace, raw); err == nil {
 			t.Errorf("space(%+v) accepted", bad)
 		}
 	}
-	if _, err := a.RestoreQuery(opSpace, nil); err == nil {
+	if _, err := a.RestoreQuery(api.RestoreOpSpace, nil); err == nil {
 		t.Error("space with no parameters accepted")
 	}
 }
