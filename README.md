@@ -72,9 +72,11 @@ before the first signed release.
 
 ## Architecture in one paragraph
 
-Two processes from one binary: a **Windows service** (`-tags service`,
-LocalSystem — owns VSS, schedules, uploads) and a **GUI** (Wails/WebView2 —
-thin frontend; talks to the service over an authenticated local API). Restore
+Two programs: a **Windows service** (`gui/`, LocalSystem — owns VSS,
+schedules, uploads, keys, configuration) and a **console** (`console/`, its
+own Go module — Wails/WebView2 and the tray, a client of the service's
+authenticated local API and nothing else; CI fails the build on any other
+dependency, docs/V4-CONSOLE.md). Restore
 reads run over `pbscommon.FIDXReaderAt`, a lazy `io.ReaderAt` on PBS fixed
 indexes with LRU chunk cache, concurrent prefetch, exact-range plan prefetch
 and rate limiting — so browsing a multi-TB image moves megabytes. Full detail:
@@ -85,7 +87,8 @@ and rate limiting — so browsing a multi-TB image moves megabytes. Full detail:
 
 | Path | What it is |
 |---|---|
-| `gui/` | The application (GUI + service variants, Wails frontend under `gui/frontend/`) |
+| `gui/` | The service: engines, control-plane agent, keys, configuration, the local API (`gui/api/`, shared with the console) |
+| `console/` | The console: the window, the tray and the web UI (`console/frontend/`); depends only on `gui/api`, Wails and systray |
 | `pbscommon/` | PBS protocol: sessions, chunking, DIDX/FIDX readers, prefetch, rate limit |
 | `imagebrowse/` | Userspace partition + filesystem readers (NTFS/FAT/exFAT), ADS, NTFS security descriptors — see [imagebrowse/README.md](imagebrowse/README.md) |
 | `controlplane/` | Agent side of NimbusControl enrollment/reporting |
@@ -97,18 +100,17 @@ CI (GitHub Actions) builds the MSI on every tag: `git tag vX.Y.Z && git push
 origin master vX.Y.Z`. Locally:
 
 ```
-cd gui/frontend && npm ci && npm run build   # webview assets
-cd ..                                        # gui/
-go build .                                   # GUI variant
-go build -tags service .                     # service variant
+cd console/frontend && npm ci && npm run build   # webview assets (dist is tracked)
+cd .. && wails build -platform windows/amd64     # the console (console/)
+cd ../gui && GOOS=windows go build .             # the service (gui/)
 ```
 
 Go is pinned EXACTLY (see the workflows); a loose `1.26` resolves loosely and
 a toolchain job asserts the agreement.
 
 **`go vet` + `go test` is not the gate set, and treating it as one has let a
-lint failure through a merge.** CI runs golangci-lint TWICE over `gui/` — the
-default build, then `--build-tags=service --disable=unused` — and staticcheck
+lint failure through a merge.** CI runs golangci-lint over the service (`gui/`,
+with `unused`) and the console (`console/`, its Windows view), and staticcheck
 lives inside it, not inside `go vet`. It caught an `x != x` comparison in a
 test that `go vet` was perfectly happy with.
 

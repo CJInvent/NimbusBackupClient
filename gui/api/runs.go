@@ -49,7 +49,7 @@ type RunRegistry struct {
 
 	// store, when installed by Persist, makes history survive a service
 	// restart (runs_store.go). Nil means memory only, which is what a test
-	// registry and the GUI build's unused one are.
+	// registry is.
 	store *runStore
 }
 

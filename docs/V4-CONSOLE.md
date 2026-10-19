@@ -7,7 +7,8 @@ was taken from that commit with the CI-pinned toolchain (`go1.26.9`), building
 The local build is a faithful model of the shipped one: 13,268,992 bytes stripped
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
-**Progress:** C1 (PR #30) and C2 (PR #31) merged. Next: C3; P5 is also unblocked.
+**Progress:** C1 (PR #30) and C2 (PR #31) merged; C3 built (§8), in review.
+Next: V4-LOCAL-API P1; P5 is also unblocked.
 
 **Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
 D2 (b), the service installs WebView2 and the console drops the downloader;
@@ -303,7 +304,8 @@ rather than passes on an empty input:
    API client. Crude by design; it exists to make the next "just read the file
    here, it's quicker" a red build.
 4. **Size budget.** The Build GUI job prints the console's stripped size and
-   fails above a budget recorded in the workflow: **11.2 MB** after phase C3,
+   fails above a budget recorded in the workflow: **11.2 MB** after phase C3
+   (set at 11,900,000 bytes from C3's measurement, §8),
    lowered to 9.6 MB by V4-LOCAL-API P1 (D2). A budget set close to the measured size
    turns the next unexplained 400 KB into a red build before release rather than
    a question after it.
@@ -562,6 +564,79 @@ Budget set to 11.2 MB.
 Expected: console about 11.0 MB stripped (prototype 10,968,576; the real
 console carries more binding code than the prototype). About 2.3 MB off the
 GUI, 0.6 to 0.8 MB off the MSI (bracketed by gzip and xz; LZX lands between).
+
+**Built (2026-10-19).** As specified, with these details settled in the
+building:
+
+- **The module.** `console/go.mod`; its one project dependency is `gui/api`
+  (a `replace` to `../gui/api`). Wails' and systray's dependencies are pinned
+  to the versions the service's graph had selected (`go-ole` v1.3.0,
+  `x/net` v0.61.0 among them), so the shipped console's dependency set did not
+  move with the split and keeps the vulnerability floors set earlier. The
+  service's `go.mod` lost Wails, systray and their tree.
+- **Shared shapes in `gui/api`:** `restore_types.go` (with `BackupMeta` and
+  `SpaceCheck`) and `restore_wire.go`. The op names are exported
+  (`api.RestoreOpSnapshots` ...) and the gate's table is built from them, so
+  the three lists of the old `restore_ops_test.go` are one definition;
+  `api/restore_wire_test.go` pins constants against the table both ways, and
+  `gui/restore_ops_test.go` now **calls** the service's dispatch for every
+  declared op instead of searching its source. `DriveInfo` stays in the
+  console: only the picker uses it.
+- **The token path** is `api.TokenPath()` over `api.DataDir()`, one
+  definition both programs resolve; the service's `getConfigDir` uses it.
+- **The destination check moved into the service** (the handoff's open
+  choice). `security.ValidatePath` now runs in the service for all four ops
+  that write to a caller-named path (`restore` in an alternate mode,
+  `download`, `volume-download`, `volume-file-restore`), before a PBS server is
+  resolved, as **NB-3013** (new; translated in all three languages). The
+  console checked only `restore`, and any other caller of the local API
+  skipped it (F1). The console no longer imports `pkg/security`.
+  `TestEveryWritingOpRefusesATraversingDestination` fails for each of the four
+  when the check is removed.
+- **The console's log** is `%LOCALAPPDATA%\NimbusBackup\console.log`, rolled
+  to `console.log.1` past 1 MB. `crash_report.txt` moved beside it: it was
+  written next to the executable, which a standard user cannot write under
+  Program Files. The `-logcat` flag went with the service's logging module.
+- **Error codes:** the console declares NB-1011 and NB-2011 (only a client
+  reads `cert_untrusted` or fails to reach the service; the service's `unused`
+  lint reported them there) and the restore argument codes. A code both
+  declare must carry the same text (`console/errcodes_test.go` reads the
+  service's source).
+- **Kept, against §9's list:** `tray_stub.go` and `diskspace_other.go`. The
+  console ships for Windows only, but its tests run on Linux CI, and these let
+  them build there.
+- **The tag** is gone from `gui/`: 51 files lost it, and the `!service` ones
+  moved to `console/` or were deleted. `service.go` and `service_main.go` carry
+  no OS constraint (`kardianos/service` is portable), so the Linux view is a
+  whole program and the linter sees every caller. With `unused` on for the
+  first time it found `lastVolumeKey` (written twice, never read); removed.
+  `RunAsService`, `IsServiceMode` and `service_stub.go` had no callers;
+  deleted. `isServiceProcess` and its test went (there is no non-service
+  `App`); `logVariant` is a constant in `logging.go`.
+- **The §5 checks are Go tests in `console/`**, run by the Unit Tests job and
+  `scripts/local-gates.sh`, rather than workflow steps:
+  `TestTheConsoleDependsOnlyOnItsAllowlist` (`go list -deps` for the shipped
+  windows build, module paths written out with the reason for each; fails
+  without Wails or `gui/api` in the listing), `TestTheConsoleDoesNoLocalIO`
+  (exempt files named with their reasons; a stale exemption fails too). Each
+  was checked by sabotage. The engine file-set and `nm` steps are deleted.
+- **CI:** Compile Views is service linux, service windows, console windows
+  (with the Wails tags). golangci-lint runs once over the service with
+  `unused` and once over the console with `GOOS=windows`; gosec and
+  govulncheck cover the console (its windows view). Build GUI builds in
+  `console/`; the WiX source path moved, the output names did not.
+- **Budget: 11,900,000 bytes**, not 11.2 MB (which predated C2). Measured by
+  §10's method: console **11,817,472 → 11,463,680** bytes stripped (C2's
+  number reproduced exactly here first); service 11,069,440 → 11,073,024. The
+  shipped build has run about 1.5% above the local one, so about 11.64 MB is
+  expected in CI, with about 260 KB of headroom. The console's symbol table
+  has no `klauspost/compress`, no `pbscommon` and no control-plane agent. It
+  is about 0.5 MB above the prototype (code 4,456 KB against 4,308 KB, plus
+  data); the prototype carried less binding code, as this section predicted.
+- **Not done here:** the first lint of the service's *windows* view reports
+  33 findings in windows-only engine files (`machine_backup_windows.go` and
+  others) that no CI lint has ever seen. Not gated before or after C3; a
+  separate change.
 
 ### C4. Transport and runtime (superseded)
 

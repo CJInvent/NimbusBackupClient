@@ -8,19 +8,9 @@ import (
 )
 
 func TestStorageJoinedApprovalRefused(t *testing.T) {
-	a := &App{config: &Config{ControlServerURL: "https://control.invalid", ControlAgentID: 1}, isServiceProcess: true}
+	a := &App{config: &Config{ControlServerURL: "https://control.invalid", ControlAgentID: 1}}
 	if err := a.ApproveStorageIdentityFromMap(map[string]interface{}{}); err == nil || !strings.Contains(err.Error(), "dashboard") {
 		t.Fatalf("joined local API approval not refused: %v", err)
-	}
-}
-
-// An App that is not the service process never acquires the state writer.
-// (The console has no App at all since V4-CONSOLE C2; its approval is a local
-// API call, refused without a service: console_bindings_test.go.)
-func TestStorageNonServiceAppCannotWriteState(t *testing.T) {
-	a := &App{config: &Config{}}
-	if _, err := a.storageController(); err == nil {
-		t.Fatal("a non-service App acquired the state writer")
 	}
 }
 

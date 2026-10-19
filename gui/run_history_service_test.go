@@ -1,4 +1,4 @@
-//go:build service && windows
+//go:build windows
 
 package main
 

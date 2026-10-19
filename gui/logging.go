@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+// logVariant names this program's log files: backup-service.log and
+// service-service.log (see the note above on why the name stays).
+const logVariant = "service"
+
 // The client's ONE logging module (V4-SPEC §12).
 //
 // WHAT IT REPLACES: logging_gui.go and logging_service.go, 158 lines each,
@@ -21,15 +25,14 @@ import (
 // on the build that runs on every managed machine, exactly as with the two
 // backup pipelines (docs/V4-PIPELINE.md §1).
 //
-// The only genuinely per-build fact is which name the files carry, so that is
-// all the build tags decide now: `logVariant`, one line each in
-// logging_variant_gui.go and logging_variant_service.go.
+// The only per-build fact was which name the files carried (`logVariant`).
+// Since V4-CONSOLE C3 this module is the service's alone (the console keeps
+// its own small log, console/logging.go), so the variant is a constant.
 //
 // THE FILENAMES ARE UNCHANGED, including `service-service.log`, which reads
 // oddly and is what the service build has always written. Renaming would
-// orphan the logs on every installed machine and break the paths the GUI's
-// viewer already knows. A cosmetic name is not worth a support call about
-// missing logs.
+// orphan the logs on every installed machine. A cosmetic name is not worth a
+// support call about missing logs.
 //
 // ------------------------------------------------------------------ level
 //

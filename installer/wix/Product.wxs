@@ -4,7 +4,7 @@
   <!-- ProductVersion can be overridden from the CI via
        `candle.exe -dProductVersion=x.y.z`. Falls back to the hardcoded
        value below for local dev builds. Keep this in sync with
-       gui/wails.json on every release. -->
+       console/wails.json on every release. -->
   <?ifndef ProductVersion ?>
     <?define ProductVersion = "0.2.72" ?>
   <?endif ?>
@@ -65,10 +65,10 @@
 
     <!-- Main application files -->
     <DirectoryRef Id="INSTALLFOLDER">
-      <!-- GUI Executable -->
+      <!-- Console executable (console/, its own module since V4-CONSOLE C3) -->
       <Component Id="GUIExecutable" Guid="*" Win64="yes">
         <File Id="NimbusBackupEXE"
-              Source="../../gui/build/bin/NimbusBackup.exe"
+              Source="../../console/build/bin/NimbusBackup.exe"
               KeyPath="yes" />
       </Component>
 

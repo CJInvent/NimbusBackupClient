@@ -1,36 +1,31 @@
 # v4 Status — NimbusBackupClient
 
-## HANDOFF (2026-10-18): the console split and the local API
+## HANDOFF (2026-10-19): the console split and the local API
 
 **Read first:** `docs/V4-CONSOLE.md`, then `docs/V4-LOCAL-API.md`. Both are
 specifications with every decision recorded. They went up together in PR #29
 (spec only).
 
-**Where the build stands (2026-10-18, evening):** C1 (#30) and C2 (#31) are
-merged; `v4_dev` is `f006e61`, the same tree #31's green CI ran on. The webview
-binds a `Console` type (`gui/console.go`, `gui/console_bindings.go`) whose 51
-methods are each one call to the service, pinned against
-`frontend/src/lib/bindings.js` in both directions. `job_history.json` is gone,
-and the history reads the run registry. V4-CONSOLE §8 records what each phase
-settled, including C2's one change of mechanism (the bound type moved from C3
-to C2, along with the binding allowlist and the `window.go` check).
+**Where the build stands (2026-10-19):** C1 (#30) and C2 (#31) are merged; C3
+is built on `feat/console-c3` and in review (its PR into `v4_dev`). The console
+is its own module, `console/` (its own `go.mod`, depending on `gui/api`, Wails,
+systray and `x/sys` and their dependencies, pinned by a test), and `gui/` is the service with no
+build tag. V4-CONSOLE §8 records what C3 settled; read it before P1. The ones
+that change what the next phase starts from:
 
-**Next: C3**, the `console/` module (V4-CONSOLE §8 C3 and §9). Most of it is
-`git mv` of the console's files and `frontend/`, plus removing the `service`
-tag, then the module allowlist and the size budget. Read these before starting:
+- The restore destination check is the **service's** now (NB-3013, all four
+  ops that write to a caller-named path). P3's scoped restore replaces it.
+- The §5 checks are Go tests in `console/` (module allowlist, no local IO),
+  run by Unit Tests and `scripts/local-gates.sh`. The size budget is
+  11,900,000 bytes in Build GUI, from C3's measurement (local 11,463,680).
+  CI's first run of the budget step prints the shipped number: if it is far
+  from about 11.64 MB, tighten the budget to it.
+- The service lints with `unused` on. The windows view of the service has
+  never been linted (33 findings, all in windows-only engine files): a
+  separate change.
 
-- The **size budget** in the spec (11.2 MB) predates C2. C2 measured the
-  console at 11,817,472 bytes stripped in a local build (§10 method; the
-  shipped build runs about 1.5% larger). Set the budget from C3's own
-  measurement. CI's "Console size (print only)" step in Build GUI prints the
-  shipped number in the job log and step summary; the job log is not readable
-  from a build sandbox, so ask CJ for it or measure locally.
-- `restore_bindings.go` still calls `security.ValidatePath` on restore
-  destinations. The service does not check `..` there (finding F1; P3's scoped
-  restore). Do not drop the console's check in C3 without moving it into the
-  service.
-- **P5 is unblocked** (it depended only on C2) and can be built in either
-  order with C3.
+**Next: V4-LOCAL-API P1** (named pipe, caller identity, WebView2 install in the
+service, budget to 9.6 MB). **P5 is unblocked** and can go in either order.
 
 **Why they exist.** CJ: the GUI should contain nothing except what talks to
 the service. Measured at `835da16`: the GUI build still compiles 70 files
@@ -65,7 +60,7 @@ down. CI's two "no engine" checks are denylists and never saw it.
 |---|---|---|
 | C1 (merged, #30) | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
 | C2 (merged, #31) | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
-| C3 | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
+| C3 (built, in review) | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
 | P1 | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
 | P2 | Route table: settings and job writes require an elevated admin | P1 |
 | P3 | Access-filtered browse, scoped restore, picker in the service | P2 |
@@ -93,7 +88,8 @@ dev.231. CI fails if the cabinet is not LZX or a non-WOFF2 font reaches `dist`.
 - Go 1.26.9 (the CI pin) builds from source in a few minutes: clone
   `golang/go` at the tag, `GOROOT_BOOTSTRAP=/usr/local/go ./make.bash`.
 - `GOOS=windows CGO_ENABLED=0 go build -trimpath -tags desktop,wv2runtime.download,production`
-  in `gui/` reproduces the shipped GUI within 1.5% of its size. An unstripped
+  in `console/` (in `gui/` before C3) reproduces the shipped console within
+  1.5% of its size. An unstripped
   build plus `go tool nm -size` attributes size by package;
   `-ldflags=-dumpdep` gives dependency edges, but it does not record edges kept
   alive by reflection, so confirm reachability in the symbol table.
@@ -707,21 +703,19 @@ builds before it was closed.
   release assets, not `go.dev/dl` — that redirects to a host outside the
   allowlist. Fetch the asset through the API with
   `-H "Accept: application/octet-stream"`.
-- Building `gui/` needs `replace` directives in a **copy** of `go.work`
-  pointing `golang.org/x/*` and `gopkg.in/*` at their GitHub mirrors; never
-  commit those. `git.sr.ht/~jackmordaunt/go-toast` has no mirror, but nothing
-  imports it, so a two-line stub module satisfies the graph.
-- Verify **all four views**: `GOOS={linux,windows} go vet [-tags service]
-  ./gui/...`. A symbol can exist in three and be missing from the fourth.
+- **`scripts/local-gates.sh`** (`make gates`) is the gate set: gofmt, the
+  three compile views, the lint passes, gosec, every module's tests.
+- Since V4-CONSOLE C3 the client is **two programs in two modules**: the
+  service (`gui/`, no build tag) and the console (`console/`). The three
+  compile views are `gui` for linux and windows, and `console` for windows
+  with `-tags desktop,wv2runtime.download,production`.
 - `gui/api` and `controlplane` are dependency-free modules: `GOWORK=off
   GOPROXY=off go test -race .` works directly in the real tree.
-- **golangci-lint runs twice**, matching CI: the default pass, then
-  `--build-tags=service --disable=unused`. `unused` is disabled in the second
-  because it reports symbols with no visible caller, which only has a
-  meaningful answer where every caller is visible.
-- The frontend builds with `npm install && npm run build` (`npm ci` fails on a
-  lock mismatch), and `gui/frontend/dist/` **is tracked** — rebuild and commit
-  it.
+- **golangci-lint**: one pass over `gui/` **with `unused`** (every caller is
+  visible now that the tag is gone and `service.go` has no OS constraint),
+  and one over `console/` with `GOOS=windows`, the view it ships in.
+- The frontend lives in `console/frontend`: `npm ci && npm run i18n-audit &&
+  npm test && npm run build`. `dist/` **is tracked** — rebuild and commit it.
 - **gitleaks** runs locally from its GitHub release tarball. Run it before
   pushing anything containing a credential-shaped string; `.gitleaksignore`
   explains why fixtures are generated at run time rather than written as

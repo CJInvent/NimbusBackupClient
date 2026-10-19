@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 import (
@@ -26,11 +23,9 @@ import (
 // A second, differently-shaped mechanism for the same handoff would be a thing
 // to keep in step forever.
 //
-// This file carries no build tag, so the service build and the GUI build get
-// the same glue. Only the service ever holds a registry (SetRunRegistry is
-// called from service.go); in the GUI build runRegistry stays nil and every
-// function here is a no-op, which is the correct behaviour for a front end
-// that is on its way to having no engine at all.
+// The registry is installed by service.go (SetRunRegistry). Until it is (a
+// test, or the moments before the service starts) runRegistry is nil and
+// every function here is a no-op.
 
 var (
 	runRegistryMu sync.RWMutex

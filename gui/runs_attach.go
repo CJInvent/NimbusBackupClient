@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 import "github.com/tizbac/proxmoxbackupclient_go/gui/api"
@@ -9,10 +6,8 @@ import "github.com/tizbac/proxmoxbackupclient_go/gui/api"
 // service links a backup engine (docs/V4-PIPELINE.md §3.1), so only the
 // service has hooks to attach.
 //
-// Registering a run is NOT service-only, and stays in runs_glue.go. The
-// scheduler compiles into both builds because a control-plane run_backup
-// command can be delivered to either, and in the GUI build it asks the
-// service to do the work.
+// Registering a run lives in runs_glue.go, beside the scheduler and the
+// control-plane run_backup command that open runs.
 
 // attachRunRegistry wires the engine's hooks into the registry and returns a
 // finalizer to call once the engine returns.

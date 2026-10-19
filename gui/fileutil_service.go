@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // fileutil_service.go — packaging a staged extraction, service side.

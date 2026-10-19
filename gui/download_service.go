@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // download_service.go — "Download" from the Browse tab, executed in the
@@ -36,7 +33,7 @@ import (
 // bar and packaging the rest, the same split the console drew when it ran this
 // itself. The numbers were chosen from how long each phase actually takes;
 // they are kept rather than re-derived so the bar behaves as users expect.
-func (a *App) downloadSelection(p DownloadParams, progress api.RestoreProgress) error {
+func (a *App) downloadSelection(p api.DownloadParams, progress api.RestoreProgress) error {
 	writeInfoLog(fmt.Sprintf("downloadSelection(pbs=%s, backup=%s, includes=%d, dest=%s, zip=%v, needed=%d)",
 		p.PBSID, p.BackupID, len(p.IncludePaths), p.DestPath, p.AsZip, p.NeededBytes))
 
@@ -91,7 +88,7 @@ func (a *App) downloadSelection(p DownloadParams, progress api.RestoreProgress) 
 	defer func() { _ = os.RemoveAll(staging) }()
 
 	opts.DestPath = staging
-	opts.Mode = RestoreModeAlternateAbs
+	opts.Mode = api.RestoreModeAlternateAbs
 	opts.IncludePaths = p.IncludePaths
 	opts.Overwrite = true
 	opts.RestoreTimestamps = true

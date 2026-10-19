@@ -1,11 +1,8 @@
-//go:build service
-// +build service
-
 package main
 
 // The run history file's glue (runs_store_service.go) against a real
 // ProgramData directory. Named TestRunHistory* so the Windows smoke step's
-// `-tags service` run picks them up; CI's Linux unit job runs them too.
+// -run filter picks them up; CI's Linux unit job runs them too.
 
 import (
 	"os"

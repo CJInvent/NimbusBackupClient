@@ -17,10 +17,8 @@ const (
 	errInvalidURL        = "[NB-1005] invalid URL"
 	errNoPBSServer       = "[NB-1006] no PBS server specified and no default server"
 	errFingerprintSave   = "[NB-1010] cannot save fingerprint (config.json not writable?)"
-	// The connection test failed because the server's certificate did not
-	// verify and no fingerprint is pinned: the case the setup screen offers to
-	// resolve by pinning one (trust on first use).
-	errCertUntrusted = "[NB-1011] the server's certificate is not trusted and no fingerprint is pinned"
+	// NB-1011 (certificate not trusted, no fingerprint pinned) is the
+	// console's: it reads the service's cert_untrusted flag (console/errcodes.go).
 
 	errBackupFailedSeeLog = "[NB-2001] Backup failed - see backup log in C:\\ProgramData\\NimbusBackup"
 	errDiskRequired       = "[NB-2002] at least one physical disk required"
@@ -31,9 +29,8 @@ const (
 	errDirRequired        = "[NB-2008] at least one backup directory required"
 	errBackupStopped      = "[NB-2009] Backup stopped - the partial backup was discarded and the snapshot released"
 	errNoBackupRunning    = "[NB-2010] no backup is running"
-	// The GUI no longer executes backups at all, so an unreachable service
-	// is a hard stop rather than a reason to fall back to running one here.
-	errServiceUnavailable = "[NB-2011] the Nimbus service is not reachable - backups run in the service; check that it is started"
+	// NB-2011 (the service is not reachable) is the console's own
+	// (console/errcodes.go): only a client can fail to reach the service.
 	// A job named a drive this machine cannot resolve to a disk. Distinct
 	// from NB-2002, which means the job named no disk at all: this one means
 	// the operator asked for something specific and it is not here.
@@ -53,5 +50,10 @@ const (
 	errInPlaceOSMismatch  = "[NB-3010] in-place restore impossible: backup was made on a different OS"
 	errReadHostname       = "[NB-3011] cannot read local hostname"
 	errSearchTermRequired = "[NB-3012] search term required"
+	// A restore destination security.ValidatePath refuses (a ".." or a NUL).
+	// Checked by the service, the process that writes there as SYSTEM; the
+	// console checked it alone until V4-CONSOLE C3, where any other caller of
+	// the local API skipped it.
+	errDestPathInvalid    = "[NB-3013] destination path refused"
 	errServerNameRequired = "[NB-1008] PBS server name required"
 )

@@ -1,11 +1,9 @@
-//go:build service
-// +build service
-
 package main
 
 import (
 	"errors"
 	"fmt"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"regexp"
 	"sort"
 	"strings"
@@ -47,7 +45,7 @@ type SearchOptions struct {
 
 	HostPrefix      string
 	Query           string
-	Mode            SearchMatchMode
+	Mode            api.SearchMatchMode
 	From            time.Time
 	To              time.Time
 	AssembleMissing bool
@@ -87,7 +85,7 @@ func compileGlob(glob string) (*regexp.Regexp, error) {
 	return regexp.Compile(b.String())
 }
 
-func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
+func buildMatcher(mode api.SearchMatchMode, query string) (entryMatcher, error) {
 	baseName := func(path string) string {
 		if i := strings.LastIndex(path, "/"); i >= 0 {
 			return path[i+1:]
@@ -96,7 +94,7 @@ func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
 	}
 
 	switch mode {
-	case SearchModeRegex:
+	case api.SearchModeRegex:
 		// Prepend (?i) so matching is case-insensitive like the other modes;
 		// a user who explicitly wants case-sensitivity can override with (?-i).
 		re, err := regexp.Compile("(?i)" + query)
@@ -105,7 +103,7 @@ func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
 		}
 		return func(path string) bool { return re.MatchString(baseName(path)) }, nil
 
-	case SearchModePath:
+	case api.SearchModePath:
 		if hasGlob(query) {
 			re, err := compileGlob(query)
 			if err != nil {
@@ -116,7 +114,7 @@ func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
 		q := strings.ToLower(query)
 		return func(path string) bool { return strings.Contains(strings.ToLower(path), q) }, nil
 
-	case SearchModeName, "":
+	case api.SearchModeName, "":
 		if hasGlob(query) {
 			re, err := compileGlob(query)
 			if err != nil {
@@ -135,7 +133,7 @@ func buildMatcher(mode SearchMatchMode, query string) (entryMatcher, error) {
 // joinOriginPath reconstructs the absolute on-disk location an archive entry
 // came from, using the snapshot's meta sidecar. Returns "" when no usable meta
 // is available (legacy snapshot).
-func joinOriginPath(meta *BackupMeta, archivePath string) string {
+func joinOriginPath(meta *api.BackupMeta, archivePath string) string {
 	if meta == nil || meta.OriginalPath == "" {
 		return ""
 	}
@@ -154,7 +152,7 @@ func joinOriginPath(meta *BackupMeta, archivePath string) string {
 // within the requested period and returns entries matching Query. Cached
 // listings are searched for free; uncached snapshots are assembled only when
 // AssembleMissing is set. Results are newest-snapshot-first.
-func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
+func SearchFilesInline(opts SearchOptions) (*api.SearchResult, error) {
 	// THE WORST OF THE THREE MISSING GATES. Search does not go through the
 	// gated lister — it calls assembleSnapshotTree directly (below), so with
 	// file restore disabled a console could still enumerate names, paths,
@@ -207,7 +205,7 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 	writeBackupLog(fmt.Sprintf("Search: prefix=%q query=%q mode=%s period=[%s..%s] assembleMissing=%v -> %d snapshot(s) in range",
 		opts.HostPrefix, opts.Query, opts.Mode, fmtTime(opts.From), fmtTime(opts.To), opts.AssembleMissing, len(targets)))
 
-	result := &SearchResult{Hits: make([]SearchHit, 0, 64), SnapshotsInRange: len(targets)}
+	result := &api.SearchResult{Hits: make([]api.SearchHit, 0, 64), SnapshotsInRange: len(targets)}
 	denom := len(targets)
 	if denom == 0 {
 		denom = 1
@@ -237,8 +235,8 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 		}
 		cacheKey := buildSnapshotCacheKey(ropts)
 
-		var entries []SnapshotEntry
-		var meta *BackupMeta
+		var entries []api.SnapshotEntry
+		var meta *api.BackupMeta
 		fromCache := false
 
 		if cached, ok := loadSnapshotTreeCache(cacheKey); ok {
@@ -280,7 +278,7 @@ func SearchFilesInline(opts SearchOptions) (*SearchResult, error) {
 			if !matcher(e.Path) {
 				continue
 			}
-			result.Hits = append(result.Hits, SearchHit{
+			result.Hits = append(result.Hits, api.SearchHit{
 				BackupID:     tg.backupID,
 				SnapshotTime: tg.at.Unix(),
 				Path:         e.Path,

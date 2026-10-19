@@ -27,7 +27,7 @@ func TestEveryRestoreOpReportsItself(t *testing.T) {
 	// browse, a listing or a search reads without extracting and is not a
 	// restore; a download is deliberately not in this list either, and if that
 	// changes it should change here in front of this comment.
-	for _, op := range []string{"opRestore", "opVolumeFileRestore"} {
+	for _, op := range []string{"api.RestoreOpRestore", "api.RestoreOpVolumeFileRestore"} {
 		idx := strings.Index(src, "case "+op+":")
 		if idx < 0 {
 			t.Fatalf("restore_service.go has no case for %s; this test is pinning nothing", op)

@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // configView is the configuration as the console may see it: what GET /status

@@ -1,33 +1,22 @@
 package main
 
-// fileutil_core.go — the free-space evaluation, used by BOTH processes.
-//
-// The console pre-flights it for its warning dialog; the service enforces it
-// before writing a byte (download_service.go). Both need the same arithmetic,
-// so it lives untagged.
+// fileutil_core.go — the free-space evaluation behind restore op "space" and
+// the download block (download_service.go). The service is the process that
+// writes the bytes, so it is the one that measures the drive; the console asks
+// it (V4-CONSOLE C1) and no longer carries a copy.
 //
 // The PACKAGING helpers that used to sit here — zip a directory, find the one
 // staged file, copy it out — moved to fileutil_service.go with the restore
-// engine. Nothing in the console packages anything any more.
+// engine.
 
-// SpaceCheck is the result of a free-space evaluation for a pending write of
-// neededBytes onto the drive holding path.
-type SpaceCheck struct {
-	Path          string  `json:"path"`
-	FreeBytes     uint64  `json:"free_bytes"`
-	TotalBytes    uint64  `json:"total_bytes"`
-	NeededBytes   uint64  `json:"needed_bytes"`
-	Fits          bool    `json:"fits"`    // needed <= free
-	Warn90        bool    `json:"warn_90"` // fits, but usage after >= 90%
-	UsageAfterPct float64 `json:"usage_after_pct"`
-}
+import "github.com/tizbac/proxmoxbackupclient_go/gui/api"
 
-func evaluateSpace(path string, needed uint64) (SpaceCheck, error) {
+func evaluateSpace(path string, needed uint64) (api.SpaceCheck, error) {
 	free, total, err := driveSpace(path)
 	if err != nil {
-		return SpaceCheck{}, err
+		return api.SpaceCheck{}, err
 	}
-	sc := SpaceCheck{Path: path, FreeBytes: free, TotalBytes: total, NeededBytes: needed}
+	sc := api.SpaceCheck{Path: path, FreeBytes: free, TotalBytes: total, NeededBytes: needed}
 	sc.Fits = needed <= free
 	if total > 0 {
 		// used_after = total - free + needed. Guard the arithmetic: all

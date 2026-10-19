@@ -12,8 +12,8 @@ package main
 // with one caller that someone will forget, and the CLI already bypasses all
 // policy for the same reason — a second path that assembles its own backup.
 // That entry point and everything only it reaches live in
-// backupkey_gate_service.go, tagged to match their caller; this file holds the
-// parts the GUI build also needs.
+// backupkey_gate_service.go, beside their caller (they were split out when the
+// pipeline was service-tagged; the tag went in V4-CONSOLE C3).
 //
 // THE STATE THAT IS NOT ON THE WIRE. The server advertises the key on every
 // check-in, so the obvious implementation reads the last advertisement and

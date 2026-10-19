@@ -9,6 +9,8 @@ import (
 
 	"pbscommon"
 	"security"
+
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
 type Config struct {
@@ -114,43 +116,28 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// getAPITokenPath is the shared local-API auth token file (H-01), placed next to
-// config.json so the GUI and the privileged service resolve the same path.
+// getAPITokenPath is the shared local-API auth token file (H-01). The path is
+// api.TokenPath, the one definition the console resolves too; the directory is
+// created here, by the service, before anything writes into it.
 func getAPITokenPath() string {
-	dir, err := getConfigDir()
-	if err != nil || dir == "" {
-		return "nimbus-api-token"
-	}
-	return filepath.Join(dir, "api-token")
+	// The error is not lost: writing the token into a directory that could
+	// not be created fails, and that failure is api.EnsureToken's to report.
+	_, _ = getConfigDir()
+	return api.TokenPath()
 }
 
 // getConfigDir returns the application's data directory, creating it if needed.
-// On Windows it lives under ProgramData (shared GUI/Service); on Unix it's
-// ~/.proxmox-backup-guardian. Used as the parent for config.json, the restore
+// Where it is, is api.DataDir. Used as the parent for config.json, the restore
 // cache, and any other persistent state.
 func getConfigDir() (string, error) {
-	var configDir string
-
-	if programData := os.Getenv("ProgramData"); programData != "" {
-		// Windows: C:\ProgramData\NimbusBackup (accessible by both user and LocalSystem)
-		configDir = filepath.Join(programData, "NimbusBackup")
-	} else if systemDrive := os.Getenv("SystemDrive"); systemDrive != "" {
-		// Windows fallback: if ProgramData not set, use C:\ProgramData hardcoded
-		// This ensures service config is accessible even if env var is missing
-		configDir = filepath.Join(systemDrive, "ProgramData", "NimbusBackup")
-	} else {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		configDir = filepath.Join(homeDir, ".proxmox-backup-guardian")
+	configDir, err := api.DataDir()
+	if err != nil {
+		return "", err
 	}
-
 	// #nosec G703 -- ProgramData is a trusted Windows system environment variable, not user input
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return "", err
 	}
-
 	return configDir, nil
 }
 

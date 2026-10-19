@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // zipstream_core.go — STREAMING zip packaging for image-backup selections.

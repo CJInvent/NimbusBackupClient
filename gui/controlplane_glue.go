@@ -73,8 +73,8 @@ func (a *App) StartControlPlane() {
 	// the first check-in completes — and so an agent that cannot reach the
 	// server at all still knows what it was last told to run.
 	//
-	// Loaded HERE, by whoever hosts the agent, rather than at service
-	// start: the GUI build can host one too (SaveControlPlaneFromMap ->
+	// Loaded HERE, where the agent starts, rather than at service start:
+	// the agent also restarts (SaveControlPlaneFromMap ->
 	// RestartControlPlane), and the cache is only meaningful where the
 	// agent that fills it lives.
 	loadManagedJobs()
@@ -165,7 +165,7 @@ func (a *App) StartControlPlane() {
 		HeldPBSCredential: a.heldPBSCredentialReport,
 		// V4-RUN-AUDIT §4: queued WARN/ERROR lines ride the check-in, the
 		// server's ack trims the queue, and the server's per-machine debug
-		// deadline sets this process's level. No queue (GUI build, or a
+		// deadline sets this process's level. No queue (a test, or a
 		// process that never enabled one) means no batch.
 		PendingLogs: func() *controlplane.LogBatch {
 			if q := currentLogQueue(); q != nil {

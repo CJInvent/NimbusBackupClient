@@ -1,12 +1,7 @@
-//go:build windows && service
-// +build windows,service
-
 package main
 
 import (
 	"fmt"
-	"log"
-	"os"
 	"time"
 
 	"controlplane"
@@ -16,7 +11,9 @@ import (
 	"snapshot"
 )
 
-// NimbusService wraps the application for Windows Service execution
+// NimbusService wraps the application for service execution (the Windows SCM
+// in production; kardianos/service is portable, so the Linux view is a whole
+// program too, which is what lets the lint see every caller)
 type NimbusService struct {
 	app       *App
 	apiServer *api.Server
@@ -37,8 +34,7 @@ func (s *NimbusService) run() {
 
 	// This process IS the service: it executes backups and restores itself.
 	s.app = &App{
-		config:           LoadConfig(),
-		isServiceProcess: true,
+		config: LoadConfig(),
 	}
 
 	// Load configuration (service will read config from file when needed)
@@ -196,43 +192,6 @@ func (s *NimbusService) Stop(svc service.Service) error {
 
 	writeInfoLog("NimbusBackup service stopped")
 	return nil
-}
-
-// RunAsService starts the application as a Windows Service
-func RunAsService() {
-	writeInfoLog("Attempting to run as Windows Service")
-
-	svcConfig := &service.Config{
-		Name:        "NimbusBackup",
-		DisplayName: "Nimbus Backup Service",
-		Description: "Executes scheduled backups to Proxmox Backup Server with VSS support",
-	}
-
-	nimbusSvc := &NimbusService{}
-	s, err := service.New(nimbusSvc, svcConfig)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	logger, err := s.Logger(nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = s.Run()
-	if err != nil {
-		logger.Error(err)
-	}
-}
-
-// IsServiceMode checks if running in service mode
-func IsServiceMode() bool {
-	for _, arg := range os.Args {
-		if arg == "--service" {
-			return true
-		}
-	}
-	return false
 }
 
 // interruptActiveRunsForStop is R7 (F-75) for the service's stop path: the

@@ -78,22 +78,22 @@ const RightFileRestore = "file_restore"
 // any handler sees it, so forgetting to declare an op fails closed.
 var restoreOps = []RestoreOp{
 	// --- archive (directory backup) ---
-	{"snapshots", OpQuery, RightFileRestore, "list the snapshots of a backup group"},
-	{"contents", OpQuery, RightFileRestore, "list a snapshot's file tree"},
-	{"meta", OpQuery, RightFileRestore, "read a snapshot's .nimbus_backup_meta.json sidecar"},
-	{"restore", OpJob, RightFileRestore, "extract a snapshot, or a selection from it, to disk"},
-	{"download", OpJob, RightFileRestore, "extract a selection and package it at a chosen path"},
-	{"search", OpJob, RightFileRestore, "search file names and paths across snapshots"},
-	{"cancel-search", OpControl, RightFileRestore, "stop an in-flight search"},
-	{"space", OpQuery, RightFileRestore, "check the free space for a download, on the drive the service will write to"},
+	{RestoreOpSnapshots, OpQuery, RightFileRestore, "list the snapshots of a backup group"},
+	{RestoreOpContents, OpQuery, RightFileRestore, "list a snapshot's file tree"},
+	{RestoreOpMeta, OpQuery, RightFileRestore, "read a snapshot's .nimbus_backup_meta.json sidecar"},
+	{RestoreOpRestore, OpJob, RightFileRestore, "extract a snapshot, or a selection from it, to disk"},
+	{RestoreOpDownload, OpJob, RightFileRestore, "extract a selection and package it at a chosen path"},
+	{RestoreOpSearch, OpJob, RightFileRestore, "search file names and paths across snapshots"},
+	{RestoreOpCancelSearch, OpControl, RightFileRestore, "stop an in-flight search"},
+	{RestoreOpSpace, OpQuery, RightFileRestore, "check the free space for a download, on the drive the service will write to"},
 
 	// --- volume backup: FILES out of a stored disk image ---
-	{"volume-partitions", OpQuery, RightFileRestore, "enumerate the partitions of a stored disk image"},
-	{"volume-files", OpQuery, RightFileRestore, "scan a partition's file table and list its root"},
-	{"volume-directory", OpQuery, RightFileRestore, "list one directory from a scanned partition"},
-	{"volume-download", OpJob, RightFileRestore, "package a selection out of a partition as a zip"},
-	{"volume-file-restore", OpJob, RightFileRestore, "restore a selection out of a partition to a folder"},
-	{"cancel-volume-file-restore", OpControl, RightFileRestore, "stop an in-flight volume-file download or restore"},
+	{RestoreOpVolumePartitions, OpQuery, RightFileRestore, "enumerate the partitions of a stored disk image"},
+	{RestoreOpVolumeFiles, OpQuery, RightFileRestore, "scan a partition's file table and list its root"},
+	{RestoreOpVolumeDirectory, OpQuery, RightFileRestore, "list one directory from a scanned partition"},
+	{RestoreOpVolumeDownload, OpJob, RightFileRestore, "package a selection out of a partition as a zip"},
+	{RestoreOpVolumeFileRestore, OpJob, RightFileRestore, "restore a selection out of a partition to a folder"},
+	{RestoreOpCancelVolumeFileRestore, OpControl, RightFileRestore, "stop an in-flight volume-file download or restore"},
 }
 
 // lookupRestoreOp finds a declared op by name.
@@ -222,9 +222,9 @@ func (s *Server) restoreGate(w http.ResponseWriter, name string, want RestoreOpK
 
 // restoreHandler returns the engine-owning handler, or writes 501.
 //
-// 501 rather than 500: a GUI build's own api.Server has no engine behind it
-// and never will. "Not implemented here" is the truth and it is diagnosable;
-// "internal error" would send someone looking for a crash.
+// 501 rather than 500: a server built over a handler with no engine (a test's)
+// has none behind it. "Not implemented here" is the truth and it is
+// diagnosable; "internal error" would send someone looking for a crash.
 func (s *Server) restoreHandler(w http.ResponseWriter) (RestoreHandler, bool) {
 	h, ok := s.app.(RestoreHandler)
 	if !ok {

@@ -156,13 +156,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Check for available updates
-        working-directory: gui
         env:
           GOWORK: off
         run: |
-          echo "📦 Current dependencies and available updates:"
-          echo "================================================"
-          go list -u -m all | grep '\[' || echo "✅ All dependencies are up to date!"
+          # The two programs the MSI ships: the service (gui/) and the
+          # console (console/), each its own module since V4-CONSOLE C3.
+          for m in gui console; do
+            echo "📦 $m: current dependencies and available updates:"
+            echo "================================================"
+            ( cd "$m" && go list -u -m all | grep '\[' ) || echo "✅ All dependencies are up to date!"
+          done
           echo ""
           echo "Legend: module current-version [latest-version]"
           echo "No brackets = already at latest version"
@@ -186,7 +189,7 @@ jobs:
           set -uo pipefail
           # Discovered, not listed: a module added to the repository is gated
           # the moment it exists.
-          mapfile -t modules < <(find . -name go.mod -not -path './gui/frontend/node_modules/*' -printf '%h\n' | sort)
+          mapfile -t modules < <(find . -name go.mod -not -path './console/frontend/node_modules/*' -printf '%h\n' | sort)
           if [ ${#modules[@]} -eq 0 ]; then
             echo "::error::no Go modules found - the discovery is wrong, not the repository"
             exit 1
@@ -218,35 +221,35 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: gui/frontend/package-lock.json
+          cache-dependency-path: console/frontend/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: gui/frontend
+        working-directory: console/frontend
         run: npm ci
 
       - name: i18n audit (key parity + hardcoded strings)
-        working-directory: gui/frontend
+        working-directory: console/frontend
         run: npm run i18n-audit
 
       # GUI audit S2: every screen component rendered from a fixture and
       # compared with its text snapshot; no screen calls the service; no
       # JavaScript file over 250 lines.
       - name: Screen render tests
-        working-directory: gui/frontend
+        working-directory: console/frontend
         run: npm test
 
       - name: Frontend build (full parse of the JSX tree)
-        working-directory: gui/frontend
+        working-directory: console/frontend
         run: npm run build
 
-  # S2 — four-view compile smoke. gui/ code is split by TWO orthogonal build
-  # constraints (service/!service and windows/!windows), so a symbol must exist
-  # in all four combinations. Nothing else checks them all: golangci-lint sees
-  # only linux+!service, `go test` the same, and the Windows GUI/service builds
-  # run 20 minutes later behind other gates. linux+service was never checked at
-  # all. This is the exact failure class that broke the v0.2.150 tag
-  # (snapshot.LogFn declared in a windows-only file, referenced from shared
-  # code), and it costs seconds here.
+  # S2 — compile views. Until V4-CONSOLE C3 gui/ was one package built twice,
+  # split by the `service` tag and by windows/!windows, so a symbol had to
+  # exist in four combinations. The console is its own module now and the tag
+  # is gone, so the real programs are three: the service for linux (what lint
+  # and `go test` see) and for windows (what ships), and the console for
+  # windows (the only platform it ships for). This is the failure class that
+  # broke the v0.2.150 tag (snapshot.LogFn declared in a windows-only file,
+  # referenced from shared code), and it costs seconds here.
   compile-views:
     name: Compile Views (S2)
     runs-on: ubuntu-latest
@@ -271,7 +274,7 @@ jobs:
       # compile-view bug waiting to happen.
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l $(find . -name '*.go' -not -path './gui/frontend/node_modules/*'))
+          unformatted=$(gofmt -l $(find . -name '*.go' -not -path './console/frontend/node_modules/*'))
           if [ -n "$unformatted" ]; then
             echo "$unformatted" | while read -r f; do echo "::error::not gofmt-clean: $f"; done
             gofmt -d $unformatted | head -200
@@ -280,39 +283,28 @@ jobs:
           echo "all Go files are gofmt-clean"
 
       - name: Vet all real compile views
-        working-directory: gui
         env:
           GOWORK: off
         run: |
-          go mod download
           fail=0
           run_view() {
-            goos="$1"; tags="$2"
-            label="GOOS=$goos tags=${tags:-none}"
+            dir="$1"; goos="$2"; tags="$3"
+            label="$dir GOOS=$goos tags=${tags:-none}"
             echo "::group::$label"
-            if [ "$goos" = "windows" ]; then export CGO_ENABLED=0; else export CGO_ENABLED=1; fi
-            if [ -z "$tags" ]; then
-              GOOS="$goos" go vet ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
+            if ( cd "$dir" && go mod download && CGO_ENABLED=0 GOOS="$goos" go vet ${tags:+-tags "$tags"} ./... ); then
+              echo "OK   $label"
             else
-              GOOS="$goos" go vet -tags "$tags" ./... && echo "OK   $label" || { echo "::error::vet failed for $label"; fail=1; }
+              echo "::error::vet failed for $label"; fail=1
             fi
             echo "::endgroup::"
           }
-          # linux+default is what golangci-lint and `go test` see.
-          run_view linux ""
-          # windows+default is the shipped GUI; windows+service is the shipped
-          # service. Neither was checked until this job, except indirectly by
-          # the Windows build 20 minutes later behind other gates.
-          run_view windows ""
-          run_view windows service
-          # linux+service is not a SHIPPABLE view — the service is a Windows
-          # service, so service.go and service_main.go are both
-          # `windows && service` and that combination has no service host and
-          # no main(). It is still worth compiling, because it is the view the
-          # service-build lint pass in the `security` job uses, and until
-          # those two files carried the `windows` constraint it did not even
-          # typecheck.
-          run_view linux service
+          # The service, as lint and the unit tests see it.
+          run_view gui linux ""
+          # The service as shipped.
+          run_view gui windows ""
+          # The console as shipped: with the tags `wails build` passes, which
+          # pull in Wails' desktop code that a plain vet would not compile.
+          run_view console windows "desktop,wv2runtime.download,production"
           exit $fail
 
       # NimbusControl builds its volume reader from these two packages, for
@@ -363,6 +355,16 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           cd gui && gosec -severity high -confidence high ./...
 
+      # The console's own module (V4-CONSOLE C3). Its windows view is the one
+      # that ships, and it is the one with the tray and the picker in it.
+      - name: Run gosec (console module)
+        env:
+          GOWORK: off
+          GOOS: windows
+          CGO_ENABLED: '0'
+        run: |
+          cd console && go mod download && gosec -severity high -confidence high ./...
+
       - name: Run gosec (controlplane module)
         env:
           GOWORK: off
@@ -382,7 +384,13 @@ jobs:
           fi
           rm -f gosec.txt
 
-      - name: Run golangci-lint
+      # One pass over the service, WITH `unused`. Until V4-CONSOLE C3 the
+      # service was the `service` build of a package shared with the GUI, and
+      # its lint pass had to disable `unused`: callers on the other side of the
+      # tag were invisible, so every helper either build owned looked dead. The
+      # tag is gone and service.go has no OS constraint, so this view sees
+      # every caller, and a symbol nothing calls is a finding again.
+      - name: Run golangci-lint (service)
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
@@ -391,25 +399,18 @@ jobs:
         env:
           GOWORK: off
 
-      # The default pass above lints the GUI build. Nothing was linting the
-      # SERVICE build, which is the one that runs on every managed machine —
-      # and it is where most of the code now lives (docs/V4-PIPELINE.md §3.1).
-      # A dead build-tagged seam survived several commits because of exactly
-      # this gap.
-      #
-      # `unused` is disabled here, and only here. It reports symbols with no
-      # visible caller, which is a question that only has a meaningful answer
-      # in a build configuration where every caller IS visible. The service
-      # build excludes GUI-only files, so `unused` would flag every helper the
-      # front end owns. The default pass keeps `unused` and covers that.
-      - name: Run golangci-lint (service build)
+      # The console in the view it ships in: tray.go, storage_tray_icon.go
+      # and the picker's drive helpers exist only for windows.
+      - name: Run golangci-lint (console)
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
-          working-directory: gui
-          args: --timeout=5m --build-tags=service --disable=unused
+          working-directory: console
+          args: --timeout=5m
         env:
           GOWORK: off
+          GOOS: windows
+          CGO_ENABLED: '0'
 
   # Secret scanning. The SERVER has had this since its Phase-2 work; this
   # repository did not, which is the wrong way round — it is the one that
@@ -491,12 +492,22 @@ jobs:
         env:
           GOWORK: off
         run: |
+          # One run: since V4-CONSOLE C3 there is no `service` build to test
+          # separately. gui/ IS the service.
           go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee ../unit-gui.log
-          # The service build's tests too. Most of the client is service-tagged
-          # (docs/V4-PIPELINE.md, docs/V4-CONSOLE.md), and until V4-CONSOLE C1
-          # its tests ran only in the Windows smoke job, behind a -run filter
-          # that picked a handful of them by name.
-          go test -v -race -tags service ./... 2>&1 | tee -a ../unit-gui.log
+
+      # The console's own module: its bindings against a recording fake
+      # service, the bound surface against bindings.js, the module allowlist
+      # (which runs `go list` for the shipped windows build) and the
+      # no-local-IO source test (docs/V4-CONSOLE.md §5).
+      - name: Run tests (console module)
+        working-directory: console
+        shell: bash
+        env:
+          GOWORK: off
+        run: |
+          go mod download
+          go test -v -race ./... 2>&1 | tee ../unit-console.log
 
       # The job log is not readable from where the build sessions work (the
       # API they have returns a check's conclusion, not its log), so a failure
@@ -643,8 +654,7 @@ jobs:
         env:
           GOWORK: off
         run: |
-          go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|VolumeMountPaths|PBSReachability|Storage)' ./...
-          go test -tags service -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage|ServiceAPI)' ./...
+          go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage|ServiceAPI)' ./...
 
       # S10: create a real VSS snapshot through the production code path and
       # confirm the 0.2.150 diagnostics actually emit.
@@ -741,7 +751,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: gui/frontend/package-lock.json
+          cache-dependency-path: console/frontend/package-lock.json
 
       - name: Install dependencies
         run: |
@@ -767,7 +777,7 @@ jobs:
         run: |
           # Which version MVS actually selects, rather than what a stale
           # `// indirect` line in a go.mod claims.
-          for m in gui pbscommon; do
+          for m in gui console pbscommon; do
             echo "::group::$m selected versions"
             ( cd "$m" && go mod download >/dev/null 2>&1 || true
               go list -m golang.org/x/net golang.org/x/crypto golang.org/x/sys 2>/dev/null || true )
@@ -778,14 +788,18 @@ jobs:
         env:
           GOWORK: off
         run: |
-          modules="gui pbscommon controlplane imagebrowse snapshot clientcommon pkg/retry pkg/security gui/api"
+          modules="gui console pbscommon controlplane imagebrowse snapshot clientcommon pkg/retry pkg/security gui/api"
           fail=0
           for m in $modules; do
             echo "::group::govulncheck $m"
+            # The console ships only for Windows, and its Windows view is the
+            # one that links Wails' desktop code and the tray: scan that one.
+            goos=""; tags=""
+            if [ "$m" = "console" ]; then goos=windows; tags="-tags=desktop,wv2runtime.download,production"; fi
             # Must stay an `if` CONDITION: Actions runs steps under `set -e`,
             # so capturing $? from a failing command aborts the step before the
             # reporting below can run. govulncheck exits 3 on findings.
-            if ( cd "$m" && go mod download >/dev/null 2>&1; govulncheck ./... ) > vuln.txt 2>&1; then
+            if ( cd "$m" && go mod download >/dev/null 2>&1; GOOS="${goos:-$(go env GOOS)}" govulncheck $tags ./... ) > vuln.txt 2>&1; then
               cat vuln.txt
               echo "OK   $m"
             else
@@ -811,7 +825,7 @@ jobs:
       # at which point this becomes blocking.
       - name: npm audit (advisory)
         continue-on-error: true
-        working-directory: gui/frontend
+        working-directory: console/frontend
         run: |
           npm ci
           npm audit --audit-level=high
@@ -919,7 +933,7 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: Install Frontend Dependencies
-        working-directory: gui/frontend
+        working-directory: console/frontend
         run: npm install
 
       - name: Determine version
@@ -936,7 +950,6 @@ jobs:
           echo "Building version: ${{ needs.version.outputs.version }} (MSI: ${{ needs.version.outputs.msi }})"
 
       - name: Resolve Go dependencies
-        working-directory: gui
         env:
           GOWORK: off
         run: |
@@ -945,145 +958,49 @@ jobs:
           # source tree, so the shipped binary would be built from whatever
           # resolution happened at build time rather than from the reviewed
           # pin — and a stale pin would never fail. `download` consumes the
-          # pin and fails loudly on a missing go.sum entry.
-          go mod download
+          # pin and fails loudly on a missing go.sum entry. Two modules since
+          # V4-CONSOLE C3: the console and the service.
+          cd console; go mod download; cd ../gui; go mod download
 
       - name: Build GUI
-        working-directory: gui
+        working-directory: console
         env:
           GOWORK: off
         run: wails build -clean -platform windows/amd64 -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
 
-      # The console's size, printed (docs/V4-CONSOLE.md section 5 item 4).
-      # PRINT-ONLY until V4-CONSOLE C3, which sets the budget from the number
-      # this records: a budget close to the measured size turns the next
-      # unexplained 400 KB into a red build. `wails build` strips, so this is
-      # the shipped size.
-      - name: Console size (print only)
-        working-directory: gui
+      # The console's size against its budget (docs/V4-CONSOLE.md section 5
+      # item 4). Set close to the measured size, so the next unexplained
+      # 400 KB is a red build before release rather than a question after it.
+      #
+      # Measured at V4-CONSOLE C3 by the section 10 method (local, stripped):
+      # 11,463,680 bytes, against 11,817,472 for C2's console. The shipped
+      # build has run about 1.5% above the local one, so about 11.64 MB is
+      # expected here; the budget leaves about 260 KB above that. V4-LOCAL-API
+      # P1 lowers it (WebView2 install moves to the service, D2).
+      - name: Console size (budget)
+        working-directory: console
         shell: pwsh
+        env:
+          CONSOLE_BUDGET_BYTES: '11900000'
         run: |
           $exe = 'build/bin/NimbusBackup.exe'
-          if (-not (Test-Path $exe)) { throw "$exe was not built; there is no size to report" }
+          if (-not (Test-Path $exe)) { throw "$exe was not built; there is no size to check" }
           $bytes = (Get-Item $exe).Length
-          Write-Host ("Console (stripped): {0:N0} bytes" -f $bytes)
-          "### Console size`n`n``NimbusBackup.exe``: {0:N0} bytes (stripped)" -f $bytes >> $env:GITHUB_STEP_SUMMARY
-
-      # The GUI must contain NO ENGINE AT ALL -- backup or restore.
-      #
-      # This is the FILE-SET assertion, and it is the primary one. It asks the
-      # Go toolchain which files it would compile into each build and checks
-      # that every engine file is in the service's set and in none of the
-      # console's. That cannot be vacuous: the file list is exactly what the
-      # compiler uses, and the check fails if a file is missing from the
-      # SERVICE side too -- so deleting or renaming an engine file breaks the
-      # assertion instead of silently satisfying it.
-      #
-      # The symbol probe below is kept as a second opinion, but it is the
-      # weaker of the two: the linker prunes aggressively, and an engine that
-      # is present-but-unreached can leave no symbol behind. "No symbol" is
-      # evidence; "not compiled" is proof.
-      - name: Assert the GUI compiles no engine
-        working-directory: gui
-        shell: pwsh
-        env:
-          GOWORK: off
-        run: |
-          $engine = @(
-            'backup_pipeline.go',      # the backup engine (docs/V4-PIPELINE.md 3.1)
-            'restore_inline.go',       # archive restore, listing, metadata
-            'restore_search.go',       # cross-snapshot search
-            'restore_cache.go',        # the listing cache the engine writes
-            'imagebrowse_core.go',     # volume-image browse, download, restore
-            'zipstream_core.go',       # streaming zip packaging for extractions
-            'download_service.go',     # the Browse tab's download, service side
-            'restorekey.go',           # which key opens a snapshot
-            'restorekey_attach.go',    # attaching it to a reader
-            'restore_service.go'       # the local API's restore dispatch
-          )
-
-          # Space-separated, and NO backtick in the template. A "`n" separator
-          # is a literal backtick+n inside a single-quoted PowerShell string,
-          # so `go list` emits one run-on line and every membership test below
-          # silently answers "not present" -- an assertion that passes by
-          # finding nothing. The count guard caught exactly that on the first
-          # run of this step; the template is now the plain one.
-          $tmpl = '{{range .GoFiles}}{{.}} {{end}}'
-
-          $gui = @((& go list -f $tmpl .) -split '\s+' | Where-Object { $_ })
-          if ($LASTEXITCODE -ne 0) { throw "go list failed for the GUI build" }
-          $svc = @((& go list -tags service -f $tmpl .) -split '\s+' | Where-Object { $_ })
-          if ($LASTEXITCODE -ne 0) { throw "go list failed for the service build" }
-
-          if ($gui.Count -lt 10 -or $svc.Count -lt 10) {
-            throw "file lists look empty ($($gui.Count)/$($svc.Count)); an absence would prove nothing"
-          }
-          Write-Host "file sets: GUI $($gui.Count), service $($svc.Count)"
-
-          $bad = @()
-          foreach ($f in $engine) {
-            if ($svc -notcontains $f) {
-              $bad += "$f is not in the SERVICE build at all -- renamed or deleted? update this list"
-            }
-            if ($gui -contains $f) {
-              $bad += "$f is compiled into the GUI; the console must link no engine"
-            }
-          }
-          if ($bad) {
-            $bad | ForEach-Object { Write-Host "  $_" }
-            throw "The GUI must not compile an engine (docs/V4-PIPELINE.md 3.1, docs/V4-RESTORE.md)"
-          }
-          Write-Host "OK: $($engine.Count) engine files, all service-only"
-
-      # A second opinion on the same property, from the linked binary.
-      #
-      # CJ's decision (2026-08-05, docs/V4-PIPELINE.md 3.1): the front end
-      # links no engine at all -- absent, not gated -- so a modified GUI has
-      # nothing to call and the escape hatch lives in the service instead.
-      #
-      # It is asserted against a PROBE binary rather than the shipped one.
-      # `wails build` strips symbols, so `go tool nm` on build/bin exits 1
-      # with "no symbols" -- and worse, an empty symbol list would have made
-      # a grep-based check PASS. The probe is built from the same sources
-      # with the same tags and is not stripped, so the symbol table is real.
-      # The main.main guard below is what stops an empty table being read as
-      # a clean result.
-      #
-      # Note its LIMIT, which is why the file-set check above is the primary
-      # one: the linker drops what nothing reaches, so this step can pass for
-      # an engine that is compiled in but currently uncalled.
-      - name: Assert GUI links no engine symbols
-        working-directory: gui
-        shell: pwsh
-        env:
-          GOWORK: off
-        run: |
-          go build -o nm-probe.exe .
-          if ($LASTEXITCODE -ne 0) { throw "probe build failed" }
-          try {
-            $syms = & go tool nm nm-probe.exe
-            if ($LASTEXITCODE -ne 0) { throw "go tool nm failed on the probe binary" }
-            if (-not ($syms | Select-String -Pattern 'main\.main')) {
-              throw "probe has no symbol table; an absence of engine symbols would prove nothing"
-            }
-            $engine = $syms | Select-String -Pattern 'RunBackupInline|RunMachineBackup|runBackupPipeline|RestoreSnapshotInline|SearchFilesInline|ListSnapshotsInline|openImageReader|attachRestoreKey'
-            if ($engine) {
-              Write-Host "GUI build contains engine symbols:"
-              $engine | ForEach-Object { Write-Host "  $_" }
-              throw "The GUI must not link an engine (docs/V4-PIPELINE.md 3.1, docs/V4-RESTORE.md)"
-            }
-            Write-Host "OK: no engine symbols in the GUI build"
-          } finally {
-            Remove-Item -Force -ErrorAction SilentlyContinue nm-probe.exe
+          $budget = [int64]$env:CONSOLE_BUDGET_BYTES
+          Write-Host ("Console (stripped): {0:N0} bytes; budget {1:N0}; headroom {2:N0}" -f $bytes, $budget, ($budget - $bytes))
+          "### Console size`n`n``NimbusBackup.exe``: {0:N0} bytes (stripped), budget {1:N0}" -f $bytes, $budget >> $env:GITHUB_STEP_SUMMARY
+          if ($bytes -gt $budget) {
+            Write-Host ("::error::the console is {0:N0} bytes over its budget. Find what was linked (go tool nm -size on an unstripped build) before raising the budget." -f ($bytes - $budget))
+            throw "console over budget"
           }
 
       # The service is a plain `go build` from gui/ and would otherwise ship
       # with no Windows version info — a strong heuristic/ML false-positive
       # signal (Codex review). Generate a .syso with proper CompanyName /
       # ProductName / version so NimbusBackupSVC.exe looks like normal signed-
-      # vendor software. Must run AFTER the Wails GUI build (same package dir):
-      # we strip any leftover .syso first so the GUI's resource can't leak into
-      # the service link and cause a duplicate-resource error.
+      # vendor software. The console is built in its own module (console/), so
+      # its Wails resource cannot reach this link; the Remove-Item is for a
+      # stale local file only.
       - name: Generate service version resource
         working-directory: gui
         shell: pwsh
@@ -1120,13 +1037,13 @@ jobs:
         env:
           GOWORK: off
         run: |
-          go build -tags service -trimpath -buildmode=pie -ldflags "-s -w -X main.appVersion=${{ steps.version.outputs.VERSION }}" -o build/bin/NimbusBackupSVC.exe
+          go build -trimpath -buildmode=pie -ldflags "-s -w -X main.appVersion=${{ steps.version.outputs.VERSION }}" -o build/bin/NimbusBackupSVC.exe
         shell: pwsh
 
       - name: Copy binaries to dist
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Copy-Item gui/build/bin/NimbusBackup.exe dist/
+          Copy-Item console/build/bin/NimbusBackup.exe dist/
           Copy-Item gui/build/bin/NimbusBackupSVC.exe dist/
         shell: pwsh
 

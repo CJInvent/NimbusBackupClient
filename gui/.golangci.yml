@@ -1,4 +1,5 @@
-# golangci-lint configuration for Nimbus Backup GUI
+# golangci-lint configuration for the Nimbus Backup service (gui/). The console
+# (console/) has its own copy with the same rules.
 version: "2"
 
 run:

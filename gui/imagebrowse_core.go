@@ -1,6 +1,3 @@
-//go:build service
-// +build service
-
 package main
 
 // NAMING, BECAUSE THIS IS WHERE THE CONFUSION LIVED (CJ, 2026-08-25).
@@ -44,6 +41,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 	"io"
 	"os"
 	"path/filepath"
@@ -114,13 +112,8 @@ func normalizeImageBackupType(bt string) string {
 
 // Image-operation state, package-level rather than fields on App.
 //
-// One App exists per process, so package scope is equivalent — and it keeps
-// the untagged App struct free of fields only this file uses, which the
-// default lint pass would (correctly) report as unused in the console build.
-// gui/ibemit_service.go's lastIbEmitStep is the same trade for the same
-// reason.
+// One App exists per process, so package scope is equivalent.
 var (
-	lastVolumeKey   string             // cache key of the most recent partition scan
 	ibRestoreMu     sync.Mutex         // guards ibRestoreCancel
 	ibRestoreCancel context.CancelFunc // set while a volume-file restore runs; nil otherwise
 )
@@ -135,7 +128,7 @@ var (
 // volumeTree is the Go-side cache of one partition scan: every entry, plus a
 // per-directory child index and rolled-up directory sizes, built once.
 type volumeTree struct {
-	entries  []SnapshotEntry
+	entries  []api.SnapshotEntry
 	byDir    map[string][]int  // parent dir -> indices of children
 	dirSize  map[string]uint64 // dir path -> sum of all file bytes beneath
 	dirCount map[string]int    // dir path -> number of files beneath
@@ -149,7 +142,7 @@ func imgParentDir(p string) string {
 	return p[:i]
 }
 
-func newVolumeTree(entries []SnapshotEntry) *volumeTree {
+func newVolumeTree(entries []api.SnapshotEntry) *volumeTree {
 	t := &volumeTree{
 		entries:  entries,
 		byDir:    make(map[string][]int, len(entries)/8+1),
@@ -175,13 +168,13 @@ func newVolumeTree(entries []SnapshotEntry) *volumeTree {
 
 // children returns dir's immediate children; directories carry their
 // rolled-up size so the size column is meaningful at every level.
-func (t *volumeTree) children(dir string) []SnapshotEntry {
+func (t *volumeTree) children(dir string) []api.SnapshotEntry {
 	dir = strings.TrimSuffix(dir, "/")
 	if dir == "" {
 		dir = "/"
 	}
 	idx := t.byDir[dir]
-	out := make([]SnapshotEntry, 0, len(idx))
+	out := make([]api.SnapshotEntry, 0, len(idx))
 	for _, i := range idx {
 		e := t.entries[i]
 		if e.IsDir {
@@ -294,7 +287,7 @@ func (a *App) withPartition(pbsID, backupID, snapshotID, backupType, diskArchive
 // ListVolumePartitions enumerates every partition on a disk image — regardless
 // of whether we can browse it — with its filesystem, allocated size, and used
 // size. The user chooses; we never choose for them.
-func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]VolumePartition, error) {
+func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, diskArchive string) ([]api.VolumePartition, error) {
 	if !ControlPolicy().FileRestore {
 		return nil, ErrRestoreDisabled
 	}
@@ -309,9 +302,9 @@ func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, disk
 		return nil, ibFail(fmt.Errorf("[NB-3414] read partition table of %s: %v", diskArchive, err))
 	}
 
-	out := make([]VolumePartition, 0, len(parts))
+	out := make([]api.VolumePartition, 0, len(parts))
 	for _, p := range parts {
-		ip := VolumePartition{
+		ip := api.VolumePartition{
 			Index:          p.Index,
 			Name:           p.Name,
 			Type:           p.Type,
@@ -367,7 +360,7 @@ func (a *App) ListVolumePartitions(pbsID, backupID, snapshotID, backupType, disk
 // 250k-entry truncation; per-directory listing (ListVolumeDirectory) has no
 // such limit. Directory entries carry rolled-up sizes.
 func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchive string,
-	partIndex int, forceRefresh bool) ([]SnapshotEntry, error) {
+	partIndex int, forceRefresh bool) ([]api.SnapshotEntry, error) {
 	if !ControlPolicy().FileRestore {
 		return nil, ErrRestoreDisabled
 	}
@@ -377,8 +370,6 @@ func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchi
 	if !forceRefresh {
 		if c, ok := volumeTreeCache[key]; ok {
 			volumeTreeMu.Unlock()
-			lastVolumeKey = key
-
 			return c.children("/"), nil
 		}
 	}
@@ -422,9 +413,9 @@ func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchi
 			if werr != nil && !errors.Is(werr, imagebrowse.ErrTooManyEntries) {
 				return werr
 			}
-			converted := make([]SnapshotEntry, 0, len(entries))
+			converted := make([]api.SnapshotEntry, 0, len(entries))
 			for _, e := range entries {
-				converted = append(converted, SnapshotEntry{
+				converted = append(converted, api.SnapshotEntry{
 					Path: e.Path, IsDir: e.IsDir, Size: e.Size, ModTime: e.ModTime,
 				})
 			}
@@ -439,7 +430,6 @@ func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchi
 	volumeTreeMu.Lock()
 	volumeTreeCache[key] = result
 	volumeTreeMu.Unlock()
-	lastVolumeKey = key
 
 	writeBackupLog(fmt.Sprintf("ImageBrowse: cached %d entries from %s partition %d",
 		len(result.entries), diskArchive, partIndex))
@@ -450,7 +440,7 @@ func (a *App) ListVolumeFiles(pbsID, backupID, snapshotID, backupType, diskArchi
 // scan — the whole point of keeping the tree in Go: the webview only ever
 // holds one directory's worth of rows, so nothing needs truncating.
 func (a *App) ListVolumeDirectory(pbsID, backupID, snapshotID, backupType, diskArchive string,
-	partIndex int, dir string) ([]SnapshotEntry, error) {
+	partIndex int, dir string) ([]api.SnapshotEntry, error) {
 	if !ControlPolicy().FileRestore {
 		return nil, ErrRestoreDisabled
 	}
