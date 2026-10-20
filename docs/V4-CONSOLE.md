@@ -7,8 +7,9 @@ was taken from that commit with the CI-pinned toolchain (`go1.26.9`), building
 The local build is a faithful model of the shipped one: 13,268,992 bytes stripped
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
-**Progress:** C1 (PR #30) and C2 (PR #31) merged; C3 built (§8), in review.
-Next: V4-LOCAL-API P1; P5 is also unblocked.
+**Progress:** C1 (PR #30), C2 (PR #31) and C3 (PR #33) merged. This document's
+phases are done; its D2 was built in V4-LOCAL-API P1 (that document's section
+10, "P1 as built"). Next: V4-LOCAL-API P2; P5 is also unblocked.
 
 **Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
 D2 (b), the service installs WebView2 and the console drops the downloader;
@@ -357,7 +358,9 @@ runs as SYSTEM; on start it checks for the Evergreen runtime and installs it
 machine-wide if missing) and build the console with `wv2runtime.error`: console
 about 9.3 MB. **Recommendation: (b).** It is the same rule this document
 applies everywhere: the console does no installing. **Decided (CJ,
-2026-10-17): (b).** Built in V4-LOCAL-API P1.
+2026-10-17): (b).** Built in V4-LOCAL-API P1: console 9,932,800 bytes. The
+strategy is `wails build -webview2 error` in Build GUI; `wails.json`'s
+`webview2` key, which this section once cited, is not read by the Wails CLI.
 
 **D3. `cleanup_legacy.go`.** On every GUI start it deletes a scheduled task and
 an HKCU Run value left by pre-MSI versions. It has to run as the user (HKCU),
@@ -565,8 +568,8 @@ Expected: console about 11.0 MB stripped (prototype 10,968,576; the real
 console carries more binding code than the prototype). About 2.3 MB off the
 GUI, 0.6 to 0.8 MB off the MSI (bracketed by gzip and xz; LZX lands between).
 
-**Built (2026-10-19).** As specified, with these details settled in the
-building:
+**Built and merged (2026-10-19, PR #33).** As specified, with these details
+settled in the building:
 
 - **The module.** `console/go.mod`; its one project dependency is `gui/api`
   (a `replace` to `../gui/api`). Wails' and systray's dependencies are pinned

@@ -9,7 +9,6 @@ package api
 // the engine directly now decodes the same struct it used to return.
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,19 +24,15 @@ import (
 // they return an id immediately and are polled.
 const RestoreRequestTimeout = 30 * time.Minute
 
-// restoreHTTP is a second client with the long timeout, sharing the token
-// transport. Kept separate so an ordinary status call cannot hang for half an
-// hour because restore needed room.
-func (c *Client) restoreHTTP() *http.Client {
-	return &http.Client{Timeout: RestoreRequestTimeout, Transport: c.httpClient.Transport}
-}
-
-func (c *Client) postRestore(hc *http.Client, path string, call restoreCall) ([]byte, error) {
+// postRestore sends one restore call. timeout is RestoreRequestTimeout for a
+// query and RequestTimeout for everything else, so an ordinary call cannot
+// hang for half an hour because a query needed room.
+func (c *Client) postRestore(timeout time.Duration, path string, call restoreCall) ([]byte, error) {
 	body, err := json.Marshal(call)
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the %s request: %w", call.Op, err)
 	}
-	resp, err := hc.Post(c.baseURL+path, "application/json", bytes.NewBuffer(body))
+	resp, err := c.send(http.MethodPost, path, body, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("the backup service could not be reached: %w", err)
 	}
@@ -73,7 +68,7 @@ func (c *Client) RestoreQuery(op string, params any) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := c.postRestore(c.restoreHTTP(), "/restore/query", restoreCall{Op: op, Params: encoded})
+	raw, err := c.postRestore(RestoreRequestTimeout, "/restore/query", restoreCall{Op: op, Params: encoded})
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +88,7 @@ func (c *Client) RestoreJobStart(op string, params any) (string, error) {
 	// The DEFAULT timeout here, not the long one: starting a job is a
 	// registration and returns at once. A start that hangs for 30 minutes
 	// would be a broken service, not a slow restore.
-	raw, err := c.postRestore(c.httpClient, "/restore/job", restoreCall{Op: op, Params: encoded})
+	raw, err := c.postRestore(RequestTimeout, "/restore/job", restoreCall{Op: op, Params: encoded})
 	if err != nil {
 		return "", err
 	}
@@ -109,7 +104,7 @@ func (c *Client) RestoreJobStart(op string, params any) (string, error) {
 
 // RestoreJobState polls a running job.
 func (c *Client) RestoreJobState(id string) (*RestoreJobState, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/restore/job/" + id)
+	resp, err := c.get("/restore/job/" + id)
 	if err != nil {
 		return nil, fmt.Errorf("the backup service could not be reached: %w", err)
 	}
@@ -134,7 +129,7 @@ func (c *Client) RestoreControl(op string, params any) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.postRestore(c.httpClient, "/restore/control", restoreCall{Op: op, Params: encoded})
+	_, err = c.postRestore(RequestTimeout, "/restore/control", restoreCall{Op: op, Params: encoded})
 	return err
 }
 

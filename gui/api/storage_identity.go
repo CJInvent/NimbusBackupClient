@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -44,11 +43,11 @@ func (s *Server) handleStorageIdentity(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]bool{"ok": true}, http.StatusOK)
 }
 func (c *Client) GetStorageIdentity() (map[string]interface{}, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/storage/identity")
+	resp, err := c.get("/storage/identity")
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("storage status HTTP %d", resp.StatusCode)
 	}
@@ -61,11 +60,11 @@ func (c *Client) ApproveStorageIdentity(input map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient.Post(c.baseURL+"/storage/identity", "application/json", bytes.NewReader(b))
+	resp, err := c.post("/storage/identity", b)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		var body ErrorResponse
 		if json.NewDecoder(resp.Body).Decode(&body) == nil && body.Error != "" {

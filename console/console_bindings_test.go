@@ -141,21 +141,12 @@ func newTestConsole(t *testing.T) (*Console, *fakeService) {
 	f := &fakeService{pbsTest: api.PBSTestResponse{OK: true}}
 	ts := httptest.NewServer(f)
 	t.Cleanup(ts.Close)
-	c := &Console{api: api.NewClientAt(ts.URL, writeTestToken(t))}
+	c := &Console{api: api.NewClientAt(ts.URL)}
 	if _, err := c.service(); err != nil {
 		t.Fatalf("the fake service was not found: %v", err)
 	}
 	f.take() // the probe
 	return c, f
-}
-
-func writeTestToken(t *testing.T) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "api-token")
-	if err := os.WriteFile(p, []byte("test-only"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
 // bindingCase calls one binding. want is the requests it must make, in order;
@@ -417,7 +408,7 @@ func TestWritesRefuseWithoutAServiceAndDoNothingElse(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
 	ts.Close() // an address nothing answers on
 	for _, name := range writeBindings {
-		c := &Console{api: api.NewClientAt(ts.URL, writeTestToken(t))}
+		c := &Console{api: api.NewClientAt(ts.URL)}
 		err := bindingCases[name].call(c)
 		if err == nil || !strings.Contains(err.Error(), "[NB-2011]") {
 			t.Errorf("%s with no service = %v, want NB-2011", name, err)
@@ -428,7 +419,7 @@ func TestWritesRefuseWithoutAServiceAndDoNothingElse(t *testing.T) {
 func TestReadsWithoutAServiceAreEmptyOrAnError(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
 	ts.Close()
-	c := &Console{api: api.NewClientAt(ts.URL, writeTestToken(t))}
+	c := &Console{api: api.NewClientAt(ts.URL)}
 	if info := c.GetSystemInfo(); info["service_available"] != false || info["hostname"] != "" {
 		t.Errorf("GetSystemInfo with no service = %v", info)
 	}
@@ -496,11 +487,14 @@ func TestJobWritesAreRefusedWhileLocked(t *testing.T) {
 	// so the org's lock never saw them. Against the REAL local API server
 	// with the lock on, each is refused and the service is never reached.
 	h := &lockedHandler{}
-	srv := api.NewServer("127.0.0.1:0", h, "test-only")
+	srv := api.NewServer(h)
 	srv.SetLockedFunc(func() bool { return true })
-	ts := httptest.NewServer(srv.Handler())
+	// The pipe gives the service its caller; a test server is given one.
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	ts.Config.ConnContext = api.FixedCallerContext(api.Caller{UserSID: "S-1-5-21-1-2-3-1001", SessionID: 1})
+	ts.Start()
 	t.Cleanup(ts.Close)
-	c := &Console{api: api.NewClientAt(ts.URL, writeTestToken(t))}
+	c := &Console{api: api.NewClientAt(ts.URL)}
 
 	for _, name := range []string{"SaveScheduledJob", "UpdateScheduledJob", "DeleteScheduledJob",
 		"AddPBSServer", "SaveControlServerConfig", "StartBackup"} {

@@ -1,31 +1,51 @@
 # v4 Status — NimbusBackupClient
 
-## HANDOFF (2026-10-19): the console split and the local API
+## HANDOFF (2026-10-20): P1 built, the local API is a named pipe
 
-**Read first:** `docs/V4-CONSOLE.md`, then `docs/V4-LOCAL-API.md`. Both are
-specifications with every decision recorded. They went up together in PR #29
-(spec only).
+**Read first:** `docs/V4-CONSOLE.md`, then `docs/V4-LOCAL-API.md`, and in it
+section 10's "P1 as built". Both are specifications with every decision
+recorded. They went up together in PR #29 (spec only).
 
-**Where the build stands (2026-10-19):** C1 (#30) and C2 (#31) are merged; C3
-is built on `feat/console-c3` and in review (its PR into `v4_dev`). The console
-is its own module, `console/` (its own `go.mod`, depending on `gui/api`, Wails,
-systray and `x/sys` and their dependencies, pinned by a test), and `gui/` is the service with no
-build tag. V4-CONSOLE §8 records what C3 settled; read it before P1. The ones
-that change what the next phase starts from:
+**Where the build stands (2026-10-20):** C1 (#30), C2 (#31) and C3 (#33) are
+merged. **P1 is built** on `feat/local-api-p1` (PR into `v4_dev`): the named
+pipe, the caller identity per connection, the console's check that the
+server is the SYSTEM service, the token file and port 18765 deleted, the
+WebView2 runtime installed by the service and the console built with
+`-webview2 error`. Console 11,463,680 to 9,932,800 bytes stripped; budget
+10,350,000. Its Windows tests run only in CI (Windows Smoke, S8 step):
+nothing in a Linux sandbox can run a named pipe, so **read that step's
+annotations before calling P1 done.**
 
-- The restore destination check is the **service's** now (NB-3013, all four
-  ops that write to a caller-named path). P3's scoped restore replaces it.
-- The §5 checks are Go tests in `console/` (module allowlist, no local IO),
-  run by Unit Tests and `scripts/local-gates.sh`. The size budget is
-  11,900,000 bytes in Build GUI, from C3's measurement (local 11,463,680).
-  CI's first run of the budget step prints the shipped number: if it is far
-  from about 11.64 MB, tighten the budget to it.
-- The service lints with `unused` on. The windows view of the service has
-  never been linted (33 findings, all in windows-only engine files): a
-  separate change.
+What P1 settled that changes the next phases (details in V4-LOCAL-API §10):
 
-**Next: V4-LOCAL-API P1** (named pipe, caller identity, WebView2 install in the
-service, budget to 9.6 MB). **P5 is unblocked** and can go in either order.
+- **P3 needs CJ's decision first:** the console opens the pipe at
+  identification level (§3), which cannot be impersonated for §5.2's writes.
+  Recommendation recorded there: AccessCheck on the opened destination, write
+  as SYSTEM, owner set to the caller.
+- The console's server check is the pipe's owner (SYSTEM) plus the SCM's
+  process id for the `NimbusBackup` service, not the executable path §3 names
+  (the install folder is choosable; a standard user cannot open a SYSTEM
+  process).
+- `GET /caller` is a new route (user requirement); P2's table must list it.
+- `wails.json`'s `webview2` and `windows.manifest` keys were never read by the
+  Wails CLI. The WebView2 strategy is Build GUI's `-webview2` flag, pinned by
+  `console/deps_test.go`. The console has always run `asInvoker`; P4 should
+  delete the inert `requireAdministrator`.
+- `gui/api` now depends on `x/sys` and is linted in CI (its windows view).
+- The restore destination check (NB-3013) is still the service's; P3's scoped
+  restore replaces it.
+
+**Still to ask CJ:** the shipped console size from Build GUI's step summary
+(C3's and now P1's), to tighten the budget to it.
+
+**Not done, raised in #33 (CJ's call):** the service's windows view has never
+been linted by CI (33 pre-existing findings in windows-only engine files);
+`build_gui.sh`, `build_gui.bat`, `Dockerfile.gui`, `build_gui_windows_docker.sh`
+are fyne-era and dead; the `libgl1-mesa-dev xorg-dev` installs look vestigial;
+some `gui/` tests write into the real `~/.proxmox-backup-guardian`.
+
+**Next: V4-LOCAL-API P2** (the route table: settings and job writes require an
+elevated administrator). **P5 is unblocked** and can go in either order.
 
 **Why they exist.** CJ: the GUI should contain nothing except what talks to
 the service. Measured at `835da16`: the GUI build still compiles 70 files
@@ -60,20 +80,22 @@ down. CI's two "no engine" checks are denylists and never saw it.
 |---|---|---|
 | C1 (merged, #30) | Service routes the console still lacks (`/pbs/servers`, `/pbs/test`, `/pbs/discover`, `/disks`, `/exchange`, two `/status` fields, restore op `space`), and a persisted run registry replacing `job_history.json` | none |
 | C2 (merged, #31) | Every binding becomes one API call; local fallbacks deleted; 31 unused bindings unbound | C1 |
-| C3 (built, in review) | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
-| P1 | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
+| C3 (merged, #33) | `console/` module; `frontend/` moves; `service` tag removed; module allowlist, no-local-IO test and size budget replace the engine checks (the binding allowlist landed in C2) | C2 |
+| P1 (built, `feat/local-api-p1`) | Named pipe, caller identity, server verification; token file and port deleted; WebView2 install moves to the service | C3 |
 | P2 | Route table: settings and job writes require an elevated admin | P1 |
 | P3 | Access-filtered browse, scoped restore, picker in the service | P2 |
 | P4 | Elevate button and elevated windows (Browse, Setup, Jobs) | P3 |
 | P5 | DEK file gets the narrow ACL (machine-scope DPAPI's stated reason is gone) | C2 |
 
-Expected size: console about 11.0 MB after C3 and about 9.3 MB after P1
-(13.27 MB today), from prototypes built for the measurement.
+Size, measured: console 13.27 MB before C1, 11.46 MB after C3, 9.93 MB after
+P1 (the prototypes had predicted 11.0 and 9.3; the real console carries more
+binding code).
 
 **Shipped builds still carry finding F1** (any logged-on user, RDP included,
 can drive the SYSTEM service, including restoring a backed-up file to any path
-on a standalone install). Read from the code, not reproduced. P1 to P3 close
-it; until then, org `file_restore` policy is the only gate on managed machines.
+on a standalone install). Read from the code, not reproduced. P1 gives the
+service the caller's identity; P2 and P3 are what decide from it. Until P3,
+org `file_restore` policy is the only gate on managed machines.
 
 **Already done this session:** PR #28 (LZX cabinet, WOFF2-only fonts) merged
 and shipped as `v1.01.00-dev.244`: MSI 8,437,760 bytes against 10,461,184 for
@@ -103,7 +125,7 @@ of tidying before builds.
 
 ---
 
-**Last updated:** 2026-10-18 (handoff above). Branch: `v4_dev`.
+**Last updated:** 2026-10-20 (handoff above). Branch: `v4_dev`.
 
 The v4 program spans two repositories and its documentation lives in
 **NimbusControl**, because most of it describes a server/client contract that
@@ -212,9 +234,9 @@ way. Outcomes:
   (`screens/status/StatusPanel.jsx` since GUI audit S2) renders instead of
   the tab UI when locked
 
-**Still open from this item:** `restrictToOwners` is applied only to the API
-token file; `config.json` and `scheduled_jobs.json` still inherit
-ProgramData's permissive ACL.
+**Still open from this item:** `config.json` and `scheduled_jobs.json` still
+inherit ProgramData's permissive ACL. (`restrictToOwners`, which narrowed only
+the API token file, went with the token in V4-LOCAL-API P1.)
 
 ### 5. Crypto audit trail — **DONE**
 `pbscommon.AuditLogFn`, separate from `DebugLogFn` and wired in

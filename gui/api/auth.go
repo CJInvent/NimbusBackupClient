@@ -1,91 +1,56 @@
 package api
 
 import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/hex"
-	"fmt"
+	"context"
+	"log"
 	"net/http"
-	"os"
-	"strings"
 )
-
-// tokenHeader carries the shared local API token. Requiring a CUSTOM header also
-// blocks browser-originated requests: a web page cannot set it on a cross-origin
-// request without a CORS preflight, which this server never approves (audit H-01
-// / v2-H-06). The token authenticates the GUI to the privileged local service.
-const tokenHeader = "X-Nimbus-Token"
 
 // maxRequestBody bounds request bodies to avoid unbounded memory from a local
 // caller (audit: "borner les tailles de body").
 const maxRequestBody = 1 << 20 // 1 MiB
 
-// EnsureToken returns the local API token stored at path, generating and writing
-// a fresh random one (0600) if the file is missing or empty. Called by the
-// service before it starts the API server.
+// authMiddleware admits a request only if its connection carries a Windows
+// identity (docs/V4-LOCAL-API.md §3), and bounds its body.
 //
-// NOTE: 0600 is best-effort; on Windows it inherits the directory ACL rather than
-// becoming owner-only. Restricting the token file by a proper Windows ACL (so
-// only the service account + the interactive user can read it, denying other
-// local processes) is the remaining hardening to fully close H-01 against a
-// hostile LOCAL process. The custom-header + Origin checks already close the
-// browser/CSRF vector regardless.
-func EnsureToken(path string) (string, error) {
-	if b, err := os.ReadFile(path); err == nil {
-		if t := strings.TrimSpace(string(b)); t != "" {
-			return t, nil
-		}
-	}
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate api token: %w", err)
-	}
-	t := hex.EncodeToString(buf)
-	if err := os.WriteFile(path, []byte(t), 0o600); err != nil {
-		return "", fmt.Errorf("write api token %q: %w", path, err)
-	}
-	// Tighten the DACL to SYSTEM/Administrators/INTERACTIVE only (H-01). Best
-	// effort: a failure here still leaves the 0600-equivalent default, so it
-	// must not block token creation.
-	if err := restrictToOwners(path); err != nil {
-		fmt.Printf("warning: could not restrict api token ACL: %v\n", err)
-	}
-	return t, nil
-}
-
-// tokenTransport injects the shared token header into every client request,
-// reading the token file on each call so the GUI picks up a token the service
-// created after the GUI started.
-type tokenTransport struct {
-	tokenPath string
-	base      http.RoundTripper
-}
-
-func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if b, err := os.ReadFile(t.tokenPath); err == nil {
-		req.Header.Set(tokenHeader, strings.TrimSpace(string(b)))
-	}
-	return t.base.RoundTrip(req)
-}
-
-// authMiddleware enforces the local-token auth and request hardening on every
-// route: it bounds the body, rejects browser-originated requests (Origin set),
-// and requires the shared token via a constant-time compare.
+// It replaced the shared token (H-01) in V4-LOCAL-API P1. The token proved
+// that a caller could read a file every interactive user could read, so every
+// logged-on user had the same power over a service running as SYSTEM. The
+// identity is read from Windows per connection, and what a request says about
+// itself is never consulted. The Origin check and the custom header went with
+// the token: both existed because a browser can reach a loopback port, and a
+// browser cannot open a named pipe.
+//
+// P1 refuses only a request with no identity. Deciding from the identity
+// (which routes need an elevated administrator) is P2's route table.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
-		// Our GUI never sets Origin; a browser always does on cross-origin POST.
-		if r.Header.Get("Origin") != "" {
-			s.writeError(w, "forbidden", http.StatusForbidden)
-			return
-		}
-
-		got := r.Header.Get(tokenHeader)
-		if s.token == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
+		src, _ := r.Context().Value(callerSourceKey{}).(callerSource)
+		if src == nil {
+			log.Printf("[API] refused %s %s: %v", r.Method, r.URL.Path, errNoCaller)
 			s.writeError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		c, err := src.caller()
+		if err != nil || c == nil || c.UserSID == "" {
+			// The pipe's client could not be identified: Windows would not
+			// impersonate it, or its token could not be read. Nothing is
+			// served to a caller the service cannot name.
+			log.Printf("[API] refused %s %s: the caller could not be identified: %v", r.Method, r.URL.Path, err)
+			s.writeError(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Every request that may change something is logged with who made
+		// it (§8). Reads are not: the console polls, and a line per poll
+		// would bury the ones that matter.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			log.Printf("[API] %s %s by %s (%s) session %d elevated=%t admin=%t pid %d %s",
+				r.Method, r.URL.Path, c.Account, c.UserSID, c.SessionID, c.Elevated, c.Admin, c.PID, c.Image)
+		}
+
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 	})
 }

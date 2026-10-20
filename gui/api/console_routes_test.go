@@ -109,25 +109,10 @@ func (c *consoleStub) GetSecurityWarnings() []string {
 func bootConsoleServer(t *testing.T) (*httptest.Server, *consoleStub, *Client, *Server) {
 	t.Helper()
 	h := newConsoleStub()
-	s := NewServer("127.0.0.1:0", h, testToken)
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	s := NewServer(h)
+	ts := serveTest(s)
 	t.Cleanup(ts.Close)
-	c := &Client{baseURL: ts.URL, httpClient: &http.Client{Transport: headerTransport{
-		key: tokenHeader, value: testToken, base: ts.Client().Transport,
-	}}}
-	return ts, h, c, s
-}
-
-// headerTransport sets the token header, standing in for tokenTransport (which
-// reads the token from a file).
-type headerTransport struct {
-	key, value string
-	base       http.RoundTripper
-}
-
-func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.Header.Set(h.key, h.value)
-	return h.base.RoundTrip(r)
+	return ts, h, NewClientAt(ts.URL), s
 }
 
 // newConsoleRoutes is every route C1 adds, with the method each one serves.
@@ -139,16 +124,18 @@ var newConsoleRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/exchange"},
 }
 
-func TestConsoleRoutesRequireTheToken(t *testing.T) {
-	ts, h, _, _ := bootConsoleServer(t)
+func TestConsoleRoutesRequireACaller(t *testing.T) {
+	h := newConsoleStub()
+	bare := serveTestWithoutCaller(NewServer(h))
+	t.Cleanup(bare.Close)
 	for _, r := range newConsoleRoutes {
-		code, body := do(t, ts, r.method, r.path, map[string]any{"id": "pbs1", "url": "https://pbs.example:8007"})
+		code, body := do(t, bare, r.method, r.path, map[string]any{"id": "pbs1", "url": "https://pbs.example:8007"})
 		if code != http.StatusUnauthorized {
-			t.Errorf("unauthenticated %s %s = %d, want 401 (%s)", r.method, r.path, code, body)
+			t.Errorf("unidentified %s %s = %d, want 401 (%s)", r.method, r.path, code, body)
 		}
 	}
 	if h.called("TestPBSServerForAPI:pbs1") || h.called("DiscoverPBSFingerprintForAPI:https://pbs.example:8007") {
-		t.Error("an unauthenticated request reached the handler")
+		t.Error("an unidentified request reached the handler")
 	}
 }
 
@@ -159,7 +146,7 @@ func TestConsoleRoutesGateTheirMethod(t *testing.T) {
 		if r.method == http.MethodPost {
 			wrong = http.MethodGet
 		}
-		if code, _ := do(t, ts, wrong, r.path, map[string]any{}, withToken(testToken)); code != http.StatusMethodNotAllowed {
+		if code, _ := do(t, ts, wrong, r.path, map[string]any{}); code != http.StatusMethodNotAllowed {
 			t.Errorf("%s %s = %d, want 405", wrong, r.path, code)
 		}
 	}
@@ -175,7 +162,7 @@ func TestConsoleRoutesAreRefusedWhileLocked(t *testing.T) {
 		h.testResult["pbs1"] = PBSTestResponse{OK: true}
 	})
 	for _, r := range newConsoleRoutes {
-		code, _ := do(t, ts, r.method, r.path, map[string]any{"id": "pbs1", "url": "https://pbs.example"}, withToken(testToken))
+		code, _ := do(t, ts, r.method, r.path, map[string]any{"id": "pbs1", "url": "https://pbs.example"})
 		if code != http.StatusForbidden {
 			t.Errorf("%s %s while locked = %d, want 403", r.method, r.path, code)
 		}
@@ -184,7 +171,7 @@ func TestConsoleRoutesAreRefusedWhileLocked(t *testing.T) {
 		t.Error("a locked agent ran a PBS connection test")
 	}
 	// /status is the panel, and keeps its new field while locked.
-	if code, body := do(t, ts, http.MethodGet, "/status", nil, withToken(testToken)); code != http.StatusOK ||
+	if code, body := do(t, ts, http.MethodGet, "/status", nil); code != http.StatusOK ||
 		!strings.Contains(body, `"security_warnings"`) {
 		t.Errorf("GET /status while locked = %d %s", code, body)
 	}
@@ -195,7 +182,7 @@ func TestConsoleRoutesAnswer501WithoutAService(t *testing.T) {
 	// the service would not. "Not implemented here" is the true answer.
 	ts, _ := bootSmokeServer(t)
 	for _, r := range newConsoleRoutes {
-		code, _ := do(t, ts, r.method, r.path, map[string]any{"id": "pbs1", "url": "https://pbs.example"}, withToken(testToken))
+		code, _ := do(t, ts, r.method, r.path, map[string]any{"id": "pbs1", "url": "https://pbs.example"})
 		if code != http.StatusNotImplemented {
 			t.Errorf("%s %s without a handler = %d, want 501", r.method, r.path, code)
 		}
@@ -236,7 +223,7 @@ func TestPBSServersCarryNoSecretField(t *testing.T) {
 	h.set(func() {
 		h.servers = PBSServersResponse{Servers: []PBSServerInfo{{ID: "pbs1", AuthID: "backup@pbs!ws01", SecretSet: true}}}
 	})
-	code, body := do(t, ts, http.MethodGet, "/pbs/servers", nil, withToken(testToken))
+	code, body := do(t, ts, http.MethodGet, "/pbs/servers", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /pbs/servers = %d %s", code, body)
 	}
@@ -269,7 +256,7 @@ func TestPBSServersIsEmptyAndSaysWhyInProxyMode(t *testing.T) {
 
 func TestPBSServersNeverNull(t *testing.T) {
 	ts, _, _, _ := bootConsoleServer(t)
-	_, body := do(t, ts, http.MethodGet, "/pbs/servers", nil, withToken(testToken))
+	_, body := do(t, ts, http.MethodGet, "/pbs/servers", nil)
 	if !strings.Contains(body, `"servers":[]`) {
 		t.Errorf("an empty configuration serialized as %s; want an empty list", body)
 	}
@@ -294,7 +281,7 @@ func TestPBSTestOutcomes(t *testing.T) {
 
 	// A test that ran and failed is an ANSWER: 200 on the wire, an error with
 	// the PBS message for the caller, and the structured cert flag.
-	code, body := do(t, ts, http.MethodPost, "/pbs/test", map[string]any{"id": "selfsigned"}, withToken(testToken))
+	code, body := do(t, ts, http.MethodPost, "/pbs/test", map[string]any{"id": "selfsigned"})
 	if code != http.StatusOK {
 		t.Errorf("a failed test = HTTP %d; it ran, so it is an answer, not an API error (%s)", code, body)
 	}
@@ -325,10 +312,10 @@ func TestPBSTestOutcomes(t *testing.T) {
 
 func TestPBSTestValidatesBeforeTheHandler(t *testing.T) {
 	ts, h, _, _ := bootConsoleServer(t)
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/test", map[string]any{}, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/test", map[string]any{}); code != http.StatusBadRequest {
 		t.Errorf("POST /pbs/test without id = %d, want 400", code)
 	}
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/test", "{not json", withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/test", "{not json"); code != http.StatusBadRequest {
 		t.Errorf("malformed body = %d, want 400", code)
 	}
 	if h.called("TestPBSServerForAPI:") {
@@ -354,7 +341,7 @@ func TestPBSDiscoverRoundTrip(t *testing.T) {
 
 func TestPBSDiscoverFailures(t *testing.T) {
 	ts, h, c, _ := bootConsoleServer(t)
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/discover", map[string]any{}, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/discover", map[string]any{}); code != http.StatusBadRequest {
 		t.Errorf("discover without url = %d, want 400", code)
 	}
 
@@ -466,7 +453,7 @@ func TestStatusSecurityWarningsAreNeverNull(t *testing.T) {
 		"no reporter":   func(t *testing.T) *httptest.Server { ts, _ := bootSmokeServer(t); return ts },
 	} {
 		ts := boot(t)
-		_, body := do(t, ts, http.MethodGet, "/status", nil, withToken(testToken))
+		_, body := do(t, ts, http.MethodGet, "/status", nil)
 		if !strings.Contains(body, `"security_warnings":[]`) {
 			t.Errorf("%s: /status = %s; want security_warnings as an empty list", name, body)
 		}
@@ -478,7 +465,7 @@ func TestDeprecatedBackupStatusRouteIsGone(t *testing.T) {
 	// it (V4-CONSOLE §4.1). Gone from the mux AND from the locked allowlist, so
 	// it cannot come back as a reader nobody declared.
 	ts, _ := bootSmokeServer(t)
-	if code, _ := do(t, ts, http.MethodGet, "/backup/status/run-1-1", nil, withToken(testToken)); code != http.StatusNotFound {
+	if code, _ := do(t, ts, http.MethodGet, "/backup/status/run-1-1", nil); code != http.StatusNotFound {
 		t.Errorf("GET /backup/status/{id} = %d, want 404", code)
 	}
 	if readOnlyAllowed(http.MethodGet, "/backup/status/run-1-1") {
@@ -546,7 +533,7 @@ func TestDeleteRoutesRefuseAnythingAfterTheID(t *testing.T) {
 	// /jobs/delete/job-1/extra used to delete job-1.
 	ts, h, _, _ := bootConsoleServer(t)
 	for _, path := range []string{"/jobs/delete/job-1/extra", "/pbs/delete/pbs-1/extra", "/jobs/delete/job-1%2Fextra/x"} {
-		if code, _ := do(t, ts, http.MethodDelete, path, nil, withToken(testToken)); code != http.StatusBadRequest {
+		if code, _ := do(t, ts, http.MethodDelete, path, nil); code != http.StatusBadRequest {
 			t.Errorf("DELETE %s = %d, want 400", path, code)
 		}
 	}
@@ -568,7 +555,7 @@ func TestJobsReadFailureIsAnErrorNotAnEmptyList(t *testing.T) {
 	// console would offer to create them again.
 	ts, h, _, _ := bootConsoleServer(t)
 	h.arm("ListScheduledJobs")
-	if code, _ := do(t, ts, http.MethodGet, "/jobs", nil, withToken(testToken)); code != http.StatusInternalServerError {
+	if code, _ := do(t, ts, http.MethodGet, "/jobs", nil); code != http.StatusInternalServerError {
 		t.Errorf("GET /jobs with an unreadable file = %d, want 500", code)
 	}
 }
