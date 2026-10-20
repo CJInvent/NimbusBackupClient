@@ -23,9 +23,13 @@ import (
 )
 
 // shippedTags are `wails build`'s tags for the console CI ships: Build GUI's
-// `wails build -platform windows/amd64` (desktop, production) with
-// wails.json's "webview2": {"installmethod": "download"}.
-const shippedTags = "desktop,wv2runtime.download,production"
+// `wails build -platform windows/amd64 -webview2 error` (desktop, production,
+// and the WebView2 strategy). The strategy comes from the -webview2 FLAG,
+// whose default is "download": wails.json's "webview2" key, which used to
+// say "download" here, is not read by the Wails CLI at all.
+// TestTheShippedTagsAreTheBuildsTags pins the workflow and the local gates
+// to this constant.
+const shippedTags = "desktop,wv2runtime.error,production"
 
 // allowedModules is every module the shipped console may link, and why.
 var allowedModules = map[string]string{
@@ -59,7 +63,7 @@ var allowedModules = map[string]string{
 	"github.com/go-stack/stack":     "systray: its logger",
 	"github.com/oxtoacart/bpool":    "systray: its logger",
 
-	"golang.org/x/sys": "Windows APIs (Wails, systray, the single-instance test)",
+	"golang.org/x/sys": "Windows APIs (Wails, systray, the local API's named pipe in gui/api)",
 }
 
 // goTool is the go command on the PATH: the toolchain CI pins and asserts
@@ -108,5 +112,51 @@ func TestTheConsoleDependsOnlyOnItsAllowlist(t *testing.T) {
 			"the service and nothing else (docs/V4-CONSOLE.md §2): if this is functional code, it "+
 			"belongs in the service; if it is a new dependency of Wails or systray, add it to "+
 			"allowedModules with the reason", m)
+	}
+}
+
+// TestTheShippedTagsAreTheBuildsTags: the console's WebView2 strategy is
+// decided by `wails build -webview2`, whose default ("download") links Wails'
+// downloader and a TLS client the console does not need (V4-CONSOLE D2). The
+// allowlist above is only true of the build CI ships if CI builds with these
+// tags, so the workflow and the local gates are read here, not trusted.
+func TestTheShippedTagsAreTheBuildsTags(t *testing.T) {
+	read := func(path string) string {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return string(b)
+	}
+	workflow := read("../.github/workflows/build-and-release.yml")
+	gates := read("../scripts/local-gates.sh")
+
+	build := ""
+	for _, line := range strings.Split(workflow, "\n") {
+		if strings.Contains(line, "wails build ") {
+			if build != "" {
+				t.Fatalf("more than one `wails build` in the workflow; this test reads one:\n%s\n%s", build, line)
+			}
+			build = line
+		}
+	}
+	if build == "" {
+		t.Fatal("no `wails build` in the workflow; this test is reading the wrong file")
+	}
+	if !strings.Contains(build, "-webview2 error") {
+		t.Errorf("Build GUI's `wails build` does not pass -webview2 error, so it ships the downloader:\n%s", build)
+	}
+	// The compile view, govulncheck and the local vet line name the tags.
+	if n := strings.Count(workflow, shippedTags); n < 2 {
+		t.Errorf("the workflow names %q %d times; Compile Views and govulncheck both should", shippedTags, n)
+	}
+	if !strings.Contains(gates, shippedTags) {
+		t.Errorf("scripts/local-gates.sh does not vet the console with %q", shippedTags)
+	}
+	for name, text := range map[string]string{"the workflow": workflow, "scripts/local-gates.sh": gates} {
+		if strings.Contains(text, "wv2runtime.download") {
+			t.Errorf("%s still names wv2runtime.download", name)
+		}
 	}
 }

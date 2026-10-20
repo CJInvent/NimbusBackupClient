@@ -8,7 +8,8 @@ The local build is a faithful model of the shipped one: 13,268,992 bytes strippe
 here against 13,459,968 shipped (the difference is CGO and the version resource).
 
 **Progress:** C1 (PR #30), C2 (PR #31) and C3 (PR #33) merged. This document's
-phases are done. Next: V4-LOCAL-API P1; P5 is also unblocked.
+phases are done; its D2 was built in V4-LOCAL-API P1 (that document's section
+10, "P1 as built"). Next: V4-LOCAL-API P2; P5 is also unblocked.
 
 **Decided (CJ, 2026-10-17):** D1 (b), the folder picker moves into the service;
 D2 (b), the service installs WebView2 and the console drops the downloader;
@@ -357,7 +358,9 @@ runs as SYSTEM; on start it checks for the Evergreen runtime and installs it
 machine-wide if missing) and build the console with `wv2runtime.error`: console
 about 9.3 MB. **Recommendation: (b).** It is the same rule this document
 applies everywhere: the console does no installing. **Decided (CJ,
-2026-10-17): (b).** Built in V4-LOCAL-API P1.
+2026-10-17): (b).** Built in V4-LOCAL-API P1: console 9,932,800 bytes. The
+strategy is `wails build -webview2 error` in Build GUI; `wails.json`'s
+`webview2` key, which this section once cited, is not read by the Wails CLI.
 
 **D3. `cleanup_legacy.go`.** On every GUI start it deletes a scheduled task and
 an HKCU Run value left by pre-MSI versions. It has to run as the user (HKCU),

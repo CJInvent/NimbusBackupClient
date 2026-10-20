@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"controlplane"
@@ -17,12 +18,33 @@ import (
 type NimbusService struct {
 	app       *App
 	apiServer *api.Server
-	stopChan  chan struct{}
+	// apiListener is the local API's pipe, opened by Start so that a pipe
+	// name already held by another process is a failed start.
+	apiListener net.Listener
+	stopChan    chan struct{}
 }
 
-// Start is called when the service starts
+// listenLocalAPI opens the local API's named pipe (docs/V4-LOCAL-API.md §3).
+// A variable so a test can stand in for the pipe; the pipe's own behavior is
+// gui/api's to test.
+var listenLocalAPI = func() (net.Listener, error) { return api.ListenPipe(api.PipeName) }
+
+// Start is called when the service starts.
+//
+// The local API's pipe is created HERE, before Start returns, and failing to
+// create it fails the start. The first instance is created with
+// FILE_FLAG_FIRST_PIPE_INSTANCE, so this fails when another process already
+// holds the name; a service that started anyway would be unreachable at best,
+// and at worst every console would be talking to that process. The SCM
+// reports the failure, and the reason is in the log.
 func (s *NimbusService) Start(svc service.Service) error {
 	writeInfoLog("NimbusBackup service starting...")
+	ln, err := listenLocalAPI()
+	if err != nil {
+		writeErrorLog(fmt.Sprintf("NimbusBackup service NOT started: the local API pipe could not be created: %v", err))
+		return fmt.Errorf("the local API pipe %s could not be created: %w", api.PipeName, err)
+	}
+	s.apiListener = ln
 	s.stopChan = make(chan struct{})
 	go s.run()
 	return nil
@@ -82,14 +104,11 @@ func (s *NimbusService) run() {
 	s.app.ApplyProvisioningProfile()
 	s.app.StartControlPlane()
 
-	// Start HTTP API server for GUI communication (token-authenticated — H-01).
-	// If token init fails the server keeps an empty token and rejects every
-	// request (fail closed) rather than exposing the privileged API unauthenticated.
-	apiToken, tokErr := api.EnsureToken(getAPITokenPath())
-	if tokErr != nil {
-		writeErrorLog(fmt.Sprintf("API token init failed (API will reject all requests): %v", tokErr))
-	}
-	s.apiServer = api.NewServer("127.0.0.1:18765", s.app, apiToken)
+	// The local API, for the console. Who may call it is read from Windows
+	// per connection on the pipe Start opened (docs/V4-LOCAL-API.md §3); the
+	// shared token file it replaced is removed if an older version left one.
+	removeRetiredAPIToken()
+	s.apiServer = api.NewServer(s.app)
 	s.apiServer.SetVersion(appVersion)
 	// The run history survives a restart (docs/V4-CONSOLE.md §4.2). Before
 	// the registry is shared below, so no run begins while the file is read;
@@ -147,10 +166,16 @@ func (s *NimbusService) run() {
 	// moment, and in a goroutine so a long startup backup does not hold up
 	// the API server coming online.
 	go s.app.HandleStartupRun()
-	writeInfoLog("Starting HTTP API server on 127.0.0.1:18765")
 
+	// The console needs the WebView2 runtime and no longer installs it
+	// itself (V4-CONSOLE D2): the service does, machine-wide, if it is
+	// missing. In the background: it is a download, and nothing above
+	// waits on it.
+	go ensureWebView2Runtime()
+
+	writeInfoLog(fmt.Sprintf("Serving the local API on %s", api.PipeName))
 	go func() {
-		if err := s.apiServer.Start(); err != nil {
+		if err := s.apiServer.Serve(s.apiListener); err != nil {
 			writeErrorLog(fmt.Sprintf("API server error: %v", err))
 		}
 	}()
@@ -176,6 +201,11 @@ func (s *NimbusService) Stop(svc service.Service) error {
 	// releases the writer / snapshot lock instead of waiting for TCP
 	// keepalive to reap the abandoned connection.
 	pbscommon.CloseAllActive()
+
+	// No new console requests once stopping.
+	if s.apiListener != nil {
+		_ = s.apiListener.Close()
+	}
 
 	// Signal the main loop to exit
 	if s.stopChan != nil {

@@ -16,6 +16,22 @@ import (
 // Global\ mutex it replaces would have stopped a second user's tray).
 const guiSingleInstanceID = "nimbus-backup-gui-5d9f3c2e-7b1a-4e8f-a6c4-2f0b9d1e3a57"
 
+// webView2Missing is what the console says when the WebView2 runtime is
+// missing or too old. It is built with Wails' `wv2runtime.error` and installs
+// nothing itself: the service installs the runtime machine-wide when it
+// starts (V4-CONSOLE D2), so the message points there.
+const webView2Missing = "Nimbus Backup needs the Microsoft Edge WebView2 runtime, which is not installed yet. " +
+	"The Nimbus Backup service installs it when it starts; try again in a few minutes. " +
+	"If this message persists, the service log in ProgramData\\NimbusBackup says why the install failed."
+
+// guiMessages is Wails' messages with the console's own for a missing runtime.
+func guiMessages() *wailswin.Messages {
+	m := wailswin.DefaultMessages()
+	m.ContactAdmin = webView2Missing
+	m.MissingRequirements = appName
+	return m
+}
+
 // guiOptions is the GUI's Wails configuration, separate from main() so the
 // single-instance wiring and the bound type can be tested.
 func guiOptions(console *Console, minimized bool, webviewDataDir string) *options.App {
@@ -51,6 +67,7 @@ func guiOptions(console *Console, minimized bool, webviewDataDir string) *option
 			WindowIsTranslucent:  false,
 			DisableWindowIcon:    false,
 			WebviewUserDataPath:  webviewDataDir,
+			Messages:             guiMessages(),
 		},
 	}
 }

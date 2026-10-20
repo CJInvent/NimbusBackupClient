@@ -6,11 +6,12 @@ package api
 // listener and drives it over real HTTP. Calling the handlers directly would
 // bypass the auth middleware and the body cap — i.e. exactly the layer a GUI
 // or a compromised local process actually hits, so it is the layer under test.
+// The connections carry testCaller (testserver_test.go); the pipe that gives
+// them a real Windows identity is tested on Windows (pipe_windows_test.go).
 //
-// Covers: the token gate (absent/wrong/prefix), the browser-Origin block, the
-// body cap, every route in setupRoutes() including method gates, the
-// service->GUI progress relay round-trip (dev rule 9), and handler error
-// propagation.
+// Covers: the identity gate, the body cap, every route in setupRoutes()
+// including method gates, the service->GUI progress relay round-trip (dev
+// rule 9), and handler error propagation.
 
 import (
 	"bytes"
@@ -24,8 +25,6 @@ import (
 	"testing"
 	"time"
 )
-
-const testToken = "0123456789abcdef0123456789abcdef"
 
 // stubHandler implements BackupHandler plus the optional interface the
 // server type-asserts for progress (SetProgressCallbacks). It records calls so
@@ -180,21 +179,16 @@ func (h *stubHandler) SaveControlPlaneFromMap(m map[string]interface{}) error {
 }
 
 // bootSmokeServer starts the production server stack on a loopback listener.
-// authMiddleware + mux are the same objects Start() would serve.
+// Handler() is what Serve serves; the connection's identity is testCaller.
 func bootSmokeServer(t *testing.T) (*httptest.Server, *stubHandler) {
 	t.Helper()
 	h := newStub()
-	s := NewServer("127.0.0.1:0", h, testToken)
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	ts := serveTest(NewServer(h))
 	t.Cleanup(ts.Close)
 	return ts, h
 }
 
 type reqOpt func(*http.Request)
-
-func withToken(tok string) reqOpt {
-	return func(r *http.Request) { r.Header.Set(tokenHeader, tok) }
-}
 
 func withHeader(k, v string) reqOpt {
 	return func(r *http.Request) { r.Header.Set(k, v) }
@@ -237,52 +231,52 @@ func do(t *testing.T, ts *httptest.Server, method, path string, body interface{}
 // --- the gate -------------------------------------------------------------
 
 func TestSmokeAuthGate(t *testing.T) {
-	ts, h := bootSmokeServer(t)
-
-	cases := []struct {
-		name string
-		opts []reqOpt
-		want int
-	}{
-		{"no token", nil, http.StatusUnauthorized},
-		{"empty token", []reqOpt{withToken("")}, http.StatusUnauthorized},
-		{"wrong token", []reqOpt{withToken("nope")}, http.StatusUnauthorized},
-		// A prefix of the real token must fail: constant-time compare is
-		// length-sensitive, a naive HasPrefix check would not be.
-		{"prefix of token", []reqOpt{withToken(testToken[:len(testToken)-1])}, http.StatusUnauthorized},
-		{"token plus suffix", []reqOpt{withToken(testToken + "x")}, http.StatusUnauthorized},
-		{"valid token", []reqOpt{withToken(testToken)}, http.StatusOK},
+	// A connection that carries no identity gets nothing: what Serve gives
+	// every connection is the pipe's Windows identity, and a server reached
+	// any other way (here, plain loopback TCP) has none to give.
+	h := newStub()
+	bare := serveTestWithoutCaller(NewServer(h))
+	t.Cleanup(bare.Close)
+	code, body := do(t, bare, http.MethodGet, "/status", nil)
+	if code != http.StatusUnauthorized {
+		t.Errorf("GET /status with no caller = %d, want 401 (body %s)", code, body)
 	}
-	for _, c := range cases {
-		code, body := do(t, ts, http.MethodGet, "/status", nil, c.opts...)
-		if code != c.want {
-			t.Errorf("%s: GET /status = %d, want %d (body %s)", c.name, code, c.want, body)
-		}
-		if c.want == http.StatusUnauthorized && strings.Contains(body, "smoke-host") {
-			t.Errorf("%s: unauthorized response leaked config: %s", c.name, body)
-		}
+	if strings.Contains(body, "smoke-host") {
+		t.Errorf("unauthorized response leaked config: %s", body)
+	}
+	if h.called("GetConfigWithHostname") {
+		t.Error("a request with no caller reached the handler")
 	}
 
-	// The handler must not have been reached by any rejected request.
-	if h.called("GetConfigWithHostname") != true {
-		t.Error("authorized request never reached the handler")
+	// The same server with an identity on its connections serves it, so the
+	// refusal above is the missing identity and nothing else.
+	ts, h2 := bootSmokeServer(t)
+	if code, _ := do(t, ts, http.MethodGet, "/status", nil); code != http.StatusOK {
+		t.Errorf("GET /status with a caller = %d, want 200", code)
+	}
+	if !h2.called("GetConfigWithHostname") {
+		t.Error("an identified request never reached the handler")
 	}
 
-	// Browser-originated requests are refused even WITH a valid token: our GUI
-	// never sets Origin, a cross-origin browser request always does.
-	code, _ := do(t, ts, http.MethodGet, "/status", nil, withToken(testToken), withHeader("Origin", "https://evil.example"))
-	if code != http.StatusForbidden {
-		t.Errorf("Origin-bearing request = %d, want 403", code)
+	// The token and the browser defenses are gone, not merely unused: a
+	// header that used to matter changes nothing either way.
+	if code, _ := do(t, ts, http.MethodGet, "/status", nil, withHeader("Origin", "https://example.invalid")); code != http.StatusOK {
+		t.Errorf("an Origin header on an identified request = %d, want 200 (the pipe has no browser to defend against)", code)
+	}
+	if code, _ := do(t, bare, http.MethodGet, "/status", nil, withHeader("X-Nimbus-Token", "anything")); code != http.StatusUnauthorized {
+		t.Errorf("the retired token header on a request with no caller = %d, want 401", code)
 	}
 }
 
 func TestSmokeAuthGateCoversEveryRoute(t *testing.T) {
-	ts, _ := bootSmokeServer(t)
+	bare := serveTestWithoutCaller(NewServer(newStub()))
+	t.Cleanup(bare.Close)
 
-	// Every route in setupRoutes(). An unauthenticated caller must never get
+	// Every route in setupRoutes(). A caller with no identity must never get
 	// past the middleware, whatever the method or path shape.
 	routes := []struct{ method, path string }{
 		{http.MethodGet, "/status"},
+		{http.MethodGet, "/caller"},
 		{http.MethodPost, "/backup"},
 		{http.MethodGet, "/jobs"},
 		{http.MethodPost, "/jobs/create"},
@@ -298,9 +292,9 @@ func TestSmokeAuthGateCoversEveryRoute(t *testing.T) {
 	}
 	routes = append(routes, newConsoleRoutes...)
 	for _, r := range routes {
-		code, body := do(t, ts, r.method, r.path, map[string]interface{}{})
+		code, body := do(t, bare, r.method, r.path, map[string]interface{}{})
 		if code != http.StatusUnauthorized {
-			t.Errorf("unauthenticated %s %s = %d, want 401 (body %s)", r.method, r.path, code, body)
+			t.Errorf("unidentified %s %s = %d, want 401 (body %s)", r.method, r.path, code, body)
 		}
 	}
 }
@@ -311,14 +305,14 @@ func TestSmokeBodyCap(t *testing.T) {
 	// maxRequestBody is 1 MiB; a larger body must be refused rather than
 	// buffered. The decoder surfaces the truncation as a 400.
 	big := `{"blob":"` + strings.Repeat("A", 2<<20) + `"}`
-	code, _ := do(t, ts, http.MethodPost, "/config/save", big, withToken(testToken))
+	code, _ := do(t, ts, http.MethodPost, "/config/save", big)
 	if code != http.StatusBadRequest {
 		t.Errorf("oversized body = %d, want 400", code)
 	}
 
 	// A body just under the cap still works.
 	small := map[string]interface{}{"blob": strings.Repeat("A", 1024)}
-	code, _ = do(t, ts, http.MethodPost, "/config/save", small, withToken(testToken))
+	code, _ = do(t, ts, http.MethodPost, "/config/save", small)
 	if code != http.StatusOK {
 		t.Errorf("normal body = %d, want 200", code)
 	}
@@ -345,7 +339,7 @@ func TestSmokeMethodGates(t *testing.T) {
 		{http.MethodGet, "/controlplane/save"},
 	}
 	for _, c := range cases {
-		code, _ := do(t, ts, c.method, c.path, map[string]interface{}{}, withToken(testToken))
+		code, _ := do(t, ts, c.method, c.path, map[string]interface{}{})
 		if code != http.StatusMethodNotAllowed {
 			t.Errorf("%s %s = %d, want 405", c.method, c.path, code)
 		}
@@ -356,7 +350,7 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 	ts, h := bootSmokeServer(t)
 
 	// /status returns the sanitized config the GUI and control server read.
-	code, body := do(t, ts, http.MethodGet, "/status", nil, withToken(testToken))
+	code, body := do(t, ts, http.MethodGet, "/status", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /status = %d", code)
 	}
@@ -373,7 +367,7 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 
 	// /jobs returns the jobs whole: the console's list and edit form read
 	// every field, so a summary would empty the form.
-	code, body = do(t, ts, http.MethodGet, "/jobs", nil, withToken(testToken))
+	code, body = do(t, ts, http.MethodGet, "/jobs", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /jobs = %d", code)
 	}
@@ -396,16 +390,16 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 	}
 
 	// create / update / delete all delegate to the handler.
-	if code, _ = do(t, ts, http.MethodPost, "/jobs/create", map[string]interface{}{"name": "New"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ = do(t, ts, http.MethodPost, "/jobs/create", map[string]interface{}{"name": "New"}); code != http.StatusOK {
 		t.Errorf("POST /jobs/create = %d", code)
 	}
-	if code, _ = do(t, ts, http.MethodPost, "/jobs/update", map[string]interface{}{"id": "job-1"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ = do(t, ts, http.MethodPost, "/jobs/update", map[string]interface{}{"id": "job-1"}); code != http.StatusOK {
 		t.Errorf("POST /jobs/update = %d", code)
 	}
-	if code, _ = do(t, ts, http.MethodPut, "/jobs/update", map[string]interface{}{"id": "job-1"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ = do(t, ts, http.MethodPut, "/jobs/update", map[string]interface{}{"id": "job-1"}); code != http.StatusOK {
 		t.Errorf("PUT /jobs/update = %d", code)
 	}
-	if code, _ = do(t, ts, http.MethodDelete, "/jobs/delete/job-1", nil, withToken(testToken)); code != http.StatusOK {
+	if code, _ = do(t, ts, http.MethodDelete, "/jobs/delete/job-1", nil); code != http.StatusOK {
 		t.Errorf("DELETE /jobs/delete/job-1 = %d", code)
 	}
 	for _, want := range []string{"SaveScheduledJobFromMap", "UpdateScheduledJobFromMap", "DeleteScheduledJobFromMap:job-1"} {
@@ -415,7 +409,7 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 	}
 
 	// A missing job id is a 400, not a delete-everything.
-	if code, _ = do(t, ts, http.MethodDelete, "/jobs/delete/", nil, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ = do(t, ts, http.MethodDelete, "/jobs/delete/", nil); code != http.StatusBadRequest {
 		t.Errorf("DELETE with empty job id = %d, want 400", code)
 	}
 }
@@ -423,19 +417,19 @@ func TestSmokeStatusAndJobsCRUD(t *testing.T) {
 func TestSmokePBSAndConfigRoutes(t *testing.T) {
 	ts, h := bootSmokeServer(t)
 
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/save", map[string]interface{}{"id": "pbs-1", "host": "pbs.example"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/save", map[string]interface{}{"id": "pbs-1", "host": "pbs.example"}); code != http.StatusOK {
 		t.Errorf("POST /pbs/save = %d", code)
 	}
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/default", map[string]interface{}{"id": "pbs-1"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/default", map[string]interface{}{"id": "pbs-1"}); code != http.StatusOK {
 		t.Errorf("POST /pbs/default = %d", code)
 	}
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/fingerprint", map[string]interface{}{"id": "pbs-1", "fingerprint": "AA:BB"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/fingerprint", map[string]interface{}{"id": "pbs-1", "fingerprint": "AA:BB"}); code != http.StatusOK {
 		t.Errorf("POST /pbs/fingerprint = %d", code)
 	}
-	if code, _ := do(t, ts, http.MethodDelete, "/pbs/delete/pbs-1", nil, withToken(testToken)); code != http.StatusOK {
+	if code, _ := do(t, ts, http.MethodDelete, "/pbs/delete/pbs-1", nil); code != http.StatusOK {
 		t.Errorf("DELETE /pbs/delete/pbs-1 = %d", code)
 	}
-	if code, _ := do(t, ts, http.MethodPost, "/config/save", map[string]interface{}{"usevss": true}, withToken(testToken)); code != http.StatusOK {
+	if code, _ := do(t, ts, http.MethodPost, "/config/save", map[string]interface{}{"usevss": true}); code != http.StatusOK {
 		t.Errorf("POST /config/save = %d", code)
 	}
 	for _, want := range []string{
@@ -448,18 +442,18 @@ func TestSmokePBSAndConfigRoutes(t *testing.T) {
 	}
 
 	// Required-field validation happens before delegation.
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/default", map[string]interface{}{}, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/default", map[string]interface{}{}); code != http.StatusBadRequest {
 		t.Errorf("POST /pbs/default without id = %d, want 400", code)
 	}
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/fingerprint", map[string]interface{}{"id": "pbs-1"}, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/fingerprint", map[string]interface{}{"id": "pbs-1"}); code != http.StatusBadRequest {
 		t.Errorf("POST /pbs/fingerprint without fingerprint = %d, want 400", code)
 	}
-	if code, _ := do(t, ts, http.MethodDelete, "/pbs/delete/", nil, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodDelete, "/pbs/delete/", nil); code != http.StatusBadRequest {
 		t.Errorf("DELETE /pbs/delete/ without id = %d, want 400", code)
 	}
 
 	// Malformed JSON is a 400, never a panic.
-	if code, _ := do(t, ts, http.MethodPost, "/pbs/save", "{not json", withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/pbs/save", "{not json"); code != http.StatusBadRequest {
 		t.Errorf("malformed JSON = %d, want 400", code)
 	}
 }
@@ -467,7 +461,7 @@ func TestSmokePBSAndConfigRoutes(t *testing.T) {
 func TestSmokeControlPlaneRoutes(t *testing.T) {
 	ts, h := bootSmokeServer(t)
 
-	code, body := do(t, ts, http.MethodGet, "/controlplane/status", nil, withToken(testToken))
+	code, body := do(t, ts, http.MethodGet, "/controlplane/status", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /controlplane/status = %d", code)
 	}
@@ -479,7 +473,7 @@ func TestSmokeControlPlaneRoutes(t *testing.T) {
 		t.Errorf("controlplane status not carried through: %v", cp)
 	}
 
-	if code, _ = do(t, ts, http.MethodPost, "/controlplane/save", map[string]interface{}{"control_server_url": "https://control.example"}, withToken(testToken)); code != http.StatusOK {
+	if code, _ = do(t, ts, http.MethodPost, "/controlplane/save", map[string]interface{}{"control_server_url": "https://control.example"}); code != http.StatusOK {
 		t.Errorf("POST /controlplane/save = %d", code)
 	}
 	if !h.called("SaveControlPlaneFromMap") {
@@ -488,7 +482,7 @@ func TestSmokeControlPlaneRoutes(t *testing.T) {
 
 	// A rejected settings write surfaces as 400 (the service validates).
 	h.arm("SaveControlPlaneFromMap")
-	if code, _ = do(t, ts, http.MethodPost, "/controlplane/save", map[string]interface{}{"control_server_url": "nonsense"}, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ = do(t, ts, http.MethodPost, "/controlplane/save", map[string]interface{}{"control_server_url": "nonsense"}); code != http.StatusBadRequest {
 		t.Errorf("rejected controlplane save = %d, want 400", code)
 	}
 }
@@ -498,7 +492,7 @@ func TestSmokeControlPlaneRoutes(t *testing.T) {
 func TestSmokeBackupProgressRoundTrip(t *testing.T) {
 	ts, h := bootSmokeServer(t)
 
-	if code, _ := do(t, ts, http.MethodPost, "/backup", map[string]interface{}{"backup_type": "directory"}, withToken(testToken)); code != http.StatusBadRequest {
+	if code, _ := do(t, ts, http.MethodPost, "/backup", map[string]interface{}{"backup_type": "directory"}); code != http.StatusBadRequest {
 		t.Errorf("POST /backup without backup_id = %d, want 400", code)
 	}
 
@@ -507,7 +501,7 @@ func TestSmokeBackupProgressRoundTrip(t *testing.T) {
 		"backup_id":   "smoke-backup",
 		"backup_dirs": []string{"C:\\data"},
 		"use_vss":     true,
-	}, withToken(testToken))
+	})
 	if code != http.StatusOK {
 		t.Fatalf("POST /backup = %d (%s)", code, body)
 	}
@@ -532,7 +526,7 @@ func TestSmokeBackupProgressRoundTrip(t *testing.T) {
 	}
 
 	// An unknown run id must 404 rather than reporting a phantom run.
-	if code, _ = do(t, ts, http.MethodGet, "/runs/no-such-run", nil, withToken(testToken)); code != http.StatusNotFound {
+	if code, _ = do(t, ts, http.MethodGet, "/runs/no-such-run", nil); code != http.StatusNotFound {
 		t.Errorf("unknown run = %d, want 404", code)
 	}
 
@@ -580,7 +574,7 @@ func TestSmokeBackupFailureWithoutCallbacks(t *testing.T) {
 	code, body := do(t, ts, http.MethodPost, "/backup", map[string]interface{}{
 		"backup_type": "machine",
 		"backup_id":   "smoke-fail",
-	}, withToken(testToken))
+	})
 	if code != http.StatusOK {
 		t.Fatalf("POST /backup = %d (%s)", code, body)
 	}
@@ -639,7 +633,7 @@ func TestSmokeHandlerErrorsPropagate(t *testing.T) {
 		{"DeleteScheduledJobFromMap", http.MethodDelete, "/jobs/delete/job-1", nil},
 	} {
 		h.arm(c.armed)
-		code, body := do(t, ts, c.method, c.path, c.body, withToken(testToken))
+		code, body := do(t, ts, c.method, c.path, c.body)
 		if code != http.StatusInternalServerError {
 			t.Errorf("%s failure -> %s %s = %d, want 500 (body %s)", c.armed, c.method, c.path, code, body)
 		}
@@ -650,7 +644,7 @@ func TestSmokeHandlerErrorsPropagate(t *testing.T) {
 // the deleted /backup/status/{id}.
 func pollRun(t *testing.T, ts *httptest.Server, runID string) Run {
 	t.Helper()
-	code, body := do(t, ts, http.MethodGet, "/runs/"+runID, nil, withToken(testToken))
+	code, body := do(t, ts, http.MethodGet, "/runs/"+runID, nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /runs/%s = %d (%s)", runID, code, body)
 	}

@@ -18,9 +18,6 @@
     "copyright": "© 2024-2026 RDEM Systems. All rights reserved.",
     "comments": "Client de sauvegarde pour Proxmox Backup Server"
   },
-  "webview2": {
-    "installmethod": "download"
-  },
   "windows": {
     "hideConsole": false,
     "manifest": {

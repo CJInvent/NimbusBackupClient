@@ -1,6 +1,7 @@
 # v4: the local API knows who is calling
 
-**Status (2026-10-17).** Specification only; no code changes. Companion to
+**Status (2026-10-20).** P1 built (section 10, "P1 as built"); P2 to P5 not
+started. Specified 2026-10-17. Companion to
 `docs/V4-CONSOLE.md`, whose finding F1 this answers and whose decision D1 and
 phase C4 it settles. Decisions are CJ's (2026-10-17) unless marked as a
 recommendation.
@@ -278,6 +279,115 @@ its own module) and replace C4's loopback client.
 | P4 | **The Elevate button and the elevated window** (section 6), in Browse, Setup and Jobs | Render tests: button shown for `elevated=false` (both rows of 6.1), hidden for `true`; no UAC call on tab entry (the binding is only called from the button handler); Windows CI: an elevated child started with `--elevated-browse` reports `elevated=true` to the service and exits with the chosen tab |
 | P5 | **V4-CONSOLE F2.** The DEK file gets `keyacl_windows.go`'s narrow ACL; the DPAPI scope question reopened | the key file's ACL asserted on Windows CI |
 
+### P1 as built (2026-10-20)
+
+As specified, with these details settled in the building. Read the first two
+before P3.
+
+- **Server verification uses the SCM, not the executable's path.** §3 says the
+  console refuses unless the server "runs as SYSTEM from
+  `%ProgramFiles%\NimbusBackup\NimbusBackupSVC.exe`". Two things make the path
+  the wrong test: the installer lets the install folder be chosen
+  (`WIXUI_INSTALLDIR`), so a fixed path refuses a legitimate install; and a
+  standard user cannot open a SYSTEM process to read its path at all. The
+  check is (1) the pipe's **owner is SYSTEM** (the service sets `O:SY`
+  explicitly; a process that is not SYSTEM cannot name SYSTEM as owner), and
+  (2) `GetNamedPipeServerProcessId` equals the process id the **Service
+  Control Manager** reports for `NimbusBackup` (any interactive user may query
+  a service's status; only an administrator can register or repoint one,
+  which §7 already places beyond any design). `api.serviceCheck`.
+- **Identification level and P3's impersonated writes conflict.** §3 has the
+  console open the pipe with `SECURITY_IDENTIFICATION` so an impostor cannot
+  act as it; §5.2 has the service write "while impersonating the caller".
+  An identification-level token can be read and used for `AccessCheck`, but
+  cannot be impersonated for a write. P1 does what §3 says. **P3 needs a
+  decision (CJ).** Recommendation: keep identification level, and make §5.2's
+  write as SYSTEM after `AccessCheck(destination's descriptor, caller's token,
+  FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)` on a handle to the opened
+  destination (so the check and the write are about the same object), with
+  the file's owner set to the caller (SYSTEM holds `SeRestorePrivilege`). That
+  keeps §5.2's two properties (the caller's own rights decide; files are the
+  caller's) without handing an impersonation token to whatever is serving the
+  pipe. The alternative, a second connection at `SECURITY_IMPERSONATION` after
+  the first has verified the server, exposes an elevated window's
+  administrator token (P4) to a server the console has not verified on that
+  connection.
+- **`GET /caller`** is a new route: the identity the service read for this
+  connection (`user_sid`, `account`, `session_id`, `elevated`, `admin`; pid and
+  image are log-only and not on the wire). P1's tests read the service's view
+  through it, and P4's button needs it. User requirement; P2's table must list
+  it. Allowed under the read-only lockdown.
+- **Identity is read after the first byte.** Windows refuses
+  `ImpersonateNamedPipeClient` until the client has written, so the server
+  connection resolves its caller on its first read: before net/http has
+  parsed anything, which is what §3 needs. The client's token
+  (`TOKEN_QUERY | TOKEN_DUPLICATE`) is held for the connection's life and
+  closed with it; one request per connection makes that the request's life.
+- **Logging (§8, the local half).** Every request that is not a GET or HEAD is
+  logged with account, SID, session, elevated, admin, client pid and image. The
+  control-plane event fields (`caller_account`, `elevated`) are P3's, with the
+  restores they describe.
+- **No `http.Client` in the console.** `api.Client` dials a connection per
+  request, sets one deadline over the whole exchange, `req.Write`,
+  `http.ReadResponse`, and closes the connection with the body. Tests point it
+  at an `httptest` server with `api.NewClientAt(url)`; a test gives
+  `Handler()` an identity with `api.FixedCallerContext`.
+  `TestOnlyTestsUseFixedCallerContext` fails if any non-test file in the
+  repository uses either.
+- **Failing to create the pipe fails the service's start.** `NimbusService.Start`
+  creates the listener before it returns; the SCM sees the error. Outside
+  Windows `ListenPipe` returns `ErrPipeUnsupported`, so the Linux service view
+  (which exists for the linter and tests) does not start.
+- **Removed:** `EnsureToken`, `restrictToOwners` and `acl_*.go`, the token
+  transport and header, `api.TokenPath` and `api.DataDir` (the data directory
+  is the service's own again, `gui/config.go`), port 18765, the Origin check,
+  and `X-Nimbus-Token` from log redaction. On start the service deletes an
+  `api-token` file an older version left in `ProgramData\NimbusBackup`.
+- **D2, the WebView2 runtime.** On start the service reads the per-machine
+  `pv` value Microsoft documents for detection; if there is no runtime at or
+  above Wails v2.8.0's minimum (94.0.992.31), it downloads the Evergreen
+  bootstrapper over HTTPS (redirects only to `*.microsoft.com`) into a folder
+  only SYSTEM and Administrators can write, requires a valid Authenticode
+  signature whose signer is **Microsoft Corporation**, and runs it with
+  `/silent /install` (per-machine, since it runs as SYSTEM). A failure is
+  logged and retried at the next start. The console sets Wails' missing-runtime
+  message to point at the service rather than "contact your administrator".
+- **`wails.json` never set the WebView2 strategy.** Its `"webview2":
+  {"installmethod": ...}` key is not read by the Wails CLI (v2.8.0 or the
+  v2.12.0 CI installs); the strategy is `wails build -webview2`, whose default
+  is `download`. That is where the shipped console's downloader came from.
+  Build GUI now passes `-webview2 error`, the inert key is removed, and
+  `console/deps_test.go` reads the workflow and `scripts/local-gates.sh` to pin
+  the flag and the tags (`TestTheShippedTagsAreTheBuildsTags`). The same file's
+  `"windows": {"manifest": {"level": "requireAdministrator"}}` is also not
+  read (the console runs `asInvoker`), which P4 depends on; left for P4 to
+  remove.
+- **The tests**, Windows CI (S8, `gui/api/pipe_windows_test.go`). One process
+  is both ends, so the pipes carry the production descriptor with the test's
+  user in SYSTEM's two places (derived from `pipeSDDL`, not restated), and
+  `TestThePipeSecurityDescriptorIsTheSpecs` checks the production descriptor
+  entry by entry. §10's "a client in the normal runner session gets
+  `elevated=false`" is built as a token Windows cannot call elevated
+  (Administrators deny-only, privileges removed), because hosted runners may
+  run elevated; the runner's own token is checked against what the service
+  saw as well. Remote refusal is tested for each defense alone, after a
+  control pipe with neither proves the runner can reach its own pipes over
+  SMB. Every refusal is paired with the same setup succeeding.
+  `gui/localapi_test.go` checks that `Start` fails when the pipe does, and
+  `gui/webview2_windows_test.go` the signature check (a Microsoft-signed .NET
+  Framework executable, a changed signer name, an unsigned binary, a tampered
+  one).
+- **Lint.** `gui/api` is its own module and no lint pass reached it; Lint now
+  runs it in its windows view (and `scripts/local-gates.sh` does). It needed
+  only a package comment and two unchecked `Close`s.
+- **Size.** Console **11,463,680 to 9,932,800** bytes stripped (local, the
+  V4-CONSOLE §10 method), against §9's prototype 9,318,400; the console
+  carries more binding code than the prototype, as C3 found. No
+  `http.Transport`, `http.Client` or TLS handshake code remains (package
+  initializers only). Service 11,073,024 to 11,123,200. Budget in Build GUI:
+  **10,350,000**, not 9.6 MB, set as C3 set its own (shipped expected about
+  1.5% above local, plus about 270 KB).
+
 ## 11. Open
 
 - Whether stored descriptors exist for every entry in existing directory
@@ -287,3 +397,5 @@ its own module) and replace C4's loopback client.
   bed.
 - Whether a terminal-server deployment wants users to restore at all. Section 5
   makes it safe; org policy can still turn it off.
+- **Before P3:** identification level against impersonated writes (section 10,
+  "P1 as built", second item).

@@ -97,7 +97,6 @@ func fakeSecret(t *testing.T, n int) string {
 
 func TestRedactionRemovesSecretsWhateverTheirShape(t *testing.T) {
 	bearer := fakeSecret(t, 6)
-	nimbus := fakeSecret(t, 8)
 	pbsTok := fakeSecret(t, 4) + "-" + fakeSecret(t, 4)
 	apiKey := fakeSecret(t, 8)
 	passwd := fakeSecret(t, 5)
@@ -108,7 +107,6 @@ func TestRedactionRemovesSecretsWhateverTheirShape(t *testing.T) {
 		secret string
 	}{
 		{"GET /api Authorization: Bearer " + bearer, bearer},
-		{"X-Nimbus-Token: " + nimbus, nimbus},
 		{"connecting with root@pam!agent:" + pbsTok, pbsTok},
 		{"url=https://pbs/api?api_key=" + apiKey, apiKey},
 		{"password=" + passwd + " for user bob", passwd},

@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -20,21 +19,25 @@ func (h *storageAPIStub) ApproveStorageIdentityFromMap(map[string]interface{}) e
 }
 func TestStorageIdentityAPIRequiresAuthAndHonorsLock(t *testing.T) {
 	h := &storageAPIStub{stubHandler: &stubHandler{}}
-	s := NewServer("", h, "test-token")
+	s := NewServer(h)
 	s.SetLockedFunc(func() bool { return true })
-	handler := s.authMiddleware(s.readOnlyMiddleware(s.mux))
+	ts := serveTest(s)
+	t.Cleanup(ts.Close)
+	bare := serveTestWithoutCaller(s)
+	t.Cleanup(bare.Close)
 	for _, c := range []struct {
-		method, token string
-		want          int
-	}{{"GET", "", 401}, {"GET", "test-token", 200}, {"POST", "test-token", 403}} {
-		req := httptest.NewRequest(c.method, "/storage/identity", strings.NewReader("{}"))
-		if c.token != "" {
-			req.Header.Set("X-Nimbus-Token", c.token)
-		}
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != c.want {
-			t.Fatalf("%s got %d want %d", c.method, w.Code, c.want)
+		name   string
+		srv    *httptest.Server
+		method string
+		want   int
+	}{
+		{"no caller", bare, "GET", 401},
+		{"caller", ts, "GET", 200},
+		{"caller, locked write", ts, "POST", 403},
+	} {
+		code, _ := do(t, c.srv, c.method, "/storage/identity", "{}")
+		if code != c.want {
+			t.Fatalf("%s: %s got %d want %d", c.name, c.method, code, c.want)
 		}
 	}
 	if h.approved {

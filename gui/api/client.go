@@ -1,8 +1,12 @@
 package api
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -10,42 +14,132 @@ import (
 )
 
 const (
-	DefaultServiceURL = "http://127.0.0.1:18765"
-	ConnectionTimeout = 5 * time.Second  // Increased for service startup
+	ConnectionTimeout = 5 * time.Second  // opening the pipe, and IsServiceAvailable
 	RequestTimeout    = 30 * time.Second // Backup returns immediately, safe
 )
 
-// Client handles communication with the local service
+// Client is the console's half of the local API (docs/V4-LOCAL-API.md §3).
+//
+// HTTP/1.1, ONE REQUEST PER CONNECTION, written and read by hand over a
+// connection c.dial opens: req.Write, then http.ReadResponse, then the
+// connection is closed with the body. There is no http.Client and no
+// http.Transport here on purpose. A Transport is connection pooling, proxies,
+// TLS and HTTP/2, none of which a local pipe needs, and linking it is most of
+// what made the console 1.5 MB larger than it had to be (V4-CONSOLE §6 D2).
+// One request per connection is also what keeps identity simple on the other
+// side: the service reads the caller from the connection, and a connection
+// never carries a second request whose identity could be confused with the
+// first's.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	// baseURL names the service in the requests: the Host header and the
+	// scheme. The connection is whatever dial opens.
+	baseURL string
+	dial    func(timeout time.Duration) (net.Conn, error)
 }
 
-// NewClient creates a new API client for the service on this machine.
-func NewClient(tokenPath string) *Client {
-	return NewClientAt(DefaultServiceURL, tokenPath)
-}
-
-// NewClientAt is NewClient for a service at another address: a test's fake
-// service. The token is still read from tokenPath on every request.
-func NewClientAt(baseURL, tokenPath string) *Client {
+// NewClient is the client of this machine's service: the named pipe, opened
+// so that the service can identify the console but not act as it, and
+// refused unless the process serving it is the NimbusBackup service running
+// as SYSTEM (pipe_windows.go, verifyServer).
+func NewClient() *Client {
 	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout:   RequestTimeout,
-			Transport: &tokenTransport{tokenPath: tokenPath, base: http.DefaultTransport},
+		baseURL: "http://nimbus-service",
+		dial: func(timeout time.Duration) (net.Conn, error) {
+			return dialPipe(PipeName, serviceCheck(), timeout)
 		},
 	}
 }
 
-// IsServiceAvailable checks if the local service is running
-func (c *Client) IsServiceAvailable() bool {
-	client := &http.Client{
-		Timeout:   ConnectionTimeout,
-		Transport: c.httpClient.Transport, // reuse the token-injecting transport
+// NewClientAt is a client of a fake service on a loopback TCP address
+// (httptest), for TESTS of what the client sends and how it reads the
+// answers. Production never calls it: nothing on TCP has a Windows identity,
+// and the service no longer listens on a port. Pinned to tests by
+// TestOnlyTestsUseFixedCallerContext.
+func NewClientAt(baseURL string) *Client {
+	host := baseURL
+	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+		host = u.Host
 	}
+	return &Client{
+		baseURL: baseURL,
+		dial: func(timeout time.Duration) (net.Conn, error) {
+			return net.DialTimeout("tcp", host, timeout)
+		},
+	}
+}
 
-	resp, err := client.Get(c.baseURL + "/status")
+// send makes one request on a connection of its own. The whole exchange,
+// writing the request and reading every byte of the answer, is bounded by
+// timeout: the deadline is set on the connection, so a service that stops
+// answering mid-body ends the read instead of holding the console.
+func (c *Client) send(method, path string, body []byte, timeout time.Duration) (*http.Response, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, c.baseURL+path, rdr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// "Connection: close": the service closes after answering, and says so.
+	req.Close = true
+
+	conn, err := c.dial(ConnectionTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		// A connection that cannot be bounded could hang the console for
+		// ever on a stuck service. Refuse it rather than find out.
+		_ = conn.Close()
+		return nil, fmt.Errorf("the connection to the service cannot be bounded: %w", err)
+	}
+	if err := req.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	resp.Body = &connBody{ReadCloser: resp.Body, conn: conn}
+	return resp, nil
+}
+
+func (c *Client) get(path string) (*http.Response, error) {
+	return c.send(http.MethodGet, path, nil, RequestTimeout)
+}
+
+func (c *Client) post(path string, body []byte) (*http.Response, error) {
+	if body == nil {
+		body = []byte{}
+	}
+	return c.send(http.MethodPost, path, body, RequestTimeout)
+}
+
+// connBody closes the connection with the body: the connection was the
+// request's alone.
+type connBody struct {
+	io.ReadCloser
+	conn net.Conn
+}
+
+func (b *connBody) Close() error {
+	err := b.ReadCloser.Close()
+	if cerr := b.conn.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// IsServiceAvailable checks if the local service is running, and is the
+// service (an untrusted server answers false: dialPipe refuses it).
+func (c *Client) IsServiceAvailable() bool {
+	resp, err := c.send(http.MethodGet, "/status", nil, ConnectionTimeout)
 	if err != nil {
 		return false
 	}
@@ -56,7 +150,7 @@ func (c *Client) IsServiceAvailable() bool {
 
 // GetStatus retrieves the service status
 func (c *Client) GetStatus() (*StatusResponse, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/status")
+	resp, err := c.get("/status")
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to service: %w", err)
 	}
@@ -180,7 +274,7 @@ func (c *Client) GetRecentRuns(days int) (*RunsResponse, error) {
 }
 
 func (c *Client) getRuns(path string) (*RunsResponse, error) {
-	resp, err := c.httpClient.Get(c.baseURL + path)
+	resp, err := c.get(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get runs: %w", err)
 	}
@@ -201,7 +295,7 @@ func (c *Client) getRuns(path string) (*RunsResponse, error) {
 // destination and the control plane. Served from the service's cache, so it
 // is safe to poll.
 func (c *Client) GetConnections() (*ConnectionsResponse, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/connections")
+	resp, err := c.get("/connections")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connections: %w", err)
 	}
