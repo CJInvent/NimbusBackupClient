@@ -85,7 +85,7 @@ dev.231. CI fails if the cabinet is not LZX or a non-WOFF2 font reaches `dist`.
   `storage.googleapis.com`, which is blocked. `GONOPROXY='github.com/*,www.velocidex.com/*'`
   fetches those over git; with `GOSUMDB=off` (the checksum DB is blocked) the
   repo's `go.sum` still verifies. No mirror loop needed any more.
-- Go 1.26.9 (the CI pin) builds from source in a few minutes: clone
+- Go 1.26.10 (the CI pin) builds from source in a few minutes: clone
   `golang/go` at the tag, `GOROOT_BOOTSTRAP=/usr/local/go ./make.bash`.
 - `GOOS=windows CGO_ENABLED=0 go build -trimpath -tags desktop,wv2runtime.download,production`
   in `console/` (in `gui/` before C3) reproduces the shipped console within
@@ -362,7 +362,12 @@ it nor safely skip persisting.
 Ephemeral reports `ok`, not `unavailable` — it is not a fault, and colouring a
 fleet view red for machines working as designed trains operators to ignore it.
 
-**Go is pinned to 1.26.9 (2026-10-14).** The Dependency Audit job found nine
+**Go is pinned to 1.26.10 (2026-10-26).** GO-2026-6809 (crypto/x509),
+fixed in go1.26.10, was published after dev.256 and failed the Dependency Audit
+on every branch: govulncheck reports it reachable from the console
+(`main` → `fmt.Fprintf` → `x509.Certificate.Verify`).
+
+**Earlier: 1.26.9 (2026-10-14).** The Dependency Audit job found nine
 standard-library vulnerabilities reachable from this code in go1.26.6, all
 fixed in go1.26.9: net/http (GO-2026-6617, -6613, -6612, -6611, -6610, -6605,
 -6603), mime/multipart (GO-2026-6608), crypto/tls (GO-2026-6607), plus

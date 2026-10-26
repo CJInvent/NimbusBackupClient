@@ -1,7 +1,7 @@
 import { useTranslation } from '../../i18n/i18nContext'
 
 // Start (or save the schedule), Stop, and leave a job's edit.
-export default function BackupActions({ backupMode, progress, editingJobId, onStart, onStop, onCancelEdit }) {
+export default function BackupButtons({ backupMode, progress, editingJobId, onStart, onStop, onCancelEdit }) {
   const { t } = useTranslation()
   return (
     <>

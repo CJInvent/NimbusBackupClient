@@ -6,7 +6,7 @@ import DirectoryFields from './DirectoryFields'
 import MachineDisks from './MachineDisks'
 import BackupSettings from './BackupSettings'
 import BackupProgressCard from './BackupProgressCard'
-import BackupActions from './BackupActions'
+import BackupButtons from './BackupButtons'
 import ScheduledJobs from '../jobs/ScheduledJobs'
 import JobHistory from '../history/JobHistory'
 import StatusNotice from '../frame/StatusNotice'
@@ -66,7 +66,7 @@ export default function BackupScreen({ active, f, run, jobs, app, security, act,
         <BackupProgressCard progress={run.progress} backupStats={run.backupStats} backupPhase={run.backupPhase} status={status} />
       )}
 
-      <BackupActions
+      <BackupButtons
         backupMode={f.backupMode}
         progress={run.progress}
         editingJobId={f.editingJobId}

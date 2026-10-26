@@ -129,6 +129,23 @@ test('no source file is over 250 lines', () => {
   assert.deepEqual(big, [])
 })
 
+// The release console is built on Windows, where the filesystem ignores case:
+// an extension-less import of ./BackupActions resolved to backupActions.js
+// there (Vite tries .js before .jsx) and dev.256 rendered a black window
+// (docs/V4-GUI-AUDIT.md 4.11).
+test('no two source files differ only in case or extension', () => {
+  const files = walk(join(root, 'src')).map(f => relative(root, f))
+  assert.ok(files.length > 20, 'the source walk found almost nothing; the check would pass vacuously')
+  const seen = new Map()
+  const clashes = []
+  for (const f of files) {
+    const key = f.replace(/\.[^./\\]+$/, '').toLowerCase()
+    if (seen.has(key)) clashes.push([seen.get(key), f])
+    else seen.set(key, f)
+  }
+  assert.deepEqual(clashes, [])
+})
+
 test('the text extraction reads text and the attributes that carry words', () => {
   assert.equal(textOf('<div title="a &amp; b"><span>x</span> <!-- --> <b>y&#x27;s</b><input placeholder="C:\\Data&#10;D:"/></div>'),
     "[title] a & b\nx\ny's\n[placeholder] C:\\Data\nD:")

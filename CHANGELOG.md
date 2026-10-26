@@ -105,6 +105,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   translation keys that only they used.
 
 ### Fixed
+- **The console opened to a black window** (dev.256, release builds only).
+  `screens/backup/` held `BackupActions.jsx` (the buttons) beside
+  `backupActions.js` (the action factory). The release console is built on
+  Windows, whose filesystem ignores case, so the extension-less import of
+  `./BackupActions` resolved to the `.js` file; the screen rendered the
+  factory's object and React stopped at the first render. The component is now
+  `BackupButtons.jsx`, and a render test refuses two source files that differ
+  only in case or extension (docs/V4-GUI-AUDIT.md 4.11).
 - **Cancelling a job edit emptied the window** (GUI audit S1): it selected a
   tab named `scheduled`, which does not exist, so no pane was shown until a tab
   was clicked. It now stays on the backup tab.
