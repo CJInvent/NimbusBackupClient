@@ -587,6 +587,12 @@ Rules, enforced by the audit script (S4) once S2 has split `App.jsx`:
   (`screens/<name>/`), one component per file, hooks and helpers in their own
   files; `translations.js` becomes one file per language per screen.
 * A component takes props and renders; it does not fetch. Fetching lives in a hook.
+* No two files in one folder may differ only in case or extension
+  (`BackupActions.jsx` beside `backupActions.js`). Imports omit the extension,
+  and the release console is built on Windows, whose filesystem ignores case:
+  there `./BackupActions` found `backupActions.js` first, the screen rendered
+  the action factory's object, and dev.256 opened to a black window
+  (2026-10-26). The render tests enforce it.
 * The script reports the five largest files on every build so growth is visible.
 * The same rule is proposed for new Go files (soft limit 400 lines, reported, not
   failed) and is part of the independence program (`docs/INDEPENDENCE-GOALS.md`).
