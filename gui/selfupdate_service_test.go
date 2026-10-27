@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -66,10 +67,15 @@ func TestTheInstallCommandRecordsTheExitCodeBesideTheLog(t *testing.T) {
 	m := updateMarker{MSI: `C:\ProgramData\NimbusBackup\update\agent.msi`,
 		Log: `C:\ProgramData\NimbusBackup\update\install.log`, Exit: `C:\ProgramData\NimbusBackup\update\exit.txt`}
 	c := updateCommand(m)
-	for _, want := range []string{`msiexec.exe /i "` + m.MSI + `" /qn /norestart /l*v "` + m.Log + `"`, `echo %ERRORLEVEL%>"` + m.Exit + `"`} {
+	for _, want := range []string{`msiexec.exe /i "` + m.MSI + `" /qn /norestart /l*v "` + m.Log + `"`, `(echo %ERRORLEVEL%)>"` + m.Exit + `"`} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("command lacks %q:\n%s", want, c)
 		}
+	}
+	// cmd treats a digit directly before > as a handle number, so the code
+	// (0, 3010) must never be what precedes the redirection.
+	if regexp.MustCompile(`%ERRORLEVEL%\s*>`).MatchString(c) || regexp.MustCompile(`[0-9]>`).MatchString(c) {
+		t.Fatalf("the exit code would be read as a redirection handle:\n%s", c)
 	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "exit.txt")

@@ -105,6 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   translation keys that only they used.
 
 ### Fixed
+- **A successful self-update was reported as failed** (dev.261, 2026-10-27).
+  The install batch wrote `echo %ERRORLEVEL%>"exit.txt"`, which cmd expands to
+  `echo 0>"exit.txt"` and reads as a redirect of handle 0, so the exit code
+  never reached the file and the new service reported "the installer recorded
+  no result" after ten minutes. The echo is parenthesized; a test refuses a
+  digit or `%ERRORLEVEL%` directly before `>`.
 - **The console opened to a black window** (dev.256, release builds only).
   `screens/backup/` held `BackupActions.jsx` (the buttons) beside
   `backupActions.js` (the action factory). The release console is built on

@@ -174,10 +174,15 @@ func beginSelfUpdate(o controlplane.UpdateOffer) {
 
 // updateCommand is the batch file the task runs: msiexec, then its exit code
 // beside the log. Paths are ours (ProgramData), quoted.
+//
+// The echo is parenthesized. Unparenthesized, `echo %ERRORLEVEL%>"file"`
+// expands to `echo 0>"file"`, and cmd reads the digit before > as a handle
+// number: exit.txt never received the code, so a successful update was
+// reported as "the installer recorded no result" (dev.261, 2026-10-27).
 func updateCommand(m updateMarker) string {
 	return "@echo off\r\n" +
 		`msiexec.exe /i "` + m.MSI + `" /qn /norestart /l*v "` + m.Log + "\"\r\n" +
-		`echo %ERRORLEVEL%>"` + m.Exit + "\"\r\n"
+		`(echo %ERRORLEVEL%)>"` + m.Exit + "\"\r\n"
 }
 
 // finishSelfUpdate is step 5, run once when the service's agent starts: report
