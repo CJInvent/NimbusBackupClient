@@ -80,8 +80,9 @@ Compile Views (S2) vets each:
 
 1. **service, linux** — what the linter and `go test` see.
 2. **service, windows** — what ships as `NimbusBackupSVC.exe`.
-3. **console, windows** (with Wails' `desktop,wv2runtime.download,production`
-   tags) — what ships as `NimbusBackup.exe`.
+3. **console, windows** (with Wails' `desktop,wv2runtime.error,production`
+   tags, from Build GUI's `wails build -webview2 error`) — what ships as
+   `NimbusBackup.exe`.
 
 `//go:build windows` vs `!windows` still split platform code in `gui/`
 (`secrets_windows.go`/`secrets_nonwindows.go`, `tpm_windows.go`,
@@ -124,16 +125,27 @@ internally, 0–100 at the API boundary.
 
 ## Local API — the only cross-process boundary
 
-Authenticated loopback server `127.0.0.1:18765`, package `gui/api/`. Auth is
-a shared token (`X-Nimbus-Token`, constant-time compare) in a file whose DACL
-is restricted to SYSTEM/Administrators/INTERACTIVE (`acl_windows.go` —
-per-application ACLs don't exist on Windows; well-known SIDs are the correct
-domain-independent construct). The `BackupHandler` interface (`server.go`) is
-the contract the service implements.
+A named pipe, `\\.\pipe\NimbusBackup`, package `gui/api/`
+(docs/V4-LOCAL-API.md §3, since P1). The service creates it at start with
+`FILE_FLAG_FIRST_PIPE_INSTANCE` (a process holding the name first fails the
+start) and `PIPE_REJECT_REMOTE_CLIENTS`; its descriptor is owned by SYSTEM,
+denies NETWORK, and gives INTERACTIVE read/write without the right to add
+server instances (`pipe_windows.go`, `pipeSDDL`). HTTP/1.1, one request per
+connection. The caller is identified from Windows per connection (the server
+impersonates the client just long enough to open its token: user SID,
+session, elevation, Administrators membership) and nothing a request says
+about itself is consulted; a connection with no identity gets 401
+(`auth.go`). The console opens the pipe at identification level and refuses
+to send anything unless the pipe is owned by SYSTEM and served by the
+process the SCM reports for the NimbusBackup service. `GET /caller` returns
+the identity the service read. The shared token file, port 18765 and the
+Origin check are gone. The `BackupHandler` interface (`server.go`) is the
+contract the service implements.
 
 | Route | Purpose |
 |---|---|
 | `GET /status` | Service status, the console's sanitized configuration view, security warnings |
+| `GET /caller` | The caller's identity as the service read it from Windows (user SID, account, session, elevated, admin) |
 | `POST /backup`, `POST /backup/cancel` | Start or stop a backup |
 | `GET /runs/active`, `/runs/recent?days=N`, `/runs/{id}` | What is running and what ran (30 days, kept across restarts) |
 | `GET /connections` | What this machine can reach |
@@ -651,7 +663,7 @@ now run every gate.
 | S5 | **Image-browse fixture smoke** — real mkfs NTFS/FAT12/16/32/exFAT images in `imagebrowse/testdata`: partition parse → list → $MFT fast-tree ≡ generic walk → extract → ReFS/BitLocker refused. Plus `parser_robustness_test.go`: ~2,300 mutated images and adversarial geometries must fail, never panic, hang, or allocate from image-controlled sizes | The restore-side parsers against ground-truth filesystems AND against hostile ones — a backup image is untrusted input | ubuntu | **green via S1** (previously never executed) |
 | S6 | **PXAR/index round-trip** — writer→reader byte-for-byte over a fixture tree, selective extract, virtual files; chunker determinism + size distribution; FIDX spans/EOF/bad-magic; catalog round-trip | The wire formats we write are the ones we can read back — the writer builds every directory backup and the reader is what a restore runs, so a disagreement means backups keep succeeding and only the restore fails | ubuntu | **green** — completed by the writer→reader round trip; S1 also found the chunker suite was measuring zeros (below) |
 | S7 | **Secret-store smoke (Windows)** — seal/unseal through the real chain, corrupt/tampered/foreign-key degradation to "re-enter", protector auto-upgrade preserving the DEK | Dev rule 11 on real Windows crypto. Runners have no TPM, so the load-bearing assertion is that the chain does **not** fall through to `plaintext` | windows | **green** |
-| S8 | **Artifact identity + API credential (Windows)** — `EnsureToken` idempotence and the icacls DACL (locale-independent: no inherited `(I)` ACEs); shipped binaries exist, are plausible, and `NimbusBackupSVC.exe` carries CompanyName/ProductName/ProductVersion | The token guarding the privileged API is really restricted, and the `.syso` AV-false-positive mitigation has not silently stopped linking | windows | **green** |
+| S8 | **Artifact identity + local API (Windows)** — the named pipe (V4-LOCAL-API P1): the service sees the client's own token, a non-elevated client as `elevated=false`, a process holding the pipe name stops the service's listener, remote clients are refused (each defense alone, against a reachable control), the console refuses a server that is not SYSTEM's service and sends it nothing, a request claiming an identity gets its token's; the descriptor is the spec's. Shipped binaries exist, are plausible, and `NimbusBackupSVC.exe` carries CompanyName/ProductName/ProductVersion | The boundary to the SYSTEM service decides from Windows identity, and the `.syso` AV-false-positive mitigation has not silently stopped linking | windows | **pipe half new in P1** |
 | S9b | **Provisioned MSI smoke** — build a preconfigured MSI from a profile, install it, assert the payload lands where the service looks; assert a malformed profile fails the BUILD; assert the stock MSI carries no profile | The provisioning contract end to end, and that one org's enrollment token cannot ship to every customer | windows | **green, non-blocking** |
 | S9 | **MSI install/uninstall smoke** — `msiexec /qn` install → service registered + binaries present → uninstall with `KEEP_CONFIG` both ways → config preserved / removed accordingly | The installer customers actually run, and the uninstall contract that a customer's PBS credentials survive unless they say otherwise | windows | **green, non-blocking** — advisory until it has a track record on hosted runners |
 | S10 | **VSS snapshot smoke (Windows)** — real snapshot through the production path; asserts the 0.2.150 diagnostics reach `LogFn`, then the lifecycle and cleanup | The most privileged thing the product does. The diagnostics assertion holds even where a runner refuses to snapshot — silence means the "prints into the void in a service" regression is back | windows | **green, non-blocking** — same reason |

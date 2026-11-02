@@ -1,0 +1,30 @@
+# golangci-lint configuration for the local API module (gui/api/): the named pipe,
+# the caller identity and the client both programs use. The same rules as the
+# service's (gui/.golangci.yml) and the console's.
+version: "2"
+
+run:
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      checks: ["all"]
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

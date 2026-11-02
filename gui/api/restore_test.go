@@ -94,11 +94,11 @@ func (h *restoreStub) reached() (queries, jobs, controls int) {
 func bootRestoreServer(t *testing.T, allow func(string) bool) (*httptest.Server, *restoreStub) {
 	t.Helper()
 	h := newRestoreStub()
-	s := NewServer("127.0.0.1:0", h, testToken)
+	s := NewServer(h)
 	if allow != nil {
 		s.SetRestoreAllowedFunc(allow)
 	}
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	ts := serveTest(s)
 	t.Cleanup(ts.Close)
 	return ts, h
 }
@@ -127,7 +127,7 @@ func TestEveryRestoreOpIsRefusedWhenFileRestoreIsOff(t *testing.T) {
 	for _, op := range RestoreOps() {
 		t.Run(op.Name, func(t *testing.T) {
 			code, body := do(t, ts, http.MethodPost, routeFor(op.Kind),
-				map[string]any{"op": op.Name, "params": map[string]any{}}, withToken(testToken))
+				map[string]any{"op": op.Name, "params": map[string]any{}})
 			if code != http.StatusForbidden {
 				t.Fatalf("%s returned %d, want 403 — the policy gate did not fire\nbody: %s", op.Name, code, body)
 			}
@@ -149,7 +149,7 @@ func TestEveryRestoreOpReachesTheEngineWhenPermitted(t *testing.T) {
 	for _, op := range RestoreOps() {
 		t.Run(op.Name, func(t *testing.T) {
 			code, body := do(t, ts, http.MethodPost, routeFor(op.Kind),
-				map[string]any{"op": op.Name, "params": map[string]any{}}, withToken(testToken))
+				map[string]any{"op": op.Name, "params": map[string]any{}})
 			if code != http.StatusOK {
 				t.Fatalf("%s returned %d while file_restore was ON\nbody: %s", op.Name, code, body)
 			}
@@ -188,7 +188,7 @@ func TestRestoreIsRefusedWhenNoPolicyPredicateIsInstalled(t *testing.T) {
 	ts, h := bootRestoreServer(t, nil)
 
 	code, body := do(t, ts, http.MethodPost, "/restore/query",
-		map[string]any{"op": "snapshots"}, withToken(testToken))
+		map[string]any{"op": "snapshots"})
 	if code != http.StatusForbidden {
 		t.Fatalf("an unconfigured server permitted a restore: %d %s", code, body)
 	}
@@ -204,7 +204,7 @@ func TestAnUndeclaredOpIsRefused(t *testing.T) {
 	ts, h := bootRestoreServer(t, func(string) bool { return true })
 
 	code, body := do(t, ts, http.MethodPost, "/restore/query",
-		map[string]any{"op": "delete-everything"}, withToken(testToken))
+		map[string]any{"op": "delete-everything"})
 	if code != http.StatusBadRequest {
 		t.Fatalf("an undeclared op returned %d, want 400: %s", code, body)
 	}
@@ -220,7 +220,7 @@ func TestAnOpCalledDownTheWrongRouteIsRefused(t *testing.T) {
 	ts, _ := bootRestoreServer(t, func(string) bool { return true })
 
 	code, _ := do(t, ts, http.MethodPost, "/restore/query",
-		map[string]any{"op": "restore"}, withToken(testToken)) // a job, not a query
+		map[string]any{"op": "restore"}) // a job, not a query
 	if code != http.StatusBadRequest {
 		t.Fatalf("a job invoked as a query returned %d, want 400", code)
 	}
@@ -232,10 +232,10 @@ func TestAnOpCalledDownTheWrongRouteIsRefused(t *testing.T) {
 // not added to it.
 func TestRestoreRoutesAreRefusedUnderLockdown(t *testing.T) {
 	h := newRestoreStub()
-	s := NewServer("127.0.0.1:0", h, testToken)
+	s := NewServer(h)
 	s.SetRestoreAllowedFunc(func(string) bool { return true })
 	s.SetLockedFunc(func() bool { return true })
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	ts := serveTest(s)
 	t.Cleanup(ts.Close)
 
 	for _, path := range []string{"/restore/query", "/restore/job", "/restore/control", "/restore/job/restore-1"} {
@@ -244,7 +244,7 @@ func TestRestoreRoutesAreRefusedUnderLockdown(t *testing.T) {
 			method = http.MethodGet
 		}
 		code, body := do(t, ts, method, path,
-			map[string]any{"op": "snapshots"}, withToken(testToken))
+			map[string]any{"op": "snapshots"})
 		if code != http.StatusForbidden {
 			t.Fatalf("%s returned %d under lockdown, want 403: %s", path, code, body)
 		}
@@ -260,7 +260,7 @@ func TestARestoreJobReportsProgressAndItsResult(t *testing.T) {
 	h.jobResult = map[string]any{"hits": 3}
 
 	code, body := do(t, ts, http.MethodPost, "/restore/job",
-		map[string]any{"op": "search"}, withToken(testToken))
+		map[string]any{"op": "search"})
 	if code != http.StatusOK {
 		t.Fatalf("starting a search returned %d: %s", code, body)
 	}
@@ -286,7 +286,7 @@ func TestAFailedRestoreJobCarriesTheEnginesOwnError(t *testing.T) {
 	h.jobErr = fmt.Errorf("no source could supply the key this snapshot was encrypted with")
 
 	code, body := do(t, ts, http.MethodPost, "/restore/job",
-		map[string]any{"op": "restore"}, withToken(testToken))
+		map[string]any{"op": "restore"})
 	if code != http.StatusOK {
 		t.Fatalf("starting a restore returned %d: %s", code, body)
 	}
@@ -311,14 +311,14 @@ func TestARunningJobStopsBeingCollectableWhenPolicyIsRevoked(t *testing.T) {
 
 	h := newRestoreStub()
 	h.jobHold = make(chan struct{})
-	s := NewServer("127.0.0.1:0", h, testToken)
+	s := NewServer(h)
 	s.SetRestoreAllowedFunc(func(string) bool { return allowed.Load() })
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	ts := serveTest(s)
 	t.Cleanup(ts.Close)
 	t.Cleanup(func() { close(h.jobHold) })
 
 	code, body := do(t, ts, http.MethodPost, "/restore/job",
-		map[string]any{"op": "search"}, withToken(testToken))
+		map[string]any{"op": "search"})
 	if code != http.StatusOK {
 		t.Fatalf("starting a search returned %d: %s", code, body)
 	}
@@ -326,7 +326,7 @@ func TestARunningJobStopsBeingCollectableWhenPolicyIsRevoked(t *testing.T) {
 	_ = json.Unmarshal([]byte(body), &start)
 
 	allowed.Store(false)
-	code, _ = do(t, ts, http.MethodGet, "/restore/job/"+start.JobID, nil, withToken(testToken))
+	code, _ = do(t, ts, http.MethodGet, "/restore/job/"+start.JobID, nil)
 	if code != http.StatusForbidden {
 		t.Fatalf("a revoked console could still collect a running job: %d", code)
 	}
@@ -336,13 +336,13 @@ func TestARunningJobStopsBeingCollectableWhenPolicyIsRevoked(t *testing.T) {
 // process builds an api.Server of its own and must never look like one that
 // can restore.
 func TestAServerWithNoEngineSaysSo(t *testing.T) {
-	s := NewServer("127.0.0.1:0", newStub(), testToken) // plain BackupHandler
+	s := NewServer(newStub()) // plain BackupHandler
 	s.SetRestoreAllowedFunc(func(string) bool { return true })
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	ts := serveTest(s)
 	t.Cleanup(ts.Close)
 
 	code, _ := do(t, ts, http.MethodPost, "/restore/query",
-		map[string]any{"op": "snapshots"}, withToken(testToken))
+		map[string]any{"op": "snapshots"})
 	if code != http.StatusNotImplemented {
 		t.Fatalf("a server with no restore engine returned %d, want 501", code)
 	}
@@ -352,7 +352,7 @@ func pollRestoreJob(t *testing.T, ts *httptest.Server, id string) RestoreJobStat
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		code, body := do(t, ts, http.MethodGet, "/restore/job/"+id, nil, withToken(testToken))
+		code, body := do(t, ts, http.MethodGet, "/restore/job/"+id, nil)
 		if code != http.StatusOK {
 			t.Fatalf("polling %s returned %d: %s", id, code, body)
 		}

@@ -371,8 +371,8 @@ func newRunsTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
 	// The real stub from the smoke suite: /status delegates to the handler,
 	// and a nil one would make this pass or fail for the wrong reason.
-	s := NewServer("127.0.0.1:0", newStub(), testToken)
-	ts := httptest.NewServer(s.authMiddleware(s.readOnlyMiddleware(s.mux)))
+	s := NewServer(newStub())
+	ts := serveTest(s)
 	t.Cleanup(ts.Close)
 	return s, ts
 }
@@ -383,7 +383,6 @@ func getJSON(t *testing.T, ts *httptest.Server, path string, out any) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set(tokenHeader, testToken)
 	resp, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -506,9 +505,11 @@ func TestRunByIDBoundaries(t *testing.T) {
 	}
 }
 
-func TestRunsEndpointsRequireTheLocalToken(t *testing.T) {
-	s, ts := newRunsTestServer(t)
+func TestRunsEndpointsRequireACaller(t *testing.T) {
+	s := NewServer(newStub())
 	s.Runs().Begin(TriggerSchedule, "", "", "WS-01", "machine")
+	ts := serveTestWithoutCaller(s)
+	t.Cleanup(ts.Close)
 
 	// The new routes are privileged like every other: a run record names
 	// hostnames, directories and job names.
@@ -520,7 +521,7 @@ func TestRunsEndpointsRequireTheLocalToken(t *testing.T) {
 		code := resp.StatusCode
 		_ = resp.Body.Close()
 		if code != http.StatusUnauthorized {
-			t.Errorf("unauthenticated GET %s = %d, want 401", path, code)
+			t.Errorf("unidentified GET %s = %d, want 401", path, code)
 		}
 	}
 }
@@ -532,7 +533,6 @@ func TestRunsEndpointsRefuseWrites(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set(tokenHeader, testToken)
 		resp, err := ts.Client().Do(req)
 		if err != nil {
 			t.Fatal(err)

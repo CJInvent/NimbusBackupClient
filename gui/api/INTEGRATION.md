@@ -1,12 +1,13 @@
 # GUI and service integration
 
 The service owns backup execution, configuration writes and storage identity
-approvals. The GUI uses the authenticated local API; an unavailable service
-returns an error and never triggers in-process backup execution.
+approvals. The console uses the local API, a named pipe on which the service
+identifies each caller from Windows (`caller.go`, `pipe_windows.go`,
+docs/V4-LOCAL-API.md §3); an unavailable service returns an error and never
+triggers in-process backup execution.
 
-`App.StartBackup(backupType, backupDirs, diskTargets, excludeList, backupID,
-useVSS, compression)` delegates to `api.Client.StartBackup`. The service
-validates and executes through `runBackupPipeline`. Image targets are `boot`
+The console's `StartBackup` binding delegates to `api.Client.StartBackup`.
+The service validates and executes through `runBackupPipeline`. Image targets are `boot`
 or `device:v1:<sha256>` in `disk_targets`; disk numbers and letters cannot
 select backup sources. Scheduler persistence uses the `diskTargets` JSON
 property and the same service pipeline.
@@ -33,4 +34,6 @@ id as before. `model` is the disk's friendly name, display only.
 
 See [ARCHITECTURE](../../ARCHITECTURE.md) for the service ownership rules,
 compile views and required tests. `server_smoke_test.go` and
-`storage_identity_test.go` exercise the real local HTTP boundary.
+`storage_identity_test.go` exercise the real handler stack over loopback with a
+test identity; `pipe_windows_test.go` exercises the pipe and the identity on
+Windows.

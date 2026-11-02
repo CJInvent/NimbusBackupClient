@@ -2,19 +2,20 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Server handles HTTP API requests from the GUI
 type Server struct {
-	addr  string
-	app   BackupHandler
-	token string // shared local-auth token required on every route (H-01)
-	mux   *http.ServeMux
+	app BackupHandler
+	mux *http.ServeMux
 
 	// runs is the SINGLE store of backup runs — see runs.go. It replaced a
 	// map whose only writer was handleBackup, which is why a scheduled
@@ -67,15 +68,14 @@ type postureReporter interface {
 	GetSecurityWarnings() []string
 }
 
-// NewServer creates a new API server. token is the shared local-auth secret that
-// every request must present in the X-Nimbus-Token header (H-01).
-func NewServer(addr string, handler BackupHandler, token string) *Server {
+// NewServer creates a new API server. Who may call it is not its
+// constructor's business: every request must arrive on a connection that
+// carries a Windows identity (Serve, authMiddleware).
+func NewServer(handler BackupHandler) *Server {
 	s := &Server{
-		addr:  addr,
-		app:   handler,
-		token: token,
-		mux:   http.NewServeMux(),
-		runs:  NewRunRegistry(),
+		app:  handler,
+		mux:  http.NewServeMux(),
+		runs: NewRunRegistry(),
 
 		restoreJobs: newRestoreJobRegistry(),
 	}
@@ -97,6 +97,8 @@ func (s *Server) SetVersion(v string) { s.version = v }
 
 func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/status", s.handleStatus)
+	// Who the service thinks is calling (caller.go).
+	s.mux.HandleFunc("/caller", s.handleCaller)
 	s.mux.HandleFunc("/storage/identity", s.handleStorageIdentity)
 	s.mux.HandleFunc("/backup", s.handleBackup)
 	s.mux.HandleFunc("/connections", s.handleConnections)
@@ -134,8 +136,9 @@ func (s *Server) setupRoutes() {
 }
 
 // Handler is the whole server as served: the routes behind the read-only
-// lockdown, behind authentication. Start serves it; a test can serve it on
-// its own listener and drive the real stack.
+// lockdown, behind authentication. Serve serves it; a test can serve it on
+// its own listener and drive the real stack, giving the listener an identity
+// with FixedCallerContext.
 //
 // readOnlyMiddleware sits INSIDE auth: an unauthenticated caller gets 401 and
 // learns nothing, rather than 403 and learns this machine is managed and
@@ -144,10 +147,28 @@ func (s *Server) Handler() http.Handler {
 	return s.authMiddleware(s.readOnlyMiddleware(s.mux))
 }
 
-// Start starts the HTTP server
-func (s *Server) Start() error {
-	log.Printf("Starting API server on %s", s.addr)
-	return http.ListenAndServe(s.addr, s.Handler())
+// Serve answers the local API on ln, the named pipe ListenPipe opened, until
+// ln is closed.
+//
+// One request per connection (keep-alives off): the service reads the caller
+// from the connection, and a connection that carried a second request would
+// carry it under the first one's identity check. The header timeout bounds a
+// client that connects and never writes, which would otherwise hold a pipe
+// instance and a goroutine for ever.
+func (s *Server) Serve(ln net.Listener) error {
+	srv := &http.Server{
+		Handler:           s.Handler(),
+		ConnContext:       connContext,
+		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          log.New(log.Writer(), "[API] ", 0),
+	}
+	srv.SetKeepAlivesEnabled(false)
+	log.Printf("Local API serving on %s", ln.Addr())
+	err := srv.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

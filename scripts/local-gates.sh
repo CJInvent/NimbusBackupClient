@@ -71,7 +71,7 @@ if [ "${1:-all}" != "lint" ]; then
     step "go vet (service linux, service windows, console windows)"
     ( cd gui     && CGO_ENABLED=0 GOOS=linux   go vet ./... ) || bad "vet service linux"
     ( cd gui     && CGO_ENABLED=0 GOOS=windows go vet ./... ) || bad "vet service windows"
-    ( cd console && CGO_ENABLED=0 GOOS=windows go vet -tags desktop,wv2runtime.download,production ./... ) \
+    ( cd console && CGO_ENABLED=0 GOOS=windows go vet -tags desktop,wv2runtime.error,production ./... ) \
         || bad "vet console windows"
 fi
 
@@ -85,6 +85,11 @@ if [ -n "$LINT" ]; then
     step "golangci-lint (console, windows)"
     ( cd console && GOOS=windows CGO_ENABLED=0 "$LINT" run --path-prefix=console --timeout=5m ) \
         || bad "golangci-lint (console)"
+
+    # The local API module, in its windows view (the pipe lives there).
+    step "golangci-lint (local API, windows)"
+    ( cd gui/api && GOOS=windows CGO_ENABLED=0 "$LINT" run --path-prefix=gui/api --timeout=5m ) \
+        || bad "golangci-lint (local API)"
 fi
 
 if [ "${1:-all}" != "lint" ]; then

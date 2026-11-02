@@ -304,7 +304,7 @@ jobs:
           run_view gui windows ""
           # The console as shipped: with the tags `wails build` passes, which
           # pull in Wails' desktop code that a plain vet would not compile.
-          run_view console windows "desktop,wv2runtime.download,production"
+          run_view console windows "desktop,wv2runtime.error,production"
           exit $fail
 
       # NimbusControl builds its volume reader from these two packages, for
@@ -406,6 +406,21 @@ jobs:
         with:
           version: v2.12.2
           working-directory: console
+          args: --timeout=5m
+        env:
+          GOWORK: off
+          GOOS: windows
+          CGO_ENABLED: '0'
+
+      # The local API module (gui/api) in its windows view: the named pipe,
+      # the caller identity and the console's client (V4-LOCAL-API P1). It is
+      # a module of its own, so neither pass above reaches it, and it is the
+      # boundary between every logged-on user and a service running as SYSTEM.
+      - name: Run golangci-lint (local API)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          working-directory: gui/api
           args: --timeout=5m
         env:
           GOWORK: off
@@ -601,7 +616,7 @@ jobs:
           fi
           echo "All workspace modules passed."
 
-  # S7 + S8(token) + S10 — behavior that only real Windows can prove. VSS,
+  # S7 + S8(local API) + S10 — behavior that only real Windows can prove. VSS,
   # DPAPI and icacls compile on Linux and demonstrate nothing there.
   windows-smoke:
     name: Windows Smoke (S7/S8/S10)
@@ -614,15 +629,18 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # S8 (token half): EnsureToken + the icacls DACL that guards the
-      # privileged local API. acl_nonwindows.go is a no-op, so this is the only
-      # place the real ACL path runs.
-      - name: Local API token + DACL smoke (S8)
+      # S8 (local API half): the named pipe and the caller identity
+      # (docs/V4-LOCAL-API.md §10, P1). The pipe exists only on Windows, so
+      # this is the only place its tests run: the identity the service reads,
+      # a non-elevated caller, a squatter on the pipe name, remote clients,
+      # a server that is not the service, and a body claiming an identity.
+      - name: Local API pipe + identity smoke (S8)
         shell: bash
         working-directory: gui/api
         env:
           GOWORK: off
         run: |
+          go mod download
           if go test -count=1 -v ./... > smoke.log 2>&1; then cat smoke.log; else
             cat smoke.log
             grep -E '^--- FAIL|_test\.go:[0-9]+|^# ' smoke.log | head -20 | while read -r l; do echo "::error::S8: $l"; done
@@ -654,7 +672,10 @@ jobs:
         env:
           GOWORK: off
         run: |
-          go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage|ServiceAPI)' ./...
+          # TheBootstrapper / WebView2: the service installs the WebView2
+          # runtime (V4-CONSOLE D2), and runs the download as SYSTEM only
+          # if Microsoft signed it.
+          go test -count=1 -v -run 'Test(ImageConsumer|DirectoryConsumer|Checkin|RunHistory|VolumeMountPaths|PBSReachability|Storage|ServiceAPI|TheBootstrapper|WebView2)' ./...
 
       # S10: create a real VSS snapshot through the production code path and
       # confirm the 0.2.150 diagnostics actually emit.
@@ -795,7 +816,7 @@ jobs:
             # The console ships only for Windows, and its Windows view is the
             # one that links Wails' desktop code and the tray: scan that one.
             goos=""; tags=""
-            if [ "$m" = "console" ]; then goos=windows; tags="-tags=desktop,wv2runtime.download,production"; fi
+            if [ "$m" = "console" ]; then goos=windows; tags="-tags=desktop,wv2runtime.error,production"; fi
             # Must stay an `if` CONDITION: Actions runs steps under `set -e`,
             # so capturing $? from a failing command aborts the step before the
             # reporting below can run. govulncheck exits 3 on findings.
@@ -966,22 +987,24 @@ jobs:
         working-directory: console
         env:
           GOWORK: off
-        run: wails build -clean -platform windows/amd64 -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
+        run: wails build -clean -platform windows/amd64 -webview2 error -ldflags "-X main.appVersion=${{ steps.version.outputs.VERSION }}"
 
       # The console's size against its budget (docs/V4-CONSOLE.md section 5
       # item 4). Set close to the measured size, so the next unexplained
       # 400 KB is a red build before release rather than a question after it.
       #
-      # Measured at V4-CONSOLE C3 by the section 10 method (local, stripped):
-      # 11,463,680 bytes, against 11,817,472 for C2's console. The shipped
-      # build has run about 1.5% above the local one, so about 11.64 MB is
-      # expected here; the budget leaves about 260 KB above that. V4-LOCAL-API
-      # P1 lowers it (WebView2 install moves to the service, D2).
+      # Measured at V4-LOCAL-API P1 by V4-CONSOLE section 10's method (local,
+      # stripped): 9,932,800 bytes, against 11,463,680 for C3's console. The
+      # named-pipe client replaced http.Client/Transport, and `-webview2
+      # error` dropped Wails' runtime downloader (D2), which together took TLS
+      # and HTTP/2 out. The shipped build has run about 1.5% above the local
+      # one, so about 10.08 MB is expected here; the budget leaves about
+      # 270 KB above that, as C3's did.
       - name: Console size (budget)
         working-directory: console
         shell: pwsh
         env:
-          CONSOLE_BUDGET_BYTES: '11900000'
+          CONSOLE_BUDGET_BYTES: '10350000'
         run: |
           $exe = 'build/bin/NimbusBackup.exe'
           if (-not (Test-Path $exe)) { throw "$exe was not built; there is no size to check" }

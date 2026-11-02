@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +44,7 @@ func statusOf(err error, fallback int) int {
 // decoded into out. The older client methods each carry their own copy of
 // this; new ones share it.
 func (c *Client) getJSON(path string, out any) error {
-	resp, err := c.httpClient.Get(c.baseURL + path)
+	resp, err := c.get(path)
 	if err != nil {
 		return fmt.Errorf("[NB-2007] communication with the service failed :: %w", err)
 	}
@@ -55,11 +54,7 @@ func (c *Client) getJSON(path string, out any) error {
 // deleteJSON sends a DELETE (the delete routes also accept POST, but DELETE
 // says what the request is).
 func (c *Client) deleteJSON(path string) error {
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.send(http.MethodDelete, path, nil, RequestTimeout)
 	if err != nil {
 		return fmt.Errorf("[NB-2007] communication with the service failed :: %w", err)
 	}
@@ -71,7 +66,7 @@ func (c *Client) postJSON(path string, in, out any) error {
 	if err != nil {
 		return fmt.Errorf("failed to encode request: %w", err)
 	}
-	resp, err := c.httpClient.Post(c.baseURL+path, "application/json", bytes.NewReader(body))
+	resp, err := c.post(path, body)
 	if err != nil {
 		return fmt.Errorf("[NB-2007] communication with the service failed :: %w", err)
 	}

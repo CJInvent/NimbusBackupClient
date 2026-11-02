@@ -34,7 +34,7 @@ var logRedactors = []struct {
 	// sitting on the line. Found by this package's tests; the server's
 	// Core\Log carried the identical hole, where it had gone unnoticed
 	// because its own test exercised the key-based path instead.
-	{regexp.MustCompile(`(?i)\b(Authorization|X-Nimbus-Token|PBSAuthCookie)\s*[:=]\s*\S+(?:\s+\S+)?`),
+	{regexp.MustCompile(`(?i)\b(Authorization|PBSAuthCookie)\s*[:=]\s*\S+(?:\s+\S+)?`),
 		"$1: " + redactedMarker},
 
 	// PBS API tokens: user@realm!tokenid:<secret>. The name survives.

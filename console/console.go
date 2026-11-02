@@ -47,9 +47,10 @@ type Console struct {
 	lastVolumeTruncated atomic.Bool
 }
 
-// NewConsole is the console of this machine's service.
+// NewConsole is the console of this machine's service: its named pipe,
+// refused unless the process serving it is the service (api.NewClient).
 func NewConsole() *Console {
-	return &Console{api: api.NewClient(api.TokenPath())}
+	return &Console{api: api.NewClient()}
 }
 
 // service returns the client once the service has answered, or the coded

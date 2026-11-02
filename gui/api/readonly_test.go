@@ -9,8 +9,8 @@ import (
 //
 // This is the control, not the presentation: the GUI hiding its buttons is
 // cosmetic, and what these tests pin is that the SERVICE refuses the call. The
-// adversary they are written against is a modified front end holding a valid
-// local API token — which is exactly the thing an org that sets `gui_read_only`
+// adversary they are written against is a modified front end running as a
+// user the service will talk to — which is exactly the thing an org that sets `gui_read_only`
 // is worried about.
 
 func lockedTestServer(t *testing.T, locked bool) (*Server, *http.Client, string) {
@@ -20,14 +20,11 @@ func lockedTestServer(t *testing.T, locked bool) (*Server, *http.Client, string)
 	return s, ts.Client(), ts.URL
 }
 
-func req(t *testing.T, c *http.Client, method, url string, token bool) int {
+func req(t *testing.T, c *http.Client, method, url string) int {
 	t.Helper()
 	r, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if token {
-		r.Header.Set(tokenHeader, testToken)
 	}
 	resp, err := c.Do(r)
 	if err != nil {
@@ -59,7 +56,7 @@ func TestLockedAgentRefusesEveryMutatingRoute(t *testing.T) {
 		{http.MethodPost, "/controlplane/save"},
 	}
 	for _, m := range mutating {
-		if code := req(t, c, m.method, base+m.path, true); code != http.StatusForbidden {
+		if code := req(t, c, m.method, base+m.path); code != http.StatusForbidden {
 			t.Errorf("%s %s = %d while locked, want 403", m.method, m.path, code)
 		}
 	}
@@ -74,7 +71,7 @@ func TestLockedAgentStillServesTheStatusPanel(t *testing.T) {
 	for _, path := range []string{
 		"/status", "/runs/active", "/runs/recent", "/connections", "/runs/" + id,
 	} {
-		if code := req(t, c, http.MethodGet, base+path, true); code != http.StatusOK {
+		if code := req(t, c, http.MethodGet, base+path); code != http.StatusOK {
 			t.Errorf("GET %s = %d while locked, want 200 — the panel must still render", path, code)
 		}
 	}
@@ -87,7 +84,7 @@ func TestLockdownIsAnAllowlistNotADenylist(t *testing.T) {
 	// Enumerating the mutating routes instead would leave every future
 	// endpoint open until someone remembered to list it.
 	for _, path := range []string{"/some/future/route", "/jobs", "/backup"} {
-		if code := req(t, c, http.MethodGet, base+path, true); code != http.StatusForbidden {
+		if code := req(t, c, http.MethodGet, base+path); code != http.StatusForbidden {
 			t.Errorf("GET %s = %d while locked, want 403 — unknown routes must default to refused", path, code)
 		}
 	}
@@ -99,7 +96,7 @@ func TestLockdownPinsTheMethodNotJustThePath(t *testing.T) {
 	// Every allowed route is a reader today. If one grows a POST branch
 	// later, that must not quietly widen what a locked agent will do.
 	for _, path := range []string{"/status", "/runs/active", "/runs/recent"} {
-		if code := req(t, c, http.MethodPost, base+path, true); code != http.StatusForbidden {
+		if code := req(t, c, http.MethodPost, base+path); code != http.StatusForbidden {
 			t.Errorf("POST %s = %d while locked, want 403", path, code)
 		}
 	}
@@ -110,12 +107,12 @@ func TestUnlockedAgentIsUnaffected(t *testing.T) {
 
 	// The lockdown must be inert when the policy does not set it — including
 	// on routes that would be refused if it did.
-	if code := req(t, c, http.MethodGet, base+"/status", true); code != http.StatusOK {
+	if code := req(t, c, http.MethodGet, base+"/status"); code != http.StatusOK {
 		t.Errorf("GET /status unlocked = %d, want 200", code)
 	}
 	// A mutating route reaches its handler; what it answers is the handler's
 	// business, but it must not be 403 from the lockdown.
-	if code := req(t, c, http.MethodPost, base+"/jobs/create", true); code == http.StatusForbidden {
+	if code := req(t, c, http.MethodPost, base+"/jobs/create"); code == http.StatusForbidden {
 		t.Error("POST /jobs/create was refused by the lockdown while unlocked")
 	}
 }
@@ -128,7 +125,7 @@ func TestLockdownDefaultsToUnlockedWhenNeverWired(t *testing.T) {
 	if s.IsLocked() {
 		t.Fatal("a server with no lock predicate reports itself locked")
 	}
-	if code := req(t, ts.Client(), http.MethodPost, ts.URL+"/jobs/create", true); code == http.StatusForbidden {
+	if code := req(t, ts.Client(), http.MethodPost, ts.URL+"/jobs/create"); code == http.StatusForbidden {
 		t.Error("an unwired server refused a mutating call")
 	}
 }
@@ -137,8 +134,11 @@ func TestAuthIsCheckedBeforeLockdown(t *testing.T) {
 	// An unauthenticated caller must get 401 and learn nothing. 403 would
 	// tell an unauthenticated prober that this machine is under management
 	// and locked, which is a fact about the customer, not about the request.
-	_, c, base := lockedTestServer(t, true)
-	if code := req(t, c, http.MethodPost, base+"/config/save", false); code != http.StatusUnauthorized {
+	s := NewServer(newStub())
+	s.SetLockedFunc(func() bool { return true })
+	bare := serveTestWithoutCaller(s)
+	t.Cleanup(bare.Close)
+	if code := req(t, bare.Client(), http.MethodPost, bare.URL+"/config/save"); code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated POST while locked = %d, want 401 not 403", code)
 	}
 }
@@ -150,11 +150,11 @@ func TestLockStateIsReReadPerRequest(t *testing.T) {
 	locked := false
 	s.SetLockedFunc(func() bool { return locked })
 
-	if code := req(t, ts.Client(), http.MethodPost, ts.URL+"/pbs/save", true); code == http.StatusForbidden {
+	if code := req(t, ts.Client(), http.MethodPost, ts.URL+"/pbs/save"); code == http.StatusForbidden {
 		t.Fatal("refused before the policy locked anything")
 	}
 	locked = true
-	if code := req(t, ts.Client(), http.MethodPost, ts.URL+"/pbs/save", true); code != http.StatusForbidden {
+	if code := req(t, ts.Client(), http.MethodPost, ts.URL+"/pbs/save"); code != http.StatusForbidden {
 		t.Errorf("still permitted after the policy locked the agent = %d, want 403", code)
 	}
 }
@@ -247,7 +247,7 @@ func TestConnectionsReportsReachabilityAsTriState(t *testing.T) {
 func TestConnectionsServedWhileLocked(t *testing.T) {
 	// The panel is the entire point of a locked console.
 	_, c, base := lockedTestServer(t, true)
-	if code := req(t, c, http.MethodGet, base+"/connections", true); code != http.StatusOK {
+	if code := req(t, c, http.MethodGet, base+"/connections"); code != http.StatusOK {
 		t.Errorf("GET /connections while locked = %d, want 200", code)
 	}
 }

@@ -9,8 +9,6 @@ import (
 
 	"pbscommon"
 	"security"
-
-	"github.com/tizbac/proxmoxbackupclient_go/gui/api"
 )
 
 type Config struct {
@@ -116,21 +114,16 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// getAPITokenPath is the shared local-API auth token file (H-01). The path is
-// api.TokenPath, the one definition the console resolves too; the directory is
-// created here, by the service, before anything writes into it.
-func getAPITokenPath() string {
-	// The error is not lost: writing the token into a directory that could
-	// not be created fails, and that failure is api.EnsureToken's to report.
-	_, _ = getConfigDir()
-	return api.TokenPath()
-}
-
-// getConfigDir returns the application's data directory, creating it if needed.
-// Where it is, is api.DataDir. Used as the parent for config.json, the restore
-// cache, and any other persistent state.
+// getConfigDir returns the application's data directory, creating it if needed:
+// C:\ProgramData\NimbusBackup on Windows, ~/.proxmox-backup-guardian
+// elsewhere. Used as the parent for config.json, the restore cache, and any
+// other persistent state.
+//
+// (It was api.DataDir while the console read the API token from this
+// directory. The token went with V4-LOCAL-API P1, and the service is the only
+// program that looks here again.)
 func getConfigDir() (string, error) {
-	configDir, err := api.DataDir()
+	configDir, err := dataDir()
 	if err != nil {
 		return "", err
 	}
@@ -139,6 +132,22 @@ func getConfigDir() (string, error) {
 		return "", err
 	}
 	return configDir, nil
+}
+
+// dataDir names the data directory without creating it.
+func dataDir() (string, error) {
+	if programData := os.Getenv("ProgramData"); programData != "" {
+		return filepath.Join(programData, "NimbusBackup"), nil
+	}
+	if systemDrive := os.Getenv("SystemDrive"); systemDrive != "" {
+		// ProgramData unset (it has been seen in service contexts).
+		return filepath.Join(systemDrive, "ProgramData", "NimbusBackup"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".proxmox-backup-guardian"), nil
 }
 
 func getConfigPath() (string, error) {
