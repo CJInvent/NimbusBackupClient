@@ -29,8 +29,8 @@ ROOT="$PWD"
 # Pinned to match .github/workflows/build-and-release.yml exactly. A local
 # gate that runs a different version of the tool answers a different question
 # than the one that will decide your push.
-GOLANGCI_VERSION="v2.12.2"
-GO_VERSION="1.26.10"
+GOLANGCI_VERSION="v2.15.0"
+GO_VERSION="1.27.4"
 
 export GOWORK=off
 fail=0

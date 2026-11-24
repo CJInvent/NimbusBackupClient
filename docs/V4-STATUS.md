@@ -85,7 +85,7 @@ dev.231. CI fails if the cabinet is not LZX or a non-WOFF2 font reaches `dist`.
   `storage.googleapis.com`, which is blocked. `GONOPROXY='github.com/*,www.velocidex.com/*'`
   fetches those over git; with `GOSUMDB=off` (the checksum DB is blocked) the
   repo's `go.sum` still verifies. No mirror loop needed any more.
-- Go 1.26.10 (the CI pin) builds from source in a few minutes: clone
+- Go 1.27.4 (the CI pin) builds from source in a few minutes: clone
   `golang/go` at the tag, `GOROOT_BOOTSTRAP=/usr/local/go ./make.bash`.
 - `GOOS=windows CGO_ENABLED=0 go build -trimpath -tags desktop,wv2runtime.download,production`
   in `console/` (in `gui/` before C3) reproduces the shipped console within
