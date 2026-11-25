@@ -17,15 +17,15 @@ that change what the next phase starts from:
   ops that write to a caller-named path). P3's scoped restore replaces it.
 - The §5 checks are Go tests in `console/` (module allowlist, no local IO),
   run by Unit Tests and `scripts/local-gates.sh`. The size budget is
-  11,900,000 bytes in Build GUI, from C3's measurement (local 11,463,680).
-  CI's first run of the budget step prints the shipped number: if it is far
-  from about 11.64 MB, tighten the budget to it.
+  13,300,000 bytes in Build GUI: C3 measured 11,463,680 locally; Go 1.27 and
+  Wails 2.17.1 (whose floor links golang.org/x/text and go-toast) took the
+  shipped console to 13,012,480. The workflow comment has the breakdown.
 - The service lints with `unused` on. The windows view of the service has
   never been linted (33 findings, all in windows-only engine files): a
   separate change.
 
 **Next: V4-LOCAL-API P1** (named pipe, caller identity, WebView2 install in the
-service, budget to 9.6 MB). **P5 is unblocked** and can go in either order.
+service, budget re-measured). **P5 is unblocked** and can go in either order.
 
 **Why they exist.** CJ: the GUI should contain nothing except what talks to
 the service. Measured at `835da16`: the GUI build still compiles 70 files

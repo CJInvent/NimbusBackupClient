@@ -971,15 +971,21 @@ jobs:
       # 400 KB is a red build before release rather than a question after it.
       #
       # Measured at V4-CONSOLE C3 by the section 10 method (local, stripped):
-      # 11,463,680 bytes, against 11,817,472 for C2's console. The shipped
-      # build has run about 1.5% above the local one, so about 11.64 MB is
-      # expected here; the budget leaves about 260 KB above that. V4-LOCAL-API
-      # P1 lowers it (WebView2 install moves to the service, D2).
+      # 11,463,680 bytes. Re-measured for Go 1.27 + Wails 2.17.1, with v4_dev
+      # and this branch built by the same Go 1.27.4 so only the dependencies
+      # differ: v4_dev 11,979,776, this branch 12,842,496 (+862,720). The
+      # growth is Wails' own floor, not ours: samber/lo v1.49.1 (the minimum
+      # Wails requires) imports golang.org/x/text/cases and language, whose
+      # init-time tables link on import, and Wails' windows frontend imports
+      # go-toast (with text/template) unconditionally. Shipped size at that
+      # change: 13,012,480 (CI runs about 1.3% above local); the budget
+      # leaves about 290 KB above that. V4-LOCAL-API P1 lowers it (WebView2
+      # install moves to the service, D2).
       - name: Console size (budget)
         working-directory: console
         shell: pwsh
         env:
-          CONSOLE_BUDGET_BYTES: '11900000'
+          CONSOLE_BUDGET_BYTES: '13300000'
         run: |
           $exe = 'build/bin/NimbusBackup.exe'
           if (-not (Test-Path $exe)) { throw "$exe was not built; there is no size to check" }

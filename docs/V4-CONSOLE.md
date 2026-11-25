@@ -305,8 +305,9 @@ rather than passes on an empty input:
    here, it's quicker" a red build.
 4. **Size budget.** The Build GUI job prints the console's stripped size and
    fails above a budget recorded in the workflow: **11.2 MB** after phase C3
-   (set at 11,900,000 bytes from C3's measurement, §8),
-   lowered to 9.6 MB by V4-LOCAL-API P1 (D2). A budget set close to the measured size
+   (set at 11,900,000 bytes from C3's measurement, §8; raised to 13,300,000
+   for Go 1.27 + Wails 2.17.1, measured in the workflow comment),
+   lowered by V4-LOCAL-API P1 (D2), re-measured then. A budget set close to the measured size
    turns the next unexplained 400 KB into a red build before release rather than
    a question after it.
 
@@ -625,7 +626,9 @@ building:
   `unused` and once over the console with `GOOS=windows`; gosec and
   govulncheck cover the console (its windows view). Build GUI builds in
   `console/`; the WiX source path moved, the output names did not.
-- **Budget: 11,900,000 bytes**, not 11.2 MB (which predated C2). Measured by
+- **Budget: 11,900,000 bytes** at C3 (13,300,000 since Go 1.27 + Wails
+  2.17.1; the build workflow's comment holds that measurement), not 11.2 MB
+  (which predated C2). Measured by
   §10's method: console **11,817,472 → 11,463,680** bytes stripped (C2's
   number reproduced exactly here first); service 11,069,440 → 11,073,024. The
   shipped build has run about 1.5% above the local one, so about 11.64 MB is

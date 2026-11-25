@@ -23,9 +23,7 @@ require (
 	github.com/dchest/siphash v1.2.3 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/klauspost/compress v1.20.5 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
-	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/st-matskevich/go-vss v0.4.3 // indirect
 	github.com/stretchr/testify v1.8.4 // indirect
 	golang.org/x/net v0.63.0 // indirect

@@ -66,6 +66,12 @@ if [ "${1:-all}" != "lint" ]; then
     unformatted="$(gofmt -l . | grep -v '^vendor/' || true)"
     if [ -n "$unformatted" ]; then echo "$unformatted"; bad "gofmt"; fi
 
+    # CI's Module pin gate: every module, discovered rather than listed.
+    step "go mod tidy -diff (every module)"
+    while IFS= read -r m; do
+        ( cd "$m" && go mod tidy -diff >/dev/null 2>&1 ) || bad "not tidy: $m (run 'go mod tidy' there)"
+    done < <(find . -name go.mod -not -path './console/frontend/node_modules/*' -not -path './.tools/*' -printf '%h\n' | sort)
+
     # The three compile views CI checks (Compile Views, S2): the service as
     # lint and tests see it, the service as shipped, the console as shipped.
     step "go vet (service linux, service windows, console windows)"
