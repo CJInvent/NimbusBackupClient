@@ -2,7 +2,7 @@
 
 ## Quick Start (tl;dr)
 
-On a Windows machine with Go 1.25+, Node 20+, and admin privileges:
+On a Windows machine with Go 1.27+, Node 26+, and admin privileges:
 
 ```powershell
 # 1. Install WiX Toolset 3.14+
@@ -28,8 +28,8 @@ build.bat
 ### Prerequisites
 
 - **Windows 10/11** (64-bit)
-- **Go 1.25+** — [download](https://golang.org/dl/)
-- **Node.js 20+** — [download](https://nodejs.org/)
+- **Go 1.27+** — [download](https://golang.org/dl/)
+- **Node.js 26+** — [download](https://nodejs.org/)
 - **WiX Toolset 3.14+** — [download](https://wixtoolset.org/) or:
   ```powershell
   choco install wixtoolset -y
