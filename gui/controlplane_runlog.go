@@ -108,7 +108,18 @@ var logLineTimestamp = regexp.MustCompile(`^\[\w+\]\s+\[(\d{4}-\d{2}-\d{2} \d{2}
 // unparseable line is unexpected content this function has no way to
 // place in time, and guessing it belongs in the window risks leaking
 // unrelated log content into the artifact.
+//
+// Log lines carry no zone, so they are read in the machine's local zone,
+// the same zone writeLogToLogger wrote them in.
 func filterLogByTimeWindow(path string, start, end time.Time, keyword string) (string, int, error) {
+	return filterLogByTimeWindowIn(path, start, end, keyword, time.Local)
+}
+
+// filterLogByTimeWindowIn is filterLogByTimeWindow with the zone the log
+// was written in passed explicitly. Tests use it to prove the zone
+// handling without mutating the process-wide time.Local, which other
+// goroutines (any live TLS connection) read concurrently.
+func filterLogByTimeWindowIn(path string, start, end time.Time, keyword string, loc *time.Location) (string, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
@@ -139,7 +150,7 @@ func filterLogByTimeWindow(path string, start, end time.Time, keyword string) (s
 		if m == nil {
 			continue
 		}
-		t, err := time.ParseInLocation("2006-01-02 15:04:05", m[1], time.Local)
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", m[1], loc)
 		if err != nil {
 			continue
 		}
