@@ -57,7 +57,7 @@ env:
   # Pinned deliberately — see the govulncheck step for why the TOOL is pinned
   # while the vulnerability database is intentionally not.
   GOVULNCHECK_VERSION: 'v1.7.0'
-  NODE_VERSION: '20'
+  NODE_VERSION: '26'
 
 jobs:
   # --- The version this run builds (docs/V4-CLIENT-RELEASES.md section 1) ---
