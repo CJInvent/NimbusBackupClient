@@ -177,7 +177,7 @@ func TestVSSStressThreadMigration(t *testing.T) {
 		var err error
 		if mode == "unfixed" {
 			sn := vss.Snapshotter{}
-			_, err = sn.CreateSnapshot(vol, false, 180)
+			_, err = sn.CreateSnapshot(vol, 180)
 			if err == nil {
 				err = sn.Release()
 			}

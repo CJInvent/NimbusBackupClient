@@ -29,8 +29,8 @@ ROOT="$PWD"
 # Pinned to match .github/workflows/build-and-release.yml exactly. A local
 # gate that runs a different version of the tool answers a different question
 # than the one that will decide your push.
-GOLANGCI_VERSION="v2.12.2"
-GO_VERSION="1.26.10"
+GOLANGCI_VERSION="v2.15.0"
+GO_VERSION="1.27.4"
 
 export GOWORK=off
 fail=0
@@ -65,6 +65,12 @@ if [ "${1:-all}" != "lint" ]; then
     step "gofmt"
     unformatted="$(gofmt -l . | grep -v '^vendor/' || true)"
     if [ -n "$unformatted" ]; then echo "$unformatted"; bad "gofmt"; fi
+
+    # CI's Module pin gate: every module, discovered rather than listed.
+    step "go mod tidy -diff (every module)"
+    while IFS= read -r m; do
+        ( cd "$m" && go mod tidy -diff >/dev/null 2>&1 ) || bad "not tidy: $m (run 'go mod tidy' there)"
+    done < <(find . -name go.mod -not -path './console/frontend/node_modules/*' -not -path './.tools/*' -printf '%h\n' | sort)
 
     # The three compile views CI checks (Compile Views, S2): the service as
     # lint and tests see it, the service as shipped, the console as shipped.

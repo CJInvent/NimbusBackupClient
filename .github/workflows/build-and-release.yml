@@ -50,10 +50,10 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
-  # Pinned to an exact patch, not '1.26': setup-go resolves a bare minor to
+  # Pinned to an exact patch, not '1.27': setup-go resolves a bare minor to
   # whatever it feels like, which is precisely the silent-fallback the v4 spec
   # forbids. The toolchain job below asserts what actually got installed.
-  GO_VERSION: '1.26.10'
+  GO_VERSION: '1.27.4'
   # Pinned deliberately — see the govulncheck step for why the TOOL is pinned
   # while the vulnerability database is intentionally not.
   GOVULNCHECK_VERSION: 'v1.7.0'
@@ -74,7 +74,7 @@ jobs:
       line: ${{ steps.v.outputs.line }}
       msi: ${{ steps.v.outputs.msi }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: v
@@ -104,9 +104,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -125,7 +125,7 @@ jobs:
       - name: Assert every module declares the same Go language version
         run: |
           set -euo pipefail
-          WANT="1.26"
+          WANT="1.27"
           FAIL=0
           for f in go.work $(git ls-files '*/go.mod' 'go.mod'); do
             GOT="$(awk '/^go /{print $2; exit}' "$f")"
@@ -149,9 +149,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -215,9 +215,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -255,9 +255,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -330,9 +330,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -391,9 +391,9 @@ jobs:
       # tag is gone and service.go has no OS constraint, so this view sees
       # every caller, and a symbol nothing calls is a finding again.
       - name: Run golangci-lint (service)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.15.0
           working-directory: gui
           args: --timeout=5m
         env:
@@ -402,9 +402,9 @@ jobs:
       # The console in the view it ships in: tray.go, storage_tray_icon.go
       # and the picker's drive helpers exist only for windows.
       - name: Run golangci-lint (console)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.15.0
           working-directory: console
           args: --timeout=5m
         env:
@@ -437,11 +437,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -455,9 +455,9 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -535,7 +535,7 @@ jobs:
       # in this repository and no token configured, so a failure here must
       # not fail the build.
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: ./gui/coverage.out
@@ -543,7 +543,7 @@ jobs:
       # The HTML report was generated and then discarded. If it is worth the
       # step that builds it, it is worth being able to open it.
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-html
           path: gui/coverage.html
@@ -562,9 +562,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -608,9 +608,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -695,9 +695,9 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -741,13 +741,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -841,9 +841,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -894,7 +894,7 @@ jobs:
           exit $rc
 
       - name: Upload CLI artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-${{ runner.os }}
           path: dist/proxmoxbackup-*
@@ -912,25 +912,23 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Wails
-        # Pinned to v2.12.0 — the exact version @latest resolved to in the
-        # green v0.2.106 build, so we ship identical bytes while keeping a
-        # DETERMINISTIC build toolchain (the CLI orchestrates frontend bundling
-        # + asset embedding before `go build`, so a floating CLI would make
-        # even the .exe non-reproducible). Do NOT pin to the library version in
-        # gui/go.mod (v2.8.0): that CLI tag fails to build under Go 1.25.
-        # Bumping the library to match is a separate, tested task.
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        # Pinned, never @latest: the CLI orchestrates frontend bundling and
+        # asset embedding before `go build`, so a floating CLI would make even
+        # the .exe non-reproducible. It matches the library console/go.mod
+        # requires (v2.17.1 since 2026-11-24; the CLI was v2.12.0 while the
+        # library lagged at v2.8.0). Bump both together.
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
 
       - name: Install Frontend Dependencies
         working-directory: console/frontend
@@ -973,15 +971,21 @@ jobs:
       # 400 KB is a red build before release rather than a question after it.
       #
       # Measured at V4-CONSOLE C3 by the section 10 method (local, stripped):
-      # 11,463,680 bytes, against 11,817,472 for C2's console. The shipped
-      # build has run about 1.5% above the local one, so about 11.64 MB is
-      # expected here; the budget leaves about 260 KB above that. V4-LOCAL-API
-      # P1 lowers it (WebView2 install moves to the service, D2).
+      # 11,463,680 bytes. Re-measured for Go 1.27 + Wails 2.17.1, with v4_dev
+      # and this branch built by the same Go 1.27.4 so only the dependencies
+      # differ: v4_dev 11,979,776, this branch 12,842,496 (+862,720). The
+      # growth is Wails' own floor, not ours: samber/lo v1.49.1 (the minimum
+      # Wails requires) imports golang.org/x/text/cases and language, whose
+      # init-time tables link on import, and Wails' windows frontend imports
+      # go-toast (with text/template) unconditionally. Shipped size at that
+      # change: 13,012,480 (CI runs about 1.3% above local); the budget
+      # leaves about 290 KB above that. V4-LOCAL-API P1 lowers it (WebView2
+      # install moves to the service, D2).
       - name: Console size (budget)
         working-directory: console
         shell: pwsh
         env:
-          CONSOLE_BUDGET_BYTES: '11900000'
+          CONSOLE_BUDGET_BYTES: '13300000'
         run: |
           $exe = 'build/bin/NimbusBackup.exe'
           if (-not (Test-Path $exe)) { throw "$exe was not built; there is no size to check" }
@@ -1359,7 +1363,7 @@ jobs:
           Write-Host 'S9b OK: stock installer carries no profile.'
 
       - name: Upload GUI artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: NimbusBackup-Windows
           path: |
@@ -1387,10 +1391,10 @@ jobs:
       attestations: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
@@ -1441,14 +1445,14 @@ jobs:
 
       - name: Attest build provenance (stable)
         if: needs.version.outputs.channel == 'stable'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release/NimbusBackup*.exe
             release/NimbusBackup*.msi
 
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version.outputs.version }}
           # Otherwise GitHub creates the tag on the default branch, which is

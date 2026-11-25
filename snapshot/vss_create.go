@@ -18,9 +18,12 @@ import (
 // outcome read AFTER the snapshot exists. win_snapshot.go owns only what is
 // Windows by nature: the COM apartment, the symlinks, the cleanup.
 
-// snapshotter is the part of go-vss this package drives.
+// snapshotter is the part of go-vss this package drives. Since go-vss v0.4
+// the snapshot is not bootable unless vss.WithBootable() is passed, and COM
+// security and the provider are left to VSS unless asked for: exactly what
+// v0.3's CreateSnapshot(drive, false, timeout) did, so no option is passed.
 type snapshotter interface {
-	CreateSnapshot(drive string, bootable bool, timeout int) (*vss.Snapshot, error)
+	CreateSnapshot(drive string, timeout int, opts ...vss.SnapshotterOption) (*vss.Snapshot, error)
 	Release() error
 }
 
@@ -73,7 +76,7 @@ func createVolumeSnapshot(volume string, writersBefore []WriterState) (*createdS
 	var lastErr error
 	for attempt := 1; attempt <= inProgressAttempts; attempt++ {
 		sn := newSnapshotter()
-		snap, err := sn.CreateSnapshot(volume, false, vssTimeoutSeconds)
+		snap, err := sn.CreateSnapshot(volume, vssTimeoutSeconds)
 		if err == nil {
 			if snap == nil || snap.Id == "" {
 				ErrorFn(fmt.Sprintf("VSS: no snapshot object returned for %s", volume))

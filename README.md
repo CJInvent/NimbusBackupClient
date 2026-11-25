@@ -105,7 +105,7 @@ cd .. && wails build -platform windows/amd64     # the console (console/)
 cd ../gui && GOOS=windows go build .             # the service (gui/)
 ```
 
-Go is pinned EXACTLY (see the workflows); a loose `1.26` resolves loosely and
+Go is pinned EXACTLY (see the workflows); a loose `1.27` resolves loosely and
 a toolchain job asserts the agreement.
 
 **`go vet` + `go test` is not the gate set, and treating it as one has let a

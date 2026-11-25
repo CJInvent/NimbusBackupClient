@@ -34,7 +34,8 @@ var allowedModules = map[string]string{
 
 	"github.com/wailsapp/wails/v2":         "the window",
 	"github.com/wailsapp/go-webview2":      "Wails: the WebView2 host",
-	"github.com/wailsapp/mimetype":         "Wails: the asset server",
+	"github.com/gabriel-vasile/mimetype":   "Wails: the asset server",
+	"git.sr.ht/~jackmordaunt/go-toast/v2":  "Wails: Windows notifications",
 	"github.com/go-ole/go-ole":             "Wails: COM on Windows",
 	"github.com/bep/debounce":              "Wails",
 	"github.com/google/uuid":               "Wails",
@@ -47,7 +48,7 @@ var allowedModules = map[string]string{
 	"github.com/samber/lo":                 "Wails",
 	"github.com/tkrajina/go-reflector":     "Wails: binding reflection",
 	"golang.org/x/net":                     "Wails: the HTML parser",
-	"golang.org/x/exp":                     "Wails",
+	"golang.org/x/text":                    "Wails: runtime file-system helpers",
 
 	"github.com/getlantern/systray": "the tray",
 	"github.com/getlantern/context": "systray: its logger",

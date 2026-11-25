@@ -28,7 +28,7 @@ type scriptState struct {
 	failedRel int // Release called on a snapshotter whose create FAILED
 }
 
-func (f *scriptedSnapshotter) CreateSnapshot(drive string, _ bool, _ int) (*vss.Snapshot, error) {
+func (f *scriptedSnapshotter) CreateSnapshot(drive string, _ int, _ ...vss.SnapshotterOption) (*vss.Snapshot, error) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	i := f.s.calls

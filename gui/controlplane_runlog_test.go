@@ -93,9 +93,9 @@ func TestFilterLogByTimeWindowCrossTimezone(t *testing.T) {
 	if err != nil {
 		t.Skip("no tzdata available in this environment:", err)
 	}
-	origLocal := time.Local
-	time.Local = loc
-	defer func() { time.Local = origLocal }()
+	// The zone is passed in, not set on time.Local: mutating the global
+	// races any goroutine still calling time.Now() (a TLS conn left from
+	// an earlier test tripped -race on Go 1.27).
 
 	trueMoment := time.Date(2026, 7, 28, 14, 6, 42, 0, time.UTC) // 09:06:42 in Chicago (CDT, UTC-5)
 	localLine := "[SERVICE] [" + trueMoment.In(loc).Format("2006-01-02 15:04:05") + "] Local-time log line"
@@ -116,7 +116,7 @@ func TestFilterLogByTimeWindowCrossTimezone(t *testing.T) {
 	winStart := trueMoment.Add(-1 * time.Minute)
 	winEnd := trueMoment.Add(1 * time.Minute)
 
-	out, kept, err := filterLogByTimeWindow(f.Name(), winStart, winEnd, "")
+	out, kept, err := filterLogByTimeWindowIn(f.Name(), winStart, winEnd, "", loc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
