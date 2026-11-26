@@ -134,7 +134,9 @@ func TestThePackageNamesItsServerConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "nimbus-volume-reader") {
-		t.Fatal("doc.go does not name the server's volume reader as a consumer")
+	for _, consumer := range []string{"nimbus-volume-reader", "nimbus-bundle-io", "nimbus-ns-sync"} {
+		if !strings.Contains(string(b), consumer) {
+			t.Errorf("doc.go does not name the server's %s as a consumer", consumer)
+		}
 	}
 }

@@ -1074,60 +1074,10 @@ func (pbs *PBSClient) UploadBlob(name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-
-	q := &url.Values{}
-	q.Add("encoded-size", fmt.Sprintf("%d", len(out)))
-	q.Add("file-name", name)
-
-	req, _ := http.NewRequest("POST", pbs.BaseURL+"/blob?"+q.Encode(), bytes.NewBuffer(out))
-
-	resp2, err := pbs.Client.Do(req)
-	if err != nil {
-		debugf("Error making request: %v", err)
+	if err := pbs.postBlob(name, out, cryptMode); err != nil {
 		return err
 	}
-
-	defer func() { _ = resp2.Body.Close() }()
-
-	if resp2.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp2.Body)
-		return fmt.Errorf("PBS upload blob failed: HTTP %d - %s", resp2.StatusCode, string(bodyBytes))
-	}
-
-	// Manifest csum must match the SHA-256 of the blob file as stored
-	// on the datastore — i.e. the encoded buffer (magic + crc32 +
-	// payload) we just sent. PBS validates this field on /finish as a
-	// strict 64-char hex string; leaving it empty triggers
-	// "unable to update manifest blob - Invalid string length".
-	//
-	// Size must match DataBlob::raw_size() used by PBS verify, which
-	// returns raw_data.len() — i.e. the full on-disk file size with
-	// the 12-byte DataBlobHeader, not just the inner payload. Using
-	// len(data) produces "wrong size (len(data) != len(data)+12)" at
-	// verify time even though /finish accepts it.
-	//
-	// Historically this never blew up because the only UploadBlob
-	// caller was UploadManifest, which appends the index.json.blob
-	// entry AFTER the manifest JSON has already been serialized — so
-	// the stored manifest never referenced itself with a broken csum.
-	// As soon as another blob (the NTFS ACL side-car) is uploaded
-	// before the manifest is serialized, its broken entry lands in
-	// the persisted JSON and /finish rejects it.
-	sum := sha256.Sum256(out)
-	pbs.Manifest.Files = append(pbs.Manifest.Files, File{
-		// From encodeBlob, not from indexCryptMode(): the field must describe
-		// THE BYTES WE JUST WROTE, and the manifest is a blob that is exempt
-		// from encryption on a client that encrypts everything else. Deriving
-		// this from the client's configuration would label the manifest
-		// "encrypt" and make a verify job try to decrypt cleartext.
-		CryptMode: cryptMode,
-		Csum:      hex.EncodeToString(sum[:]),
-		Filename:  name,
-		Size:      int64(len(out)),
-	})
-
 	audit("blob %s: crypt-mode=%s, %d plaintext bytes stored as %d", name, cryptMode, len(data), len(out))
-
 	return nil
 }
 
@@ -1301,6 +1251,18 @@ func (pbs *PBSClient) TestConnection() error {
 }
 
 func (pbs *PBSClient) Connect(reader bool, backuptype string) {
+	// A writer session is a new snapshot, stamped now; a reader session
+	// reads the snapshot the caller named in Manifest.BackupTime.
+	backupTime := pbs.Manifest.BackupTime
+	if !reader {
+		backupTime = time.Now().Unix()
+	}
+	pbs.connect(reader, backuptype, backupTime)
+}
+
+// connect is Connect with the backup-time given: ConnectWriterAt (rawcopy.go)
+// opens a writer at a chosen time through it.
+func (pbs *PBSClient) connect(reader bool, backuptype string, backupTime int64) {
 	pbs.WritersManifest = make(map[uint64]int)
 	pbs.SkippedFiles = []string{}  // Reset skipped files for new backup
 	pbs.ExcludedFiles = []string{} // Reset excluded files for new backup
@@ -1313,9 +1275,7 @@ func (pbs *PBSClient) Connect(reader bool, backuptype string) {
 	// Same pinning policy as ListSnapshots/TestConnection (audit H-02), factored
 	// into buildTLSConfig so all PBS clients verify the certificate identically.
 	pbs.TLSConfig = *pbs.buildTLSConfig()
-	if !reader {
-		pbs.Manifest.BackupTime = time.Now().Unix()
-	}
+	pbs.Manifest.BackupTime = backupTime
 	pbs.Manifest.BackupType = backuptype
 	if pbs.Manifest.BackupID == "" {
 		hostname, _ := os.Hostname()
